@@ -17,3 +17,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml = "0.8"
 regex = "1"
+# chrono: für das Tageszeit-/Wochentagsprofil der Baselines (Phase 4) muss
+# aus einem Unix-Zeitstempel die LOKALE Stunde und der Wochentag bestimmt
+# werden. Die im Ökosystem übliche Alternative `time` verweigert das Lesen
+# der System-Zeitzone in mehrthreadigen Prozessen ohne ein explizit als
+# unsound markiertes Feature (`time::util::local_offset::set_soundness`).
+# `chrono` liest die Zeitzone sicher über die libc.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# redb: Persistenz der Baselines (Phase 4). Reines Rust ohne C-Toolchain
+# (wichtig für Cross-Build auf den Haswell-Heimserver), Key/Value-Zugriff
+# passt zum Muster "ganze Datensätze lesen/schreiben", siehe
+# docs/phase4-baselines.md Abschnitt 6.1 für die Abwägung gegen rusqlite.
+redb = "2"
