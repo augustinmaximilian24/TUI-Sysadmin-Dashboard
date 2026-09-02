@@ -33,6 +33,8 @@ pub struct Config {
     pub ingestion: IngestionConfig,
     /// Einstellungen für die statistische Analyse (Phase 3).
     pub analysis: AnalysisConfig,
+    /// Einstellungen für Zeitprofil-Baselines pro Unit (Phase 4).
+    pub baseline: BaselineConfig,
     /// Pfad und Rechte des Unix-Sockets (Phase 6).
     pub socket: SocketConfig,
 }
@@ -137,6 +139,40 @@ impl Default for AnalysisConfig {
             cooldown_seconds: 300,
             template_similarity_threshold: 0.7,
             max_templates: 5000,
+        }
+    }
+}
+
+/// Einstellungen für Zeitprofil-Baselines pro Unit (Phase 4).
+/// Siehe `docs/phase4-baselines.md` Abschnitt 8 für die Bedeutung jedes
+/// Feldes im Gesamtentwurf.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct BaselineConfig {
+    /// Halbwertszeit des exponentiellen Zerfalls in Stunden.
+    pub half_life_hours: f64,
+    /// Vertrauensschwelle (Beobachtungsgewicht) je Slot-Baseline.
+    pub min_weight: f64,
+    /// Vertrauensschwelle (Beobachtungsgewicht) je Unit-Profil.
+    pub profile_min_weight: f64,
+    /// Harte Obergrenze unterschiedlicher Templates je Unit-Profil.
+    pub profile_max_templates: usize,
+    /// Harte Obergrenze unterschiedlicher Zählwerte je Histogramm.
+    pub max_bins: usize,
+    /// Harte Obergrenze der Anzahl gleichzeitig gehaltener Baselines
+    /// (Regel 18).
+    pub max_baselines: usize,
+}
+
+impl Default for BaselineConfig {
+    fn default() -> Self {
+        Self {
+            half_life_hours: 168.0,
+            min_weight: 24.0,
+            profile_min_weight: 200.0,
+            profile_max_templates: 512,
+            max_bins: 32,
+            max_baselines: 20_000,
         }
     }
 }

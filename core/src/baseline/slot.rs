@@ -11,10 +11,11 @@
 //! abbildet, nicht UTC.
 
 use chrono::{DateTime, Datelike, Local, Timelike, Utc, Weekday};
+use serde::{Deserialize, Serialize};
 
 /// Ein Zeitprofil-Slot. Werte 0..=47 sind reguläre Slots
 /// (`stunde * 2 + ist_wochenende`), 48 ist [`Slot::ANY`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Slot(pub u8);
 
 impl Slot {

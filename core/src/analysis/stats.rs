@@ -134,11 +134,18 @@ pub fn robust_z_score(value: f64, values: &[f64], min_scale: f64) -> f64 {
     let Some(med) = median(values) else {
         return 0.0;
     };
-    let deviation = value - med;
-
     let deviations: Vec<f64> = values.iter().map(|v| (v - med).abs()).collect();
     let mad = median(&deviations).unwrap_or(0.0);
+    z_score_from_median_mad(value, med, mad, min_scale)
+}
 
+/// Kern der Z-Score-Berechnung, wenn Median und MAD bereits bekannt sind
+/// (z. B. aus einem [`crate::baseline::histogram::CountHistogram`], das sie
+/// direkt aus seinen Bins liefert, ohne den Umweg über eine rohe
+/// Werteliste). Ausgelagert aus [`robust_z_score`], damit beide Aufrufer
+/// exakt dieselbe Formel verwenden.
+pub fn z_score_from_median_mad(value: f64, median: f64, mad: f64, min_scale: f64) -> f64 {
+    let deviation = value - median;
     let scale = (mad / MAD_TO_SIGMA).max(min_scale.max(f64::MIN_POSITIVE));
     (deviation / scale).clamp(-Z_SCORE_SATURATION, Z_SCORE_SATURATION)
 }
@@ -309,6 +316,17 @@ mod tests {
     #[test]
     fn z_score_leerer_historie_ist_null() {
         assert!(robust_z_score(5.0, &[], COUNT_MIN_SCALE).abs() < EPS);
+    }
+
+    #[test]
+    fn z_score_from_median_mad_stimmt_mit_robust_z_score_ueberein() {
+        let values = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let ueber_slice = robust_z_score(100.0, &values, COUNT_MIN_SCALE);
+        let ueber_median_mad = z_score_from_median_mad(100.0, 3.0, 1.0, COUNT_MIN_SCALE);
+        assert!(
+            (ueber_slice - ueber_median_mad).abs() < 1e-9,
+            "beide Wege müssen dieselbe Formel benutzen: {ueber_slice} vs {ueber_median_mad}"
+        );
     }
 
     #[test]
