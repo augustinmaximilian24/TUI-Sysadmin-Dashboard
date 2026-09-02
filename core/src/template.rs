@@ -21,7 +21,7 @@ use crate::mask::mask_message;
 /// Zwei reservierte Werte: [`TemplateId::EMPTY`] für leere Nachrichten und
 /// [`TemplateId::OVERFLOW`], wenn die Registry ihre Kapazitätsgrenze
 /// erreicht hat (Regel 18: harte Obergrenze statt unbeschränktem Wachstum).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TemplateId(pub u64);
 
 impl TemplateId {

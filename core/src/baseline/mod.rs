@@ -4,8 +4,10 @@
 
 pub mod decay;
 pub mod histogram;
+pub mod profile;
 pub mod slot;
 
 pub use decay::DecayParams;
 pub use histogram::{CountHistogram, HistogramConfig};
+pub use profile::{ProfileConfig, UnitProfile};
 pub use slot::Slot;
