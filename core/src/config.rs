@@ -57,17 +57,51 @@ impl Default for IngestionConfig {
 }
 
 /// Einstellungen für die Anomalie-Analyse (Ringpuffer, Schwellwerte).
+///
+/// Die Schwellwerte `score_*` beziehen sich auf den **kombinierten** Score,
+/// der per Konstruktion in 0..1 liegt (siehe `analysis::engine`). Die
+/// `*_reference`-Werte legen fest, ab welchem Rohwert ein Einzelsignal als
+/// voll ausgeschlagen (= 1.0) gilt.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AnalysisConfig {
     /// Länge des Gleitfensters in Sekunden für Entropie-Berechnung.
     pub window_seconds: u64,
-    /// Schwellwert für den robusten Z-Score, ab dem eine Warnung ausgelöst wird.
-    pub z_score_warn_threshold: f64,
-    /// Schwellwert für den robusten Z-Score, ab dem ein kritischer Alarm ausgelöst wird.
-    pub z_score_critical_threshold: f64,
+    /// Länge eines Zeit-Buckets in Sekunden für die Raten-Historie.
+    pub bucket_seconds: u64,
+    /// Anzahl abgeschlossener Buckets, die je Template vorgehalten werden.
+    pub rate_history_buckets: usize,
+    /// Harte Obergrenze an Ereignissen im Gleitfenster (Regel 18).
+    pub max_window_events: usize,
+    /// Nach wie vielen inaktiven Buckets ein Template vergessen wird.
+    pub idle_eviction_buckets: u64,
     /// Dauer der Lernphase in Minuten, in der nur beobachtet, nicht alarmiert wird.
     pub learning_phase_minutes: u64,
+    /// Glättungsparameter α der Surprisal-Berechnung (Lidstone/Jeffreys).
+    pub surprisal_smoothing_alpha: f64,
+    /// Gewicht des Raten-Signals in der Score-Kombination.
+    pub weight_rate: f64,
+    /// Gewicht des Surprisal-Signals in der Score-Kombination.
+    pub weight_surprisal: f64,
+    /// Gewicht des Entropie-Signals in der Score-Kombination.
+    pub weight_entropy: f64,
+    /// Z-Score, ab dem das Raten-Signal als voll ausgeschlagen gilt.
+    pub rate_z_reference: f64,
+    /// Surprisal in Bit, ab dem dieses Signal als voll ausgeschlagen gilt.
+    pub surprisal_reference_bits: f64,
+    /// Entropie-Z-Score, ab dem dieses Signal als voll ausgeschlagen gilt.
+    pub entropy_z_reference: f64,
+    /// Kombinierter Score, ab dem eine Anomalie als `info` gilt.
+    pub score_info_threshold: f64,
+    /// Kombinierter Score, ab dem eine Anomalie als `warn` gilt.
+    pub score_warn_threshold: f64,
+    /// Kombinierter Score, ab dem eine Anomalie als `critical` gilt.
+    pub score_critical_threshold: f64,
+    /// Faktor für die Hysterese: ein Level wird erst unterhalb von
+    /// `schwelle * faktor` wieder verlassen.
+    pub hysteresis_exit_factor: f64,
+    /// Sperrzeit in Sekunden, bevor dasselbe Template erneut meldet.
+    pub cooldown_seconds: u64,
     /// Ähnlichkeitsschwelle (0.0–1.0) für das Drain-artige Template-Clustering:
     /// Anteil übereinstimmender Tokens, ab dem eine Zeile einem bestehenden
     /// Cluster statt einem neuen zugeordnet wird.
@@ -81,9 +115,26 @@ impl Default for AnalysisConfig {
     fn default() -> Self {
         Self {
             window_seconds: 60,
-            z_score_warn_threshold: 3.5,
-            z_score_critical_threshold: 6.0,
+            bucket_seconds: 5,
+            rate_history_buckets: 60,
+            max_window_events: 50_000,
+            idle_eviction_buckets: 720,
             learning_phase_minutes: 10,
+            surprisal_smoothing_alpha: 0.5,
+            weight_rate: 1.0,
+            weight_surprisal: 0.8,
+            weight_entropy: 0.4,
+            rate_z_reference: 8.0,
+            surprisal_reference_bits: 12.0,
+            entropy_z_reference: 6.0,
+            // Empirisch am Replay-Korpus bestimmt: gewöhnliches Poisson-
+            // Rauschen des Normalbetriebs erreicht dort höchstens 0.48,
+            // echte Ereignisse (OOM-Kill, Bruteforce) beginnen bei 0.53.
+            score_info_threshold: 0.5,
+            score_warn_threshold: 0.6,
+            score_critical_threshold: 0.8,
+            hysteresis_exit_factor: 0.8,
+            cooldown_seconds: 300,
             template_similarity_threshold: 0.7,
             max_templates: 5000,
         }
@@ -150,7 +201,7 @@ mod tests {
         let config = Config::load_from_str(raw).expect("gueltiges TOML");
         assert_eq!(config.analysis.window_seconds, 120);
         // Nicht gesetzte Felder bleiben beim Default.
-        assert_eq!(config.analysis.z_score_warn_threshold, 3.5);
+        assert_eq!(config.analysis.score_warn_threshold, 0.6);
         assert_eq!(config.ingestion.channel_capacity, 1024);
     }
 

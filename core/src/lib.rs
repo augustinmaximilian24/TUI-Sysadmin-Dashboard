@@ -5,12 +5,14 @@
 //! reine Datentypen und Logik bereit, die aus `daemon` und `gui` genutzt
 //! werden.
 
+pub mod analysis;
 pub mod channel;
 pub mod config;
 pub mod journal;
 pub mod mask;
 pub mod template;
 
+pub use analysis::{AnalysisEngine, AnalysisInput, Anomaly, AnomalyLevel, ScoreBreakdown};
 pub use channel::{ring_channel, RingReceiver, RingSender};
 pub use config::Config;
 pub use journal::{JournalEvent, JournalParseError};
