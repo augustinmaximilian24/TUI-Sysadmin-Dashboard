@@ -1760,6 +1760,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 1.0.69",
+ "tokio",
  "toml",
  "tracing",
 ]
@@ -1771,6 +1772,7 @@ dependencies = [
  "anyhow",
  "logsentry-core",
  "logsentry-proto",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",

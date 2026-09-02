@@ -5,6 +5,10 @@
 //! reine Datentypen und Logik bereit, die aus `daemon` und `gui` genutzt
 //! werden.
 
+pub mod channel;
 pub mod config;
+pub mod journal;
 
+pub use channel::{ring_channel, RingReceiver, RingSender};
 pub use config::Config;
+pub use journal::{JournalEvent, JournalParseError};

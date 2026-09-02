@@ -1,0 +1,10 @@
+{"__REALTIME_TIMESTAMP": "1735689600000000", "_SYSTEMD_UNIT": "sshd.service", "_PID": "1234", "PRIORITY": "6", "MESSAGE": "Accepted publickey for admin from 10.0.0.5", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689601000000", "_SYSTEMD_UNIT": "sshd.service", "_PID": "1234", "PRIORITY": "6", "MESSAGE": "Failed password for invalid user root from 203.0.113.9 port 51422 ssh2", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689602000000", "_SYSTEMD_UNIT": "cron.service", "_PID": "998", "PRIORITY": "6", "MESSAGE": "(root) CMD (/usr/bin/backup.sh)", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689603000000", "_SYSTEMD_UNIT": "NetworkManager.service", "_PID": "742", "PRIORITY": "6", "MESSAGE": "device (eth0): carrier: link connected", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689604000000", "PRIORITY": "3", "MESSAGE": "kernel: nvme0n1: I/O error, dev nvme0n1, sector 123456", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689605000000", "_SYSTEMD_UNIT": "docker.service", "_PID": "2201", "PRIORITY": "6", "MESSAGE": "container abc123def456 started", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689606000000", "_SYSTEMD_UNIT": "systemd-oomd.service", "_PID": "1", "PRIORITY": "4", "MESSAGE": "Killed process 5321 (stress) due to memory pressure for /user.slice", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689607000000", "_SYSTEMD_UNIT": "sshd.service", "_PID": "1301", "PRIORITY": "6", "MESSAGE": "Failed password for invalid user root from 203.0.113.9 port 51423 ssh2", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689608000000", "_SYSTEMD_UNIT": "sshd.service", "_PID": "1302", "PRIORITY": "6", "MESSAGE": "Failed password for invalid user root from 203.0.113.9 port 51424 ssh2", "_HOSTNAME": "heimserver"}
+{"__REALTIME_TIMESTAMP": "1735689609000000", "_SYSTEMD_UNIT": "smartd.service", "_PID": "615", "PRIORITY": "6", "MESSAGE": "Device: /dev/sda [SAT], SMART Usage Attribute: 194 Temperature_Celsius changed from 32 to 33", "_HOSTNAME": "heimserver"}
