@@ -1,0 +1,2 @@
+# Schwellwert für zu viele Funktionsargumente, bevor Clippy warnt.
+too-many-arguments-threshold = 6
