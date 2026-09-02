@@ -6,6 +6,7 @@
 //! werden.
 
 pub mod analysis;
+pub mod baseline;
 pub mod channel;
 pub mod config;
 pub mod journal;
