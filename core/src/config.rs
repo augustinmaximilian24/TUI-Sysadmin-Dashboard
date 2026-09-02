@@ -68,6 +68,13 @@ pub struct AnalysisConfig {
     pub z_score_critical_threshold: f64,
     /// Dauer der Lernphase in Minuten, in der nur beobachtet, nicht alarmiert wird.
     pub learning_phase_minutes: u64,
+    /// Ähnlichkeitsschwelle (0.0–1.0) für das Drain-artige Template-Clustering:
+    /// Anteil übereinstimmender Tokens, ab dem eine Zeile einem bestehenden
+    /// Cluster statt einem neuen zugeordnet wird.
+    pub template_similarity_threshold: f64,
+    /// Harte Obergrenze der Anzahl gleichzeitig verwalteter Templates
+    /// (Regel 18: kein unbeschränktes Wachstum der Template-Registry).
+    pub max_templates: usize,
 }
 
 impl Default for AnalysisConfig {
@@ -77,6 +84,8 @@ impl Default for AnalysisConfig {
             z_score_warn_threshold: 3.5,
             z_score_critical_threshold: 6.0,
             learning_phase_minutes: 10,
+            template_similarity_threshold: 0.7,
+            max_templates: 5000,
         }
     }
 }

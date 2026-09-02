@@ -8,7 +8,10 @@
 pub mod channel;
 pub mod config;
 pub mod journal;
+pub mod mask;
+pub mod template;
 
 pub use channel::{ring_channel, RingReceiver, RingSender};
 pub use config::Config;
 pub use journal::{JournalEvent, JournalParseError};
+pub use template::{TemplateEngine, TemplateId, TemplateMatch};

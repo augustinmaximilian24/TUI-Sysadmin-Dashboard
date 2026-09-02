@@ -1,0 +1,31 @@
+Accepted publickey for admin from 10.0.0.5 port 51410 ssh2
+Accepted publickey for admin from 10.0.0.7 port 51418 ssh2
+Failed password for invalid user root from 203.0.113.9 port 51422 ssh2
+Failed password for invalid user root from 203.0.113.9 port 51423 ssh2
+Failed password for invalid user root from 203.0.113.10 port 51424 ssh2
+Failed password for invalid user admin from 203.0.113.11 port 51500 ssh2
+sshd[1234]: Connection closed by 203.0.113.9 port 51422
+sshd[1301]: Connection closed by 203.0.113.9 port 51423
+cron[998]: (root) CMD (/usr/bin/backup.sh)
+cron[999]: (root) CMD (/usr/bin/cleanup.sh)
+CRON[1500]: (www-data) CMD (/usr/bin/php /var/www/cron.php)
+device (eth0): carrier: link connected
+device (eth0): carrier: link disconnected
+device (wlan0): carrier: link connected
+kernel: nvme0n1: I/O error, dev nvme0n1, sector 123456
+kernel: nvme0n1: I/O error, dev nvme0n1, sector 789012
+container abc123def456 started
+container fedcba987654 started
+container abc123def456 stopped
+systemd-oomd.service: Killed process 5321 (stress) due to memory pressure for /user.slice
+systemd-oomd.service: Killed process 6120 (stress) due to memory pressure for /user.slice
+Device: /dev/sda [SAT], SMART Usage Attribute: 194 Temperature_Celsius changed from 32 to 33
+Device: /dev/sdb [SAT], SMART Usage Attribute: 194 Temperature_Celsius changed from 30 to 31
+Started backup job for user alice
+Started backup job for user bob
+Started backup job for user charlie
+New session 42 of user alice
+New session 43 of user bob
+Deactivated successfully
+nginx[2201]: GET /index.html 200
+nginx[2201]: GET /favicon.ico 404
