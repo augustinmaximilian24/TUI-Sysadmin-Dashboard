@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::mask::mask_message;
 
 /// Stabile Kennung eines Templates (FNV-1a-Hash über die Ursprungs-Tokens).
@@ -68,6 +70,51 @@ struct Cluster {
     first_seen_us: u64,
     last_seen_us: u64,
     count: u64,
+}
+
+/// Serialisierbare Darstellung eines Clusters für die Persistenz.
+///
+/// Enthält bewusst die **Token-Liste** statt nur des zusammengefügten
+/// Template-Strings: Nur so lässt sich das Drain-Clustering nach einem
+/// Neustart exakt fortsetzen, ohne dass Wildcard-Positionen erneut gelernt
+/// werden müssen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TemplateRecord {
+    /// Stabile Template-ID (bleibt über Neustarts erhalten).
+    pub id: TemplateId,
+    /// Token-Template inklusive `<*>`-Wildcards.
+    pub tokens: Vec<String>,
+    /// Zeitpunkt der ersten Sichtung (Mikrosekunden seit Epoch).
+    pub first_seen_us: u64,
+    /// Zeitpunkt der letzten Sichtung (Mikrosekunden seit Epoch).
+    pub last_seen_us: u64,
+    /// Anzahl bisher zugeordneter Zeilen.
+    pub count: u64,
+}
+
+impl Default for TemplateRecord {
+    fn default() -> Self {
+        Self {
+            id: TemplateId::EMPTY,
+            tokens: Vec::new(),
+            first_seen_us: 0,
+            last_seen_us: 0,
+            count: 0,
+        }
+    }
+}
+
+/// Serialisierbarer Schnappschuss der gesamten Template-Registry.
+///
+/// Die Reihenfolge der Cluster wird erhalten: Bei gleicher Ähnlichkeit
+/// gewinnt in [`TemplateEngine::find_best_cluster`] der zuerst gefundene
+/// Cluster, die Reihenfolge ist also Teil des beobachtbaren Verhaltens.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct TemplateSnapshot {
+    /// Alle Cluster in ihrer internen Reihenfolge.
+    pub clusters: Vec<TemplateRecord>,
 }
 
 /// Ergebnis der Verarbeitung einer Nachricht: welchem Template sie
@@ -126,6 +173,53 @@ impl TemplateEngine {
     /// Anzahl aktuell verwalteter Templates.
     pub fn template_count(&self) -> usize {
         self.clusters.len()
+    }
+
+    /// Serialisierbare Kopie der gesamten Registry (für die Persistenz,
+    /// Phase 4). Der `overflow_count` wird nicht mitgesichert: Er ist eine
+    /// Laufzeit-Kennzahl der aktuellen Sitzung, keine gelernte Information.
+    pub fn snapshot(&self) -> TemplateSnapshot {
+        TemplateSnapshot {
+            clusters: self
+                .clusters
+                .iter()
+                .map(|cluster| TemplateRecord {
+                    id: cluster.id,
+                    tokens: cluster.token_template.clone(),
+                    first_seen_us: cluster.first_seen_us,
+                    last_seen_us: cluster.last_seen_us,
+                    count: cluster.count,
+                })
+                .collect(),
+        }
+    }
+
+    /// Baut eine Engine aus einem Schnappschuss wieder auf.
+    ///
+    /// Enthält der Schnappschuss mehr Cluster, als `max_templates` erlaubt
+    /// (z. B. nachdem die Grenze in der Konfiguration gesenkt wurde), werden
+    /// die überzähligen am Ende verworfen -- das sind bei erhaltener
+    /// Reihenfolge die zuletzt angelegten, also tendenziell jüngsten und
+    /// am wenigsten bestätigten Cluster. Leere Token-Listen werden
+    /// übersprungen, da sie keinem gültigen Cluster entsprechen.
+    pub fn restore(snapshot: TemplateSnapshot, similarity_threshold: f64, max_templates: usize) -> Self {
+        let mut engine = Self::new(similarity_threshold, max_templates);
+        for record in snapshot.clusters.into_iter().take(max_templates) {
+            if record.tokens.is_empty() {
+                continue;
+            }
+            let len = record.tokens.len();
+            let index = engine.clusters.len();
+            engine.clusters.push(Cluster {
+                id: record.id,
+                token_template: record.tokens,
+                first_seen_us: record.first_seen_us,
+                last_seen_us: record.last_seen_us,
+                count: record.count,
+            });
+            engine.by_len.entry(len).or_default().push(index);
+        }
+        engine
     }
 
     /// Verarbeitet eine Log-Nachricht: maskiert sie, ordnet sie einem
@@ -321,5 +415,80 @@ mod tests {
         let a = engine_a.process("Accepted publickey for admin from 10.0.0.5", 1000);
         let b = engine_b.process("Accepted publickey for admin from 10.0.0.5", 9999);
         assert_eq!(a.id, b.id);
+    }
+
+    #[test]
+    fn snapshot_restore_roundtrip_ueber_json() {
+        let mut engine = TemplateEngine::new(0.7, 100);
+        engine.process("Started backup job for user alice", 1000);
+        engine.process("Started backup job for user bob", 1001);
+        engine.process("Accepted publickey for admin from 10.0.0.5", 1002);
+        let vorher_count = engine.template_count();
+
+        let snapshot = engine.snapshot();
+        let json = serde_json::to_string(&snapshot).expect("serialisierbar");
+        let restored_snapshot: TemplateSnapshot =
+            serde_json::from_str(&json).expect("deserialisierbar");
+        assert_eq!(restored_snapshot, snapshot, "JSON-Roundtrip muss verlustfrei sein");
+
+        let mut restored = TemplateEngine::restore(restored_snapshot, 0.7, 100);
+        assert_eq!(restored.template_count(), vorher_count);
+
+        // Das verallgemeinerte Wildcard-Template muss erhalten sein: ein
+        // dritter Name landet ohne Neulernen im bestehenden Cluster.
+        let original_id = engine.process("Started backup job for user charlie", 2000).id;
+        let restored_id = restored.process("Started backup job for user charlie", 2000).id;
+        assert_eq!(original_id, restored_id);
+        assert!(!restored.process("Started backup job for user dave", 2001).is_new);
+    }
+
+    #[test]
+    fn restore_erhaelt_erstsichtung_und_zaehler() {
+        let mut engine = TemplateEngine::new(0.7, 100);
+        engine.process("Accepted publickey for admin from 10.0.0.5", 1000);
+        engine.process("Accepted publickey for admin from 10.0.0.5", 2000);
+
+        let mut restored = TemplateEngine::restore(engine.snapshot(), 0.7, 100);
+        let m = restored.process("Accepted publickey for admin from 10.0.0.5", 3000);
+        assert_eq!(m.first_seen_us, 1000, "Erstsichtung darf beim Neustart nicht verloren gehen");
+        assert_eq!(m.count, 3, "Zähler muss über den Neustart hinweg weiterzählen");
+        assert!(!m.is_new);
+    }
+
+    #[test]
+    fn restore_respektiert_gesenkte_max_templates_grenze() {
+        let mut engine = TemplateEngine::new(0.7, 100);
+        engine.process("erste ganz eigene nachricht", 1);
+        engine.process("zweite komplett andere sache", 2);
+        engine.process("dritte voellig verschiedene zeile", 3);
+        assert_eq!(engine.template_count(), 3);
+
+        let restored = TemplateEngine::restore(engine.snapshot(), 0.7, 2);
+        assert_eq!(restored.template_count(), 2, "Obergrenze muss beim Wiederherstellen greifen");
+    }
+
+    #[test]
+    fn restore_ueberspringt_leere_token_listen() {
+        let snapshot = TemplateSnapshot {
+            clusters: vec![
+                TemplateRecord {
+                    tokens: Vec::new(),
+                    ..TemplateRecord::default()
+                },
+                TemplateRecord {
+                    id: TemplateId(42),
+                    tokens: vec!["a".to_string(), "b".to_string()],
+                    ..TemplateRecord::default()
+                },
+            ],
+        };
+        let restored = TemplateEngine::restore(snapshot, 0.7, 100);
+        assert_eq!(restored.template_count(), 1);
+    }
+
+    #[test]
+    fn leerer_snapshot_ergibt_leere_engine() {
+        let restored = TemplateEngine::restore(TemplateSnapshot::default(), 0.7, 100);
+        assert_eq!(restored.template_count(), 0);
     }
 }

@@ -17,4 +17,4 @@ pub use analysis::{AnalysisEngine, AnalysisInput, Anomaly, AnomalyLevel, ScoreBr
 pub use channel::{ring_channel, RingReceiver, RingSender};
 pub use config::Config;
 pub use journal::{JournalEvent, JournalParseError};
-pub use template::{TemplateEngine, TemplateId, TemplateMatch};
+pub use template::{TemplateEngine, TemplateId, TemplateMatch, TemplateRecord, TemplateSnapshot};
