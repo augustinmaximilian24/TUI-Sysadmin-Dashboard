@@ -75,6 +75,13 @@ struct Cluster {
 pub struct TemplateRecord {
     /// Stabile Template-ID (bleibt über Neustarts erhalten).
     pub id: TemplateId,
+    /// Position in der Registry. Wird beim Wiederherstellen zur Sortierung
+    /// genutzt, weil ein Key/Value-Speicher die Einträge nach Schlüssel
+    /// (Template-ID) liefert, nicht in Einfügereihenfolge -- die Reihenfolge
+    /// ist aber Teil des beobachtbaren Verhaltens (siehe
+    /// [`TemplateSnapshot`]). `#[serde(default)]` hält ältere Bestände ohne
+    /// dieses Feld lesbar.
+    pub order: u64,
     /// Token-Template inklusive `<*>`-Wildcards.
     pub tokens: Vec<String>,
     /// Zeitpunkt der ersten Sichtung (Mikrosekunden seit Epoch).
@@ -89,6 +96,7 @@ impl Default for TemplateRecord {
     fn default() -> Self {
         Self {
             id: TemplateId::EMPTY,
+            order: 0,
             tokens: Vec::new(),
             first_seen_us: 0,
             last_seen_us: 0,
@@ -175,8 +183,10 @@ impl TemplateEngine {
             clusters: self
                 .clusters
                 .iter()
-                .map(|cluster| TemplateRecord {
+                .enumerate()
+                .map(|(order, cluster)| TemplateRecord {
                     id: cluster.id,
+                    order: order as u64,
                     tokens: cluster.token_template.clone(),
                     first_seen_us: cluster.first_seen_us,
                     last_seen_us: cluster.last_seen_us,
@@ -196,7 +206,11 @@ impl TemplateEngine {
     /// übersprungen, da sie keinem gültigen Cluster entsprechen.
     pub fn restore(snapshot: TemplateSnapshot, similarity_threshold: f64, max_templates: usize) -> Self {
         let mut engine = Self::new(similarity_threshold, max_templates);
-        for record in snapshot.clusters.into_iter().take(max_templates) {
+        // Stabil nach `order` sortieren: Bestände aus einem Key/Value-Speicher
+        // kommen nach Template-ID geordnet an, nicht in Registry-Reihenfolge.
+        let mut clusters = snapshot.clusters;
+        clusters.sort_by_key(|record| record.order);
+        for record in clusters.into_iter().take(max_templates) {
             if record.tokens.is_empty() {
                 continue;
             }
@@ -457,6 +471,28 @@ mod tests {
 
         let restored = TemplateEngine::restore(engine.snapshot(), 0.7, 2);
         assert_eq!(restored.template_count(), 2, "Obergrenze muss beim Wiederherstellen greifen");
+    }
+
+    #[test]
+    fn restore_stellt_registry_reihenfolge_ueber_order_wieder_her() {
+        // Ein Key/Value-Speicher liefert nach ID sortiert; die Registry-
+        // Reihenfolge muss trotzdem aus `order` zurückkommen.
+        let mut engine = TemplateEngine::new(0.7, 100);
+        engine.process("erste ganz eigene nachricht", 1);
+        engine.process("zweite komplett andere sache", 2);
+        engine.process("dritte voellig verschiedene zeile", 3);
+        let original = engine.snapshot();
+
+        let mut verwuerfelt = original.clone();
+        verwuerfelt.clusters.sort_by_key(|r| r.id.0);
+        assert_ne!(
+            verwuerfelt.clusters.iter().map(|r| r.id).collect::<Vec<_>>(),
+            original.clusters.iter().map(|r| r.id).collect::<Vec<_>>(),
+            "Testvoraussetzung: ID-Sortierung muss die Reihenfolge tatsächlich ändern"
+        );
+
+        let restored = TemplateEngine::restore(verwuerfelt, 0.7, 100);
+        assert_eq!(restored.snapshot(), original);
     }
 
     #[test]

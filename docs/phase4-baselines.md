@@ -414,3 +414,39 @@ Reihenfolge ist verbindlich; jede Zeile = ein Commit, mit
   Dauerbetrieb zeigen, dass es fehlt.
 - Persistenz von Anomalien und Audit-Log (Phase 8). Die `silenced`-Tabelle
   wird jetzt schon angelegt, um Phase 8 eine Migration zu ersparen.
+
+## 11. Nachträge aus der Umsetzung
+
+Abweichungen vom Entwurf, die sich in der Umsetzung als nötig erwiesen
+haben. Jede ist im Code an der betreffenden Stelle begründet; hier die
+Zusammenfassung.
+
+- **`baseline.min_weight` 24 → 720.** Der Replay-Test (Schritt 7) zeigte,
+  dass 24 (~2 Minuten an Buckets) zu niedrig ist: Eine einzelne
+  durchgängige Sitzung erreicht den Wert, bevor überhaupt Tag-zu-Tag-
+  Streuung beobachtet wurde, und die Baseline erklärt sich auf Basis einer
+  untypisch glatten Kurzzeit-Stichprobe selbst für vertrauenswürdig.
+  720 ist weiterhin nur ein Näherungswert für "über mehrere Tage
+  beobachtet"; das Gewicht unterscheidet nicht zwischen einer langen
+  Sitzung und mehreren Besuchen an verschiedenen Tagen. Genauere Lösung
+  (Verfolgung unterschiedlicher Kalendertage je Slot) bleibt offen.
+- **Signaturen:** `HistogramConfig`/`ProfileConfig` bündeln Zerfall und
+  Obergrenze; `BaselineStore::new/restore` erhalten `bucket_seconds`
+  zusätzlich, da `BaselineConfig` den Wert bewusst nicht dupliziert.
+- **`TemplateRecord.order`:** Ein Key/Value-Speicher liefert die
+  Template-Registry nach ID sortiert, nicht in Registry-Reihenfolge. Da
+  die Reihenfolge bei Ähnlichkeitsgleichstand das Matching bestimmt, wird
+  die Position explizit mitgesichert (Schritt 10 deckte das auf).
+- **`units`-Tabelle** wird angelegt, aber noch nicht befüllt: Der
+  `BaselineStore` kennt nur Unit-Hashes. Das Durchreichen der Klartextnamen
+  aus dem Daemon ist eine Ergänzung für Phase 6/7 (Anzeige in der GUI).
+- **Persistenzfehler beim Start:** Nur eine Datei *neuerer* Schema-Version
+  verhindert den Start. Alle anderen Fehler (Rechte, Pfad) führen zum
+  Betrieb ohne Persistenz mit Warnung -- Baselines sind Beschleunigung,
+  keine Voraussetzung.
+- **Verbleibender Fehlalarm im Replay-Korpus:** Von ursprünglich drei
+  (nicht zwei, wie in der Phase-3-Zusammenfassung angegeben) bleibt einer
+  (t=304 s). Er läuft vollständig über die Kurzzeit-Pfade aus Phase 3
+  (Kaltstart-Artefakt der 300-Sekunden-Rate-Historie) und ist keine Lücke
+  der Baseline-Logik. Die beiden sturmkorrelierten sind verschwunden; ein
+  Regressionstest sichert das ab.
