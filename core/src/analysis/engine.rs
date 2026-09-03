@@ -167,6 +167,9 @@ pub struct AnalysisEngine {
     states: HashMap<TemplateId, TemplateState>,
     /// Zeitstempel des allerersten Ereignisses; Beginn der Lernphase.
     first_event_us: Option<u64>,
+    /// Wurde die globale Lernphase übersprungen, weil beim Start
+    /// vertrauenswürdige Baselines geladen wurden?
+    learning_skipped: bool,
     stats: AnalysisStats,
 }
 
@@ -201,6 +204,7 @@ impl AnalysisEngine {
             bucket_us,
             states: HashMap::new(),
             first_event_us: None,
+            learning_skipped: false,
             stats: AnalysisStats::default(),
         }
     }
@@ -216,6 +220,13 @@ impl AnalysisEngine {
     /// Serialisierbare Kopie der aktuellen Zeitprofil-Baselines (Schritt 9).
     pub fn baseline_snapshot(&self) -> crate::baseline::BaselineSnapshot {
         self.baselines.snapshot()
+    }
+
+    /// Erzwingt die Kapazitätsgrenze der Baselines (Regel 18). Der Daemon
+    /// ruft dies vor jedem Snapshot auf, damit verworfene Einträge auch aus
+    /// der Datei verschwinden.
+    pub fn enforce_baseline_limits(&mut self) {
+        self.baselines.enforce_limits();
     }
 
     /// Ob mindestens eine Zeitprofil-Baseline bereits vertrauenswürdig ist.
@@ -240,8 +251,19 @@ impl AnalysisEngine {
         self.window.len()
     }
 
+    /// Überspringt die globale Lernphase. Sinnvoll nur, wenn beim Start
+    /// vertrauenswürdige Baselines geladen wurden -- dann ist die Lernphase
+    /// als Kaltstart-Schutz nicht mehr nötig, und wochenlang gelernte
+    /// Normalität würde sonst zehn Minuten lang ignoriert.
+    pub fn skip_learning_phase(&mut self) {
+        self.learning_skipped = true;
+    }
+
     /// Ob die Lernphase zum gegebenen Zeitpunkt noch läuft.
     pub fn in_learning_phase(&self, timestamp_us: u64) -> bool {
+        if self.learning_skipped {
+            return false;
+        }
         let Some(start) = self.first_event_us else {
             return true;
         };
@@ -577,6 +599,20 @@ mod tests {
         engine.process(input(0, 1));
         assert!(engine.in_learning_phase(30 * SEC));
         assert!(!engine.in_learning_phase(120 * SEC));
+    }
+
+    #[test]
+    fn skip_learning_phase_beendet_die_lernphase_sofort() {
+        let config = AnalysisConfig {
+            learning_phase_minutes: 60,
+            ..AnalysisConfig::default()
+        };
+        let mut engine = AnalysisEngine::new(config);
+        assert!(engine.in_learning_phase(0));
+        engine.skip_learning_phase();
+        assert!(!engine.in_learning_phase(0));
+        engine.process(input(0, 1));
+        assert!(!engine.in_learning_phase(SEC));
     }
 
     #[test]

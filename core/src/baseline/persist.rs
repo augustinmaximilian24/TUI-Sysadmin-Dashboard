@@ -150,6 +150,7 @@ impl BaselineDb {
             db,
             path: path.to_path_buf(),
         };
+        restrict_permissions(path);
         this.ensure_tables()?;
 
         match this.read_schema_version()? {
@@ -372,6 +373,23 @@ impl BaselineDb {
     }
 }
 
+/// Setzt die Datei auf Modus 0600 (`docs/phase4-baselines.md` Abschnitt
+/// 6.3): Nur der Daemon-Benutzer soll die gelernten Normalwerte lesen. Ein
+/// Fehlschlag wird protokolliert, verhindert aber nicht den Betrieb.
+fn restrict_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(err) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            tracing::warn!(pfad = %path.display(), fehler = %err, "Dateirechte 0600 nicht setzbar");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
 /// Verschiebt eine Datei nach `<pfad>.<grund>-<zeitstempel>` und liefert
 /// den neuen Pfad. Für `--reset-baselines` und unlesbare Dateien.
 pub fn move_aside(path: &Path, reason: &str) -> Result<PathBuf, std::io::Error> {
@@ -461,6 +479,17 @@ mod tests {
         assert_eq!(db.read_schema_version().expect("meta"), Some(SCHEMA_VERSION));
         assert_eq!(db.read_meta(META_HOSTNAME).expect("meta").as_deref(), Some("testhost"));
         assert!(db.load().expect("laden").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn datei_hat_modus_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("baselines.redb");
+        let _db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let mode = std::fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "Modus war {mode:o}");
     }
 
     #[test]

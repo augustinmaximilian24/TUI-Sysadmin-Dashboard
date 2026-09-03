@@ -35,6 +35,8 @@ pub struct Config {
     pub analysis: AnalysisConfig,
     /// Einstellungen für Zeitprofil-Baselines pro Unit (Phase 4).
     pub baseline: BaselineConfig,
+    /// Persistenz der Baselines über Neustarts hinweg (Phase 4).
+    pub persistence: PersistenceConfig,
     /// Pfad und Rechte des Unix-Sockets (Phase 6).
     pub socket: SocketConfig,
 }
@@ -188,6 +190,26 @@ impl Default for BaselineConfig {
             profile_max_templates: 512,
             max_bins: 32,
             max_baselines: 20_000,
+        }
+    }
+}
+
+/// Einstellungen für die Persistenz der Baselines (Phase 4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PersistenceConfig {
+    /// Pfad der redb-Datei. Der Daemon ist einziger Schreiber; Modus 0600.
+    pub path: String,
+    /// Abstand zwischen zwei Snapshots in Minuten. Zusätzlich wird bei
+    /// sauberem Beenden gesichert.
+    pub snapshot_interval_minutes: u64,
+}
+
+impl Default for PersistenceConfig {
+    fn default() -> Self {
+        Self {
+            path: "/var/lib/logsentry/baselines.redb".to_string(),
+            snapshot_interval_minutes: 5,
         }
     }
 }
