@@ -12,6 +12,7 @@ pub mod config;
 pub mod hash;
 pub mod journal;
 pub mod mask;
+pub mod system;
 pub mod template;
 
 pub use analysis::{AnalysisEngine, AnalysisInput, Anomaly, AnomalyLevel, ScoreBreakdown};

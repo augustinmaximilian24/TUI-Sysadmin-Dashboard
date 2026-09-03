@@ -16,6 +16,8 @@
 
 mod ingestion;
 mod pipeline;
+mod sysmon;
+mod units;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -118,6 +120,59 @@ async fn shutdown_signal() {
     }
 }
 
+/// Läuft im Hintergrund und protokolliert den Systemzustand periodisch.
+///
+/// Phase 5 liefert nur Protokoll-Zeilen; die Übergabe an den Socket-Client
+/// folgt in Phase 6, wenn ein Empfänger existiert. Ein fehlender D-Bus
+/// (Test-/Container-Umgebungen, siehe `daemon::units`) wird einmalig
+/// gewarnt; danach laufen CPU/RAM/Load/Disk/Temperaturen unverändert
+/// weiter, nur ohne Unit-Status -- ein einzelner ausgefallener Sensor darf
+/// die übrigen Metriken nicht mitreißen.
+async fn run_system_monitor(config: logsentry_core::config::SystemConfig) {
+    let mut sysmon = sysmon::SysMonitor::new(&config);
+    let units = match units::UnitMonitor::connect().await {
+        Ok(monitor) => Some(monitor),
+        Err(err) => {
+            tracing::warn!(fehler = %err, "kein Zugriff auf System-D-Bus, Unit-Status bleibt leer");
+            None
+        }
+    };
+
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(
+        config.poll_interval_seconds.max(1),
+    ));
+    loop {
+        ticker.tick().await;
+        let timestamp_us = now_us();
+        let mut snapshot = sysmon.poll(timestamp_us);
+
+        if let Some(monitor) = &units {
+            match monitor.poll(&config.watched_units).await {
+                Ok(unit_status) => snapshot.units = unit_status,
+                Err(err) => tracing::warn!(fehler = %err, "Unit-Status nicht abrufbar"),
+            }
+        }
+
+        tracing::debug!(
+            cpu_prozent = format!("{:.1}", snapshot.cpu.global_usage_percent),
+            ram_prozent = format!("{:.1}", snapshot.memory.used_percent),
+            last_1min = format!("{:.2}", snapshot.load.one),
+            temperaturen = snapshot.temperatures.len(),
+            units = snapshot.units.len(),
+            "Systemzustand"
+        );
+    }
+}
+
+/// Mikrosekunden seit Unix-Epoch. `0` im (praktisch nie eintretenden) Fall
+/// einer Systemuhr vor 1970, statt zu paniken.
+fn now_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or(0)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
@@ -181,6 +236,11 @@ async fn main() -> anyhow::Result<()> {
     let pipeline = Pipeline::new(&config, db, restored);
     let consumer = tokio::spawn(pipeline.run(receiver, Arc::clone(&parse_error_counter)));
 
+    // Der Systemzustands-Task hat keinen Zustand, der beim Beenden
+    // gesichert werden müsste (anders als die Pipeline) -- er wird beim
+    // Herunterfahren einfach abgebrochen, statt auf sein Ende zu warten.
+    let system_monitor = tokio::spawn(run_system_monitor(config.system.clone()));
+
     // Ingestion läuft, bis journalctl endet (Replay) oder ein Signal kommt.
     // Die Future lebt nur in diesem Block: Beim Verlassen fällt sie und mit
     // ihr der Sender, der Kanal schließt, und die Pipeline sichert ein
@@ -205,6 +265,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     };
+
+    system_monitor.abort();
 
     if let Err(err) = &ingestion_result {
         tracing::error!(fehler = %err, "Ingestion beendet mit Fehler");

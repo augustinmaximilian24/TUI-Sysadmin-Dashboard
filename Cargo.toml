@@ -29,3 +29,12 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # passt zum Muster "ganze Datensätze lesen/schreiben", siehe
 # docs/phase4-baselines.md Abschnitt 6.1 für die Abwägung gegen rusqlite.
 redb = "2"
+# sysinfo: CPU/RAM/Load/Disk/Temperaturen (Phase 5). Reines Rust, liest
+# /proc und /sys unter Linux, keine root-Rechte nötig für die hier
+# genutzten Metriken.
+sysinfo = "0.39"
+# zbus: Status ausgewählter systemd-Units über D-Bus (Phase 5), statt
+# Command::new("systemctl") zu parsen (verboten laut Regel 10 -- Aktionen
+# müssen ohnehin über D-Bus/polkit laufen, Statusabfragen folgen demselben
+# Weg statt zwei Zugriffsarten zu pflegen).
+zbus = { version = "5", default-features = false, features = ["tokio"] }

@@ -37,6 +37,8 @@ pub struct Config {
     pub baseline: BaselineConfig,
     /// Persistenz der Baselines über Neustarts hinweg (Phase 4).
     pub persistence: PersistenceConfig,
+    /// Erfassung des Systemzustands (Phase 5).
+    pub system: SystemConfig,
     /// Pfad und Rechte des Unix-Sockets (Phase 6).
     pub socket: SocketConfig,
 }
@@ -141,6 +143,38 @@ impl Default for AnalysisConfig {
             cooldown_seconds: 300,
             template_similarity_threshold: 0.7,
             max_templates: 5000,
+        }
+    }
+}
+
+/// Einstellungen für die Erfassung des Systemzustands (Phase 5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SystemConfig {
+    /// Abstand zwischen zwei Messungen in Sekunden.
+    pub poll_interval_seconds: u64,
+    /// Namen der systemd-Units, deren Status verfolgt wird (Allow-Liste
+    /// statt aller Units: Regel 22, keine Magic-Werte im Code, und ein
+    /// Heimserver hat typischerweise nur eine Handvoll Units, die den
+    /// Blick in der GUI wert sind).
+    pub watched_units: Vec<String>,
+    /// Einhängepunkte, deren Belegung gemessen wird. Leer bedeutet: alle
+    /// von `sysinfo` gefundenen Dateisysteme.
+    pub watched_mount_points: Vec<String>,
+}
+
+impl Default for SystemConfig {
+    fn default() -> Self {
+        Self {
+            poll_interval_seconds: 5,
+            watched_units: vec![
+                "sshd.service".to_string(),
+                "cron.service".to_string(),
+                "docker.service".to_string(),
+                "systemd-journald.service".to_string(),
+                "logsentry-daemon.service".to_string(),
+            ],
+            watched_mount_points: Vec::new(),
         }
     }
 }
