@@ -9,6 +9,7 @@ pub mod analysis;
 pub mod baseline;
 pub mod channel;
 pub mod config;
+pub mod hash;
 pub mod journal;
 pub mod mask;
 pub mod template;

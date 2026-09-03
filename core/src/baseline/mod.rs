@@ -12,4 +12,4 @@ pub use decay::DecayParams;
 pub use histogram::{CountHistogram, HistogramConfig};
 pub use profile::{ProfileConfig, UnitProfile};
 pub use slot::Slot;
-pub use store::{BaselineKey, BaselineSnapshot, BaselineStore, RateSource};
+pub use store::{unit_key_from_name, BaselineKey, BaselineSnapshot, BaselineStore, RateSource};

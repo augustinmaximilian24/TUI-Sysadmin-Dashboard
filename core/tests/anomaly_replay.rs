@@ -99,7 +99,36 @@ fn erkennt_oom_kill_im_replay() {
 }
 
 #[test]
-fn erzeugt_im_normalbetrieb_wenige_fehlalarme() {
+fn sturmkorrelierte_fehlalarme_aus_phase_3_sind_verschwunden() {
+    // Regressionstest für die Verbesserung aus Phase 4 Schritt 7: Diese
+    // beiden Meldungen (t=944s SMART-Zeile, t=968s ChronyD-Zeile) traten im
+    // reinen Phase-3-Stand auf, weil sie zufällig in das Zeitfenster des
+    // Bruteforce-Sturms fielen. Sollten sie wieder auftauchen, ist die
+    // Baseline-Anbindung kaputt oder ihr Effekt verschwunden.
+    let anomalies = replay();
+    let waehrend_sturm_faelschlich: Vec<&str> = anomalies
+        .iter()
+        .filter(|(anomaly, message)| {
+            !message.contains("Failed password")
+                && !message.contains("due to memory pressure")
+                && anomaly.timestamp_us >= replay_base_us() + 900 * 1_000_000
+                && anomaly.timestamp_us <= replay_base_us() + 1000 * 1_000_000
+        })
+        .map(|(_, message)| message.as_str())
+        .collect();
+    assert!(
+        waehrend_sturm_faelschlich.is_empty(),
+        "sturmkorrelierte Fehlalarme sind zurückgekehrt: {waehrend_sturm_faelschlich:?}"
+    );
+}
+
+/// Fester Startzeitpunkt der Fixture (siehe `generate_anomaly_replay.py`).
+fn replay_base_us() -> u64 {
+    1_767_225_600_000_000
+}
+
+#[test]
+fn erzeugt_im_normalbetrieb_kaum_fehlalarme() {
     let anomalies = replay();
     // Alles, was weder Bruteforce noch OOM-Kill ist, gilt als Fehlalarm.
     let fehlalarme: Vec<&str> = anomalies
@@ -110,19 +139,33 @@ fn erzeugt_im_normalbetrieb_wenige_fehlalarme() {
         .map(|(_, message)| message.as_str())
         .collect();
 
-    // Die Fixture umfasst 25 Minuten. Der Zielwert der Definition of Done
-    // liegt bei unter 5 Fehlalarmen pro Tag.
+    // Historie dieser Zahl (jeweils gegen exakt dieselbe Fixture verifiziert,
+    // nicht geschätzt):
+    // - Reiner Phase-3-Stand (Commit d573e35, vor jeder Baseline-Anbindung):
+    //   3 Fehlalarme (t=304s, t=944s, t=968s -- SMART-Zeile und ChronyD-Zeile).
+    //   t=944/968 sind sturmkorreliert: Das Surprisal wurde gegen die
+    //   Verteilung im 60-Sekunden-Momentanfenster gebildet, und während der
+    //   Bruteforce-Sturm dieses Fenster dominiert, wird jedes gewöhnliche
+    //   Template darin tatsächlich relativ selten.
+    // - Mit Zeitprofil-Baselines (Phase 4, dieser Schritt): 1 Fehlalarm
+    //   (t=304s). Das Surprisal kommt jetzt aus dem langfristigen
+    //   Unit-Profil statt dem Momentanfenster; ein einminütiger Sturm
+    //   verändert ein mit Tagen Halbwertszeit gewichtetes Profil nur
+    //   marginal -- die beiden sturmkorrelierten Meldungen sind
+    //   nachweislich verschwunden (mit dem reinen Phase-3-Commit
+    //   gegengeprüft, nicht nur angenommen).
     //
-    // Bekannte Restgrenze: Die verbleibenden Meldungen fallen sämtlich in
-    // das Zeitfenster des Bruteforce-Sturms. Das Surprisal wird gegen die
-    // Verteilung im Momentanfenster gebildet; solange ein Sturm dieses
-    // Fenster dominiert, wird jedes gewöhnliche Template darin tatsächlich
-    // relativ selten und schlägt entsprechend aus. Sauber lösen lässt sich
-    // das erst mit einem längerfristigen Vergleichsmaßstab statt des
-    // Momentanfensters -- das ist Gegenstand von Phase 4 (Baselines pro Unit
-    // mit Tageszeitprofil). Bis dahin bleibt die Grenze bewusst sichtbar.
+    // Die verbliebene Meldung bei t=304s ist NICHT sturmkorreliert (der
+    // Angriff beginnt erst bei t=900s) und läuft nachweislich vollständig
+    // über die Kurzzeit-Pfade aus Phase 3 (RateTracker + Momentanfenster,
+    // `rate_source: ShortTerm`): Zu diesem frühen Zeitpunkt hat weder die
+    // Slot-Baseline noch das Unit-Profil dieser Unit die Vertrauensschwelle
+    // erreicht. Es handelt sich um ein Kaltstart-Artefakt der 300-Sekunden-
+    // Rate-Historie aus Phase 3 (ihre Historie füllt sich bei t~300s zum
+    // ersten Mal), nicht um eine Lücke in der Phase-4-Baseline-Logik --
+    // eine echte Behebung läge außerhalb des Umfangs dieses Schritts.
     assert!(
-        fehlalarme.len() <= 3,
+        fehlalarme.len() <= 1,
         "zu viele Fehlalarme im Normalbetrieb ({}): {:?}",
         fehlalarme.len(),
         fehlalarme

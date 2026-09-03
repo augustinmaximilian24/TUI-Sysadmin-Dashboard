@@ -24,6 +24,17 @@ use super::histogram::{CountHistogram, HistogramConfig};
 use super::profile::{ProfileConfig, UnitProfile};
 use super::slot::Slot;
 
+/// Reservierter Name für Ereignisse ohne `_SYSTEMD_UNIT`
+/// (`docs/phase4-baselines.md` Abschnitt 3).
+const NO_UNIT_NAME: &str = "<none>";
+
+/// Bildet den stabilen Unit-Schlüssel aus dem (optionalen) Unit-Namen.
+/// Fehlt der Name, wird der reservierte Platzhalter [`NO_UNIT_NAME`]
+/// gehasht, damit auch unit-lose Ereignisse konsistent gruppiert werden.
+pub fn unit_key_from_name(unit: Option<&str>) -> u64 {
+    crate::hash::fnv1a_hash64(unit.unwrap_or(NO_UNIT_NAME).as_bytes())
+}
+
 /// Zusammengesetzter Schlüssel einer einzelnen Slot-Baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BaselineKey {
@@ -268,6 +279,26 @@ impl BaselineStore {
         }
     }
 
+    /// Anzahl aktuell gehaltener Slot-Histogramme (für Diagnose/GUI).
+    pub fn histogram_count(&self) -> usize {
+        self.histograms.len()
+    }
+
+    /// Zählwert des Templates im aktuell offenen (noch nicht
+    /// abgeschlossenen) Bucket dieser Unit. 0, falls die Unit oder das
+    /// Template darin noch nicht aktiv war. Wird von der Analyse-Engine
+    /// genutzt, um [`BaselineStore::rate_z`] noch **vor** dem
+    /// Bucket-Abschluss abzufragen -- exakt wie `RateTracker` in Phase 3
+    /// den laufenden Bucket sofort auswertet, statt auf dessen Ende zu
+    /// warten.
+    pub fn current_bucket_count(&self, unit_key: u64, template: TemplateId) -> u32 {
+        self.unit_states
+            .get(&unit_key)
+            .and_then(|state| state.bucket_counts.get(&template))
+            .copied()
+            .unwrap_or(0)
+    }
+
     /// Serialisierbare Kopie des gesamten Baseline-Zustands. Der offene,
     /// noch nicht abgeschlossene Bucket-Zustand jeder Unit wird bewusst
     /// **nicht** mit gesichert: Er ist reine Laufzeit-Buchführung, sein
@@ -293,11 +324,6 @@ impl BaselineStore {
         store.histograms = snapshot.histograms.into_iter().collect();
         store.unit_profiles = snapshot.profiles.into_iter().collect();
         store
-    }
-
-    /// Anzahl aktuell gehaltener Slot-Histogramme (für Diagnose/GUI).
-    pub fn histogram_count(&self) -> usize {
-        self.histograms.len()
     }
 
     #[cfg(test)]

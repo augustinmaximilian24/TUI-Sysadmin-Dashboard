@@ -42,19 +42,11 @@ impl std::fmt::Display for TemplateId {
 
 /// Berechnet einen stabilen 64-Bit-Hash (FNV-1a) über die gegebenen Bytes.
 ///
-/// Bewusst keine Nutzung von `std::collections::hash_map::DefaultHasher`:
-/// dessen Algorithmus ist laut Std-Doku *nicht* über Rust-Versionen hinweg
-/// stabil, wir brauchen aber über Neustarts/Rust-Updates hinweg reproduzierbare
-/// IDs (Regel: „Template-ID über stabilen Hash“).
+/// Delegiert an [`crate::hash::fnv1a_hash64`] (gemeinsam mit den
+/// Unit-Schlüsseln in [`crate::baseline`] genutzt); Begründung für die
+/// Wahl von FNV-1a statt `DefaultHasher` dort.
 fn fnv1a_hash64(data: &[u8]) -> u64 {
-    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = FNV_OFFSET_BASIS;
-    for byte in data {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
+    crate::hash::fnv1a_hash64(data)
 }
 
 /// Platzhalter für eine Token-Position, die sich zwischen mehreren Zeilen

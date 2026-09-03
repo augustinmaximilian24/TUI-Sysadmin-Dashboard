@@ -152,6 +152,21 @@ pub struct BaselineConfig {
     /// Halbwertszeit des exponentiellen Zerfalls in Stunden.
     pub half_life_hours: f64,
     /// Vertrauensschwelle (Beobachtungsgewicht) je Slot-Baseline.
+    ///
+    /// Abweichung vom Entwurfsdokument (dort: 24.0, "~2 Minuten an
+    /// Buckets"): Der Replay-Test in Phase 4 Schritt 7 deckte auf, dass 24
+    /// zu niedrig ist -- eine einzelne durchgängige Sitzung erreicht diesen
+    /// Wert, bevor überhaupt Tag-zu-Tag-Streuung beobachtet werden konnte,
+    /// wodurch die Baseline sich selbst auf Basis einer untypisch glatten
+    /// Kurzzeit-Stichprobe für vertrauenswürdig erklärt (ein Median/MAD aus
+    /// z. B. 30 Buckets *derselben* Sitzung ist keine verlässliche
+    /// Schätzung der echten Streuung). 720.0 entspricht bei 5-Sekunden-
+    /// Buckets höchstens einer Stunde durchgängiger Aktivität im selben
+    /// Slot -- immer noch nur ein grober Näherungswert für "über mehrere
+    /// Tage beobachtet", da das Gewicht nicht zwischen einer einzelnen
+    /// langen Sitzung und mehreren kurzen Besuchen an verschiedenen Tagen
+    /// unterscheidet. Eine genauere Lösung (Verfolgung unterschiedlicher
+    /// Kalendertage je Slot) ist als Weiterentwicklung offen.
     pub min_weight: f64,
     /// Vertrauensschwelle (Beobachtungsgewicht) je Unit-Profil.
     pub profile_min_weight: f64,
@@ -168,7 +183,7 @@ impl Default for BaselineConfig {
     fn default() -> Self {
         Self {
             half_life_hours: 168.0,
-            min_weight: 24.0,
+            min_weight: 720.0,
             profile_min_weight: 200.0,
             profile_max_templates: 512,
             max_bins: 32,

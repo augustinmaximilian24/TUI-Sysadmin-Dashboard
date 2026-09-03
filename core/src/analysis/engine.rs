@@ -35,7 +35,8 @@
 
 use std::collections::HashMap;
 
-use crate::config::AnalysisConfig;
+use crate::baseline::{unit_key_from_name, BaselineStore, RateSource};
+use crate::config::{AnalysisConfig, BaselineConfig};
 use crate::template::TemplateId;
 
 use super::rate::RateTracker;
@@ -88,6 +89,9 @@ pub struct ScoreBreakdown {
     pub entropy_component: f64,
     /// Gewichteter Gesamtscore (0..1).
     pub combined: f64,
+    /// Woher der Rate-Z-Score stammt (Fallback-Kette Slot-Baseline ->
+    /// ANY-Slot-Baseline -> Kurzzeit-Historie, Phase 4).
+    pub rate_source: RateSource,
 }
 
 /// Eine gemeldete Anomalie.
@@ -143,12 +147,19 @@ pub struct AnalysisStats {
     pub suppressed_learning: u64,
 }
 
-/// Die Analyse-Engine. Hält Zeitfenster, Rate-Historie, Entropie-Historie
-/// und den Meldezustand pro Template.
+/// Die Analyse-Engine. Hält Zeitfenster, Rate-Historie, Entropie-Historie,
+/// die Zeitprofil-Baselines (Phase 4) und den Meldezustand pro Template.
 pub struct AnalysisEngine {
     config: AnalysisConfig,
     window: SlidingWindow,
     rates: RateTracker,
+    /// Zeitprofil-Baselines pro Unit (Phase 4): erste Quelle für Rate-
+    /// Z-Score und Surprisal, bevor auf Kurzzeit-Historie bzw.
+    /// Momentanfenster zurückgefallen wird.
+    baselines: BaselineStore,
+    /// Aufbewahrt für [`AnalysisEngine::restore_baselines`], das einen neuen
+    /// [`BaselineStore`] mit denselben Einstellungen braucht.
+    baseline_config: BaselineConfig,
     /// Historie der Fenster-Entropie, ein Wert je abgeschlossenem Bucket.
     entropy_history: Vec<f64>,
     entropy_bucket: u64,
@@ -160,8 +171,16 @@ pub struct AnalysisEngine {
 }
 
 impl AnalysisEngine {
-    /// Erstellt eine Engine aus der Konfiguration.
+    /// Erstellt eine Engine aus der Analyse-Konfiguration, mit
+    /// Default-Einstellungen für die Zeitprofil-Baselines (Phase 4). Für
+    /// explizite Baseline-Konfiguration siehe
+    /// [`AnalysisEngine::with_baseline_config`].
     pub fn new(config: AnalysisConfig) -> Self {
+        Self::with_baseline_config(config, BaselineConfig::default())
+    }
+
+    /// Erstellt eine Engine mit expliziter Baseline-Konfiguration.
+    pub fn with_baseline_config(config: AnalysisConfig, baseline_config: BaselineConfig) -> Self {
         let window = SlidingWindow::new(config.window_seconds, config.max_window_events);
         let rates = RateTracker::new(
             config.bucket_seconds,
@@ -169,11 +188,14 @@ impl AnalysisEngine {
             config.max_templates,
             config.idle_eviction_buckets,
         );
+        let baselines = BaselineStore::new(config.bucket_seconds, &baseline_config);
         let bucket_us = config.bucket_seconds.max(1).saturating_mul(1_000_000);
         Self {
             config,
             window,
             rates,
+            baselines,
+            baseline_config,
             entropy_history: Vec::new(),
             entropy_bucket: 0,
             bucket_us,
@@ -181,6 +203,26 @@ impl AnalysisEngine {
             first_event_us: None,
             stats: AnalysisStats::default(),
         }
+    }
+
+    /// Setzt die Zeitprofil-Baselines auf einen zuvor gesicherten Stand
+    /// zurück (Neustart mit persistierten Daten, Schritt 9). Der bisherige
+    /// Baseline-Zustand geht verloren; alles andere (Kurzzeit-Historie,
+    /// Meldezustand) bleibt unverändert.
+    pub fn restore_baselines(&mut self, snapshot: crate::baseline::BaselineSnapshot) {
+        self.baselines = BaselineStore::restore(snapshot, self.config.bucket_seconds, &self.baseline_config);
+    }
+
+    /// Serialisierbare Kopie der aktuellen Zeitprofil-Baselines (Schritt 9).
+    pub fn baseline_snapshot(&self) -> crate::baseline::BaselineSnapshot {
+        self.baselines.snapshot()
+    }
+
+    /// Ob mindestens eine Zeitprofil-Baseline bereits vertrauenswürdig ist.
+    /// Der Daemon nutzt dies, um nach dem Laden persistierter Baselines die
+    /// globale Lernphase zu überspringen (Schritt 9).
+    pub fn has_trusted_baselines(&self) -> bool {
+        self.baselines.has_trusted_baselines()
     }
 
     /// Laufende Kennzahlen der Engine.
@@ -230,10 +272,24 @@ impl AnalysisEngine {
         // bereits enthält.
         self.roll_entropy_bucket(input.timestamp_us);
 
-        let rate_z = self.rates.record(input.timestamp_us, input.template_id);
+        let unit_key = unit_key_from_name(input.unit);
+
+        // Kurzzeit-Historie (Phase 3) läuft immer mit -- sie ist die
+        // Fallback-Stufe, falls die Zeitprofil-Baseline noch nicht
+        // vertrauenswürdig ist (frisches System, wenig Beobachtungen).
+        let short_term_rate_z = self.rates.record(input.timestamp_us, input.template_id);
         self.window.push(input.timestamp_us, input.template_id);
 
-        let breakdown = self.compute_breakdown(input.template_id, rate_z);
+        // Zeitprofil-Baseline (Phase 4) zählt das Ereignis mit und liefert,
+        // sofern vertrauenswürdig, den bevorzugten Rate-Z-Score.
+        self.baselines.record(input.timestamp_us, unit_key, input.template_id);
+        let current_bucket_count = self.baselines.current_bucket_count(unit_key, input.template_id);
+        let baseline_rate =
+            self.baselines
+                .rate_z(input.timestamp_us, unit_key, input.template_id, current_bucket_count);
+
+        let breakdown =
+            self.compute_breakdown(unit_key, input.template_id, short_term_rate_z, baseline_rate);
         let level = self.level_with_hysteresis(input.template_id, breakdown.combined);
 
         if level == AnomalyLevel::Normal {
@@ -288,13 +344,39 @@ impl AnalysisEngine {
     }
 
     /// Berechnet die Einzelsignale und den gewichteten Gesamtscore.
-    fn compute_breakdown(&self, template_id: TemplateId, rate_z: f64) -> ScoreBreakdown {
-        let surprisal_bits = surprisal(
-            self.window.count_of(template_id),
-            self.window.len() as u64,
-            self.window.distinct_templates(),
-            self.config.surprisal_smoothing_alpha,
-        );
+    ///
+    /// `baseline_rate` ist das Ergebnis der Zeitprofil-Baseline (Phase 4,
+    /// Stufe 1-2 der Fallback-Kette); ist es `None`, wird
+    /// `short_term_rate_z` aus der Kurzzeit-Historie (Phase 3, Stufe 3)
+    /// verwendet.
+    fn compute_breakdown(
+        &self,
+        unit_key: u64,
+        template_id: TemplateId,
+        short_term_rate_z: f64,
+        baseline_rate: Option<(f64, RateSource)>,
+    ) -> ScoreBreakdown {
+        let (rate_z, rate_source) = match baseline_rate {
+            Some((z, source)) => (z, source),
+            None => (short_term_rate_z, RateSource::ShortTerm),
+        };
+
+        // Surprisal ebenfalls zuerst aus dem langfristigen Unit-Profil
+        // (Phase 4); das ist die gezielte Antwort auf die in Phase 3
+        // dokumentierte sturmkorrelierte Fehlalarmquelle: Ein Sturm
+        // verändert ein mit Tagen Halbwertszeit gewichtetes Profil nur
+        // marginal, während er das Momentanfenster vollständig dominiert.
+        let surprisal_bits = self
+            .baselines
+            .surprisal(unit_key, template_id, self.config.surprisal_smoothing_alpha)
+            .unwrap_or_else(|| {
+                surprisal(
+                    self.window.count_of(template_id),
+                    self.window.len() as u64,
+                    self.window.distinct_templates(),
+                    self.config.surprisal_smoothing_alpha,
+                )
+            });
 
         let entropy_z = robust_z_score(
             self.window.entropy(),
@@ -338,6 +420,7 @@ impl AnalysisEngine {
             surprisal_component,
             entropy_component,
             combined: combined.clamp(0.0, 1.0),
+            rate_source,
         }
     }
 
@@ -378,7 +461,6 @@ impl AnalysisEngine {
         level
     }
 
-    /// Prüft, ob für dieses Template noch eine Sperrzeit läuft.
     /// Prüft, ob für dieses Template noch eine Sperrzeit läuft.
     ///
     /// Eine **Verschärfung** durchbricht die Sperrzeit: Meldet sich ein
@@ -728,7 +810,7 @@ mod tests {
             engine.process(input(i * SEC, i % 5));
         }
         for i in 0..300u64 {
-            let breakdown = engine.compute_breakdown(tid(i % 7), 1000.0);
+            let breakdown = engine.compute_breakdown(0, tid(i % 7), 1000.0, None);
             assert!(
                 (0.0..=1.0).contains(&breakdown.combined),
                 "Score außerhalb 0..1: {}",
