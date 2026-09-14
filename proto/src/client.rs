@@ -490,9 +490,8 @@ mod tests {
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
         loop {
-            match &*state_rx.borrow() {
-                ConnectionState::Disconnected { .. } => break,
-                _ => {}
+            if let ConnectionState::Disconnected { .. } = &*state_rx.borrow() {
+                break;
             }
             if tokio::time::Instant::now() > deadline {
                 panic!("kein Disconnected-Status erreicht");
