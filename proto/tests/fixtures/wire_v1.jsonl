@@ -1,0 +1,22 @@
+{"type":"hello","protocol_version":1,"client_name":"logsentry-gui","client_version":"0.1.0","subscription":{"snapshots":true,"anomalies":true,"snapshot_interval_ms":1000}}
+{"type":"subscribe","subscription":{"snapshots":true,"anomalies":false,"snapshot_interval_ms":5000}}
+{"type":"get_context","request_id":42,"timestamp_us":1726000000000000,"before":20,"after":20,"unit":"sshd.service"}
+{"type":"action","request_id":7,"action":{"kind":"restart_unit","unit":"sshd.service"}}
+{"type":"action","request_id":8,"action":{"kind":"stop_unit","unit":"cron.service"}}
+{"type":"action","request_id":9,"action":{"kind":"terminate_process","pid":4711,"grace_secs":5}}
+{"type":"action","request_id":10,"action":{"kind":"block_ip","ip":"198.51.100.23","duration_secs":3600}}
+{"type":"action","request_id":11,"action":{"kind":"mute_anomaly","template_id":987654321,"unit":"sshd.service","scope":"one_day"}}
+{"type":"ping","nonce":123}
+{"type":"hello","protocol_version":1,"daemon_version":"0.1.0","hostname":"heimserver","session_id":9876543210,"allowed_actions":["restart_unit","block_ip"],"dry_run":true}
+{"type":"recent_anomalies","anomalies":[]}
+{"type":"recent_anomalies","anomalies":[{"id":1,"timestamp_us":1726000001000000,"template_id":555,"template_text":"Failed password for <USER> from <IP> port <PORT> ssh2","sample_message":"Failed password for root from 198.51.100.23 port 51515 ssh2","unit":"sshd.service","pid":1234,"priority":4,"level":"warn","breakdown":{"rate_z":4.2,"surprisal_bits":12.7,"entropy_z":1.1,"rate_component":0.6,"surprisal_component":0.9,"entropy_component":0.2,"combined":0.83,"rate_source":"slot_baseline"},"suppressed_since_last":0}]}
+{"type":"anomaly","id":1,"timestamp_us":1726000001000000,"template_id":555,"template_text":"Failed password for <USER> from <IP> port <PORT> ssh2","sample_message":"Failed password for root from 198.51.100.23 port 51515 ssh2","unit":"sshd.service","pid":1234,"priority":4,"level":"warn","breakdown":{"rate_z":4.2,"surprisal_bits":12.7,"entropy_z":1.1,"rate_component":0.6,"surprisal_component":0.9,"entropy_component":0.2,"combined":0.83,"rate_source":"slot_baseline"},"suppressed_since_last":0}
+{"type":"snapshot","timestamp_us":1726000002000000,"daemon_uptime_secs":3600,"learning":{"active":false,"remaining_secs":null},"stats":{"events":10000,"parse_errors":3,"dropped_overflow":0,"templates":42,"anomalies_emitted":5,"suppressed":120,"suppressed_learning":0,"events_per_sec":12.4,"clients":2},"window":{"window_secs":60,"entropy_bits":3.2,"entropy_z":0.4,"events_in_window":640,"distinct_templates":18},"system":{"timestamp_us":1726000002000000,"cpu":{"global_usage_percent":12.5,"per_core_usage_percent":[10.0,15.0]},"memory":{"total_bytes":16000000000,"used_bytes":4000000000,"used_percent":25.0},"load":{"one":0.5,"five":0.4,"fifteen":0.3},"disks":[{"mount_point":"/","total_bytes":500000000000,"available_bytes":300000000000,"used_percent":40.0}],"temperatures":[{"label":"CPU","celsius":45.5}],"units":[{"name":"sshd.service","active_state":"active","sub_state":"running"}]},"replay":false}
+{"type":"context","request_id":42,"lines":[{"timestamp_us":1726000000500000,"unit":"sshd.service","pid":1234,"priority":6,"message":"Accepted publickey for max from 10.0.0.5 port 22 ssh2"}],"truncated":false}
+{"type":"action_result","request_id":7,"outcome":{"outcome":"denied","reason":{"reason":"not_allowed"}}}
+{"type":"action_result","request_id":12,"outcome":{"outcome":"completed","message":"Unit neu gestartet","dry_run":true}}
+{"type":"action_result","request_id":13,"outcome":{"outcome":"denied","reason":{"reason":"rate_limited","retry_after_secs":300}}}
+{"type":"action_result","request_id":14,"outcome":{"outcome":"failed","message":"polkit hat abgelehnt"}}
+{"type":"pong","nonce":123}
+{"type":"error","code":{"code":"lagged","missed":4},"message":"Broadcast-Puffer übergelaufen","request_id":null}
+{"type":"goodbye","reason":{"reason":"version_mismatch","expected":1,"got":2}}

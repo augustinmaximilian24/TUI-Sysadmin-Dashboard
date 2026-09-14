@@ -1,9 +1,12 @@
-//! `logsentry-proto`: Nachrichtenformat zwischen Daemon und Client(s).
+//! `logsentry-proto`: Wire-Format zwischen Daemon und Client(s) (GUI,
+//! später TUI).
 //!
-//! Wird in Phase 6 ausgearbeitet (versionierte Enums für Snapshot- und
-//! Aktions-Nachrichten). In Phase 0 dient dieses Crate nur als Platzhalter,
-//! damit die Workspace-Struktur von Anfang an steht.
+//! Entwurf und normative Entscheidungen: `docs/phase6-protokoll.md`.
+//! `proto` hängt bewusst nicht von `logsentry-core` ab — siehe dortiger
+//! Abschnitt 1.
 
-/// Platzhalter-Version des Protokolls. Wird in Phase 6 durch echte
-/// versionierte Nachrichtentypen ersetzt.
-pub const PROTOCOL_VERSION: u32 = 0;
+mod error;
+mod wire;
+
+pub use error::ProtoError;
+pub use wire::*;

@@ -7,3 +7,10 @@ license.workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# Nur für das `client`-Feature (Reconnect-Task in proto::client, Phase 6
+# Schritt 3). Ohne das Feature zieht proto kein tokio.
+tokio = { workspace = true, optional = true }
+
+[features]
+client = ["dep:tokio"]
