@@ -16,8 +16,10 @@
 
 mod ingestion;
 mod pipeline;
+mod state;
 mod sysmon;
 mod units;
+mod wire;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -100,15 +102,15 @@ async fn shutdown_signal() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]
     {
-        let mut term = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            Ok(term) => term,
-            Err(err) => {
-                tracing::warn!(fehler = %err, "SIGTERM-Handler nicht verfügbar, nur Ctrl-C");
-                let _ = ctrl_c.await;
-                return;
-            }
-        };
+        let mut term =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(term) => term,
+                Err(err) => {
+                    tracing::warn!(fehler = %err, "SIGTERM-Handler nicht verfügbar, nur Ctrl-C");
+                    let _ = ctrl_c.await;
+                    return;
+                }
+            };
         tokio::select! {
             _ = ctrl_c => {}
             _ = term.recv() => {}

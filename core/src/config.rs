@@ -249,17 +249,53 @@ impl Default for PersistenceConfig {
 }
 
 /// Einstellungen für den Unix-Socket, über den GUI und Daemon kommunizieren.
+///
+/// Siehe `docs/phase6-protokoll.md` Abschnitt 5. `path` blieb beim
+/// bestehenden Default aus Phase 0 (`collector.sock`), um bestehendes
+/// Verhalten nicht stillschweigend zu ändern; der Entwurf schlägt
+/// `logsentry.sock` vor -- beides ist nur ein Dateiname, funktional
+/// gleichwertig, per Konfiguration änderbar.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SocketConfig {
     /// Pfad zur Socket-Datei (Regel 11: unter `/run/logsentry/`).
     pub path: String,
+    /// Gruppe, der die Socket-Datei gehört (Regel 11). Leer = kein
+    /// `chown` (Dev-Betrieb ohne Root, z. B. unter `$XDG_RUNTIME_DIR`).
+    pub group: String,
+    /// Dateimodus der Socket-Datei, oktal (Regel 11: 0660).
+    pub mode: u32,
+    /// Maximale Anzahl gleichzeitiger Client-Verbindungen.
+    pub max_clients: u32,
+    /// Vom Client wünschbares Snapshot-Intervall, oberer Rand der Klemme.
+    pub snapshot_interval_ms: u32,
+    /// Unterer Rand der Klemme für das clientseitig gewünschte Intervall.
+    pub min_snapshot_interval_ms: u32,
+    /// Zeit, die ein Client nach dem Verbinden für `Hello` hat, bevor der
+    /// Daemon trennt.
+    pub hello_timeout_ms: u32,
+    /// Größe des Rings für `RecentAnomalies` (an neu verbundene Clients
+    /// gesendet).
+    pub recent_anomalies: usize,
+    /// Größe des Rohzeilen-Rings für `GetContext`.
+    pub context_lines: usize,
+    /// Obergrenze für `before`/`after` in einer `GetContext`-Anfrage.
+    pub context_max_lines: u16,
 }
 
 impl Default for SocketConfig {
     fn default() -> Self {
         Self {
             path: "/run/logsentry/collector.sock".to_string(),
+            group: "logsentry".to_string(),
+            mode: 0o660,
+            max_clients: 8,
+            snapshot_interval_ms: 1000,
+            min_snapshot_interval_ms: 250,
+            hello_timeout_ms: 5000,
+            recent_anomalies: 200,
+            context_lines: 2000,
+            context_max_lines: 200,
         }
     }
 }
@@ -291,6 +327,35 @@ mod tests {
         assert_eq!(config.ingestion.channel_capacity, 1024);
         assert_eq!(config.analysis.window_seconds, 60);
         assert_eq!(config.socket.path, "/run/logsentry/collector.sock");
+    }
+
+    #[test]
+    fn default_socket_config_hat_erwartete_werte() {
+        let config = Config::default();
+        assert_eq!(config.socket.group, "logsentry");
+        assert_eq!(config.socket.mode, 0o660);
+        assert_eq!(config.socket.max_clients, 8);
+        assert_eq!(config.socket.snapshot_interval_ms, 1000);
+        assert_eq!(config.socket.min_snapshot_interval_ms, 250);
+        assert_eq!(config.socket.hello_timeout_ms, 5000);
+        assert_eq!(config.socket.recent_anomalies, 200);
+        assert_eq!(config.socket.context_lines, 2000);
+        assert_eq!(config.socket.context_max_lines, 200);
+    }
+
+    #[test]
+    fn socket_config_teiluerberschreibung_laesst_restliche_defaults_stehen() {
+        let raw = r#"
+            [socket]
+            path = "/run/logsentry/dev.sock"
+            max_clients = 2
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert_eq!(config.socket.path, "/run/logsentry/dev.sock");
+        assert_eq!(config.socket.max_clients, 2);
+        // Nicht gesetzte Felder bleiben beim Default.
+        assert_eq!(config.socket.group, "logsentry");
+        assert_eq!(config.socket.mode, 0o660);
     }
 
     #[test]

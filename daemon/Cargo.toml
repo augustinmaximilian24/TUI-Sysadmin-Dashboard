@@ -18,3 +18,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 sysinfo.workspace = true
 zbus.workspace = true
+# nix: Auflösung des Gruppennamens aus der Konfiguration zu einer GID und
+# chown der Socket-Datei (Regel 11). std::os::unix::fs::chown kann keine
+# Gruppe nach Namen auflösen, nur nach GID -- dafür braucht es getgrnam,
+# das nix bereitstellt. Einzige neue Abhängigkeit in Phase 6 (siehe
+# docs/phase6-protokoll.md Abschnitt 2).
+nix = { version = "0.29", default-features = false, features = ["user", "fs"] }
