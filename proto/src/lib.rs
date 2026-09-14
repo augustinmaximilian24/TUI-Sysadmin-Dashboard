@@ -6,7 +6,9 @@
 //! Abschnitt 1.
 
 mod error;
+mod framing;
 mod wire;
 
-pub use error::ProtoError;
+pub use error::{FrameError, ProtoError};
+pub use framing::{read_frame, write_frame};
 pub use wire::*;
