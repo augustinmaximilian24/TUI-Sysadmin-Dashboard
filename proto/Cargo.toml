@@ -17,3 +17,6 @@ tokio.workspace = true
 # selbst nicht braucht. tokio ist ab jetzt ohnehin immer vorhanden; dieses
 # Feature schaltet künftig nur das Modul frei, keine zusätzliche Dependency.
 client = []
+
+[dev-dependencies]
+tempfile = "3"
