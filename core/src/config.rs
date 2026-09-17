@@ -41,6 +41,9 @@ pub struct Config {
     pub system: SystemConfig,
     /// Pfad und Rechte des Unix-Sockets (Phase 6).
     pub socket: SocketConfig,
+    /// Allow-List, Rate-Limit und Ausführungsparameter des
+    /// Aktions-Subsystems (Phase 8).
+    pub actions: ActionsConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -300,6 +303,71 @@ impl Default for SocketConfig {
     }
 }
 
+/// Konfiguration des Aktions-Subsystems (Phase 8).
+///
+/// Siehe `docs/phase8-aktionen.md` Abschnitt 3. `allowed_kinds` ist bewusst
+/// `Vec<String>` statt `Vec<ActionKind>`: ein unbekannter Wert in der
+/// TOML-Datei soll die Konfiguration nicht scheitern lassen, sondern beim
+/// Allow-List-Abgleich einfach nie matchen (Mapping in `daemon::actions`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ActionsConfig {
+    /// Globaler Schalter (Regel 26): `true` protokolliert jede Aktion nur,
+    /// ohne sie auszuführen. Fail-safe-Default `true` -- ein frisch
+    /// installierter Daemon führt nichts aus, bis der Betreiber das
+    /// bewusst per Konfiguration ändert.
+    pub dry_run: bool,
+    /// Erlaubte Aktionsarten (`"restart_unit"`, `"stop_unit"`,
+    /// `"terminate_process"`, `"block_ip"`, `"mute_anomaly"`). Was hier
+    /// fehlt, wird abgelehnt, unabhängig von allen anderen Feldern
+    /// (Regel 9).
+    pub allowed_kinds: Vec<String>,
+    /// Units, die per `RestartUnit`/`StopUnit` angefasst werden dürfen.
+    /// Exakter Namensvergleich, keine Muster.
+    pub allowed_units: Vec<String>,
+    /// Maximale Anzahl Versuche je Aktionsart und Ziel innerhalb von
+    /// `rate_limit_window_minutes` (Regel 14).
+    pub rate_limit_max_actions: u32,
+    pub rate_limit_window_minutes: u64,
+    /// Wie lange nach einer `RestartUnit`/`StopUnit`/`TerminateProcess`-
+    /// Aktion deren eigene Journal-Zeilen von der Anomalie-Erkennung
+    /// ausgenommen werden (Regel 13).
+    pub self_filter_window_secs: u64,
+    pub terminate_default_grace_secs: u16,
+    pub terminate_max_grace_secs: u16,
+    pub block_ip_min_duration_secs: u32,
+    pub block_ip_max_duration_secs: u32,
+    pub nftables_family: String,
+    pub nftables_table: String,
+    pub nftables_set_v4: String,
+    pub nftables_set_v6: String,
+    /// Pfad der JSON-Lines-Audit-Datei (ein Eintrag pro Versuch, auch
+    /// abgelehnte/fehlgeschlagene).
+    pub audit_log_path: String,
+}
+
+impl Default for ActionsConfig {
+    fn default() -> Self {
+        Self {
+            dry_run: true,
+            allowed_kinds: Vec::new(),
+            allowed_units: Vec::new(),
+            rate_limit_max_actions: 3,
+            rate_limit_window_minutes: 10,
+            self_filter_window_secs: 30,
+            terminate_default_grace_secs: 5,
+            terminate_max_grace_secs: 60,
+            block_ip_min_duration_secs: 60,
+            block_ip_max_duration_secs: 604_800,
+            nftables_family: "inet".to_string(),
+            nftables_table: "filter".to_string(),
+            nftables_set_v4: "logsentry_blocked_v4".to_string(),
+            nftables_set_v6: "logsentry_blocked_v6".to_string(),
+            audit_log_path: "/var/lib/logsentry/audit.jsonl".to_string(),
+        }
+    }
+}
+
 impl Config {
     /// Lädt die Konfiguration aus einer TOML-Datei am gegebenen Pfad.
     ///
@@ -341,6 +409,35 @@ mod tests {
         assert_eq!(config.socket.recent_anomalies, 200);
         assert_eq!(config.socket.context_lines, 2000);
         assert_eq!(config.socket.context_max_lines, 200);
+    }
+
+    #[test]
+    fn default_actions_config_ist_fail_safe() {
+        let config = Config::default();
+        assert!(config.actions.dry_run, "Default muss dry_run=true sein");
+        assert!(config.actions.allowed_kinds.is_empty());
+        assert!(config.actions.allowed_units.is_empty());
+        assert_eq!(config.actions.rate_limit_max_actions, 3);
+        assert_eq!(config.actions.rate_limit_window_minutes, 10);
+        assert_eq!(config.actions.terminate_max_grace_secs, 60);
+        assert_eq!(config.actions.block_ip_max_duration_secs, 604_800);
+    }
+
+    #[test]
+    fn actions_config_teiluerberschreibung_laesst_restliche_defaults_stehen() {
+        let raw = r#"
+            [actions]
+            dry_run = false
+            allowed_kinds = ["restart_unit"]
+            allowed_units = ["sshd.service"]
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert!(!config.actions.dry_run);
+        assert_eq!(config.actions.allowed_kinds, vec!["restart_unit"]);
+        assert_eq!(config.actions.allowed_units, vec!["sshd.service"]);
+        // Nicht gesetzte Felder bleiben beim Default.
+        assert_eq!(config.actions.rate_limit_max_actions, 3);
+        assert_eq!(config.actions.self_filter_window_secs, 30);
     }
 
     #[test]
