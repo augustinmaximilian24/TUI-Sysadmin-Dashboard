@@ -155,20 +155,30 @@ impl Pipeline {
         // Beide Prüfungen laufen unabhängig vom Analyseergebnis -- der
         // `ContextRing` oben hat die Zeile bereits unbedingt aufgenommen
         // (Audit-Sichtbarkeit, `docs/phase6-protokoll.md` Abschnitt 9).
+        //
+        // Bewusst `now_us()` (die echte Systemuhr) statt
+        // `event.realtime_timestamp_us`: die Ablauf-Zeitstempel in
+        // `self_filter`/`mute_store` wurden in `actions.rs` mit derselben
+        // Systemuhr berechnet. Ein Vergleich gegen den Ereignis-Zeitstempel
+        // hätte zwei Probleme: eine einzelne Journal-Zeile mit
+        // verspringendem/zukünftigem Zeitstempel könnte beim Aufräumen
+        // (`retain`) schlagartig den kompletten Selbstfilter und alle
+        // befristeten Mutes löschen, und im `--since`/`--until`-Replay
+        // (alte Zeitstempel) würde nie etwas ablaufen.
+        let daemon_now_us = now_us();
         if self.state.is_self_filtered(
             event.systemd_unit.as_deref(),
             event.unit_field.as_deref(),
             event.pid,
-            event.realtime_timestamp_us,
+            daemon_now_us,
         ) {
             self.self_filtered += 1;
             return;
         }
-        if self.state.is_muted(
-            matched.id.0,
-            event.systemd_unit.as_deref(),
-            event.realtime_timestamp_us,
-        ) {
+        if self
+            .state
+            .is_muted(matched.id.0, event.systemd_unit.as_deref(), daemon_now_us)
+        {
             self.muted += 1;
             return;
         }
@@ -459,6 +469,27 @@ mod tests {
             pipeline.engine.stats().processed,
             0,
             "Analyse-Engine darf ein gemutetes Ereignis nie sehen"
+        );
+    }
+
+    #[test]
+    fn selbstfilter_ablauf_ignoriert_verspringende_ereignis_zeitstempel() {
+        // Regression: retain() im Selbstfilter lief zuvor gegen
+        // event.realtime_timestamp_us statt die echte Systemuhr, obwohl
+        // die Ablauf-Zeitstempel in actions.rs mit der echten Systemuhr
+        // berechnet werden. Eine einzelne Zeile mit einem wild
+        // abweichenden Zeitstempel (hier: 0, wie z. B. in einem
+        // --since-Replay alter Logs) hätte den gerade erst eingetragenen
+        // Selbstfilter sofort als abgelaufen behandelt.
+        let mut pipeline = test_pipeline();
+        let far_future_us = now_us() + 3_600 * 1_000_000; // 1h in der echten Zukunft
+        pipeline.state.suppress_unit("sshd.service", far_future_us);
+
+        pipeline.handle(&event("sshd.service", 100, "Failed password for root", 0));
+
+        assert_eq!(
+            pipeline.self_filtered, 1,
+            "der Selbstfilter darf durch einen abweichenden Ereignis-Zeitstempel nicht umgangen werden"
         );
     }
 
