@@ -136,9 +136,12 @@ impl ActionExecutor {
                 self.dispatch_terminate_process(*pid, *grace_secs, now_us, state)
                     .await
             }
-            // Schritt 6-7 implementieren BlockIp/MuteAnomaly.
-            // Bis dahin bestätigt eine erlaubte, nicht rate-limitierte
-            // Anfrage nur, dass sie prinzipiell ausführbar wäre.
+            ActionRequest::BlockIp { ip, duration_secs } => {
+                self.dispatch_block_ip(*ip, *duration_secs).await
+            }
+            // Schritt 7 implementiert MuteAnomaly. Bis dahin bestätigt eine
+            // erlaubte, nicht rate-limitierte Anfrage nur, dass sie
+            // prinzipiell ausführbar wäre.
             _ => ActionOutcome::Completed {
                 message: format!(
                     "{kind} für {target}: Allow-List und Rate-Limit bestanden, echte Ausführung folgt in einem späteren Umsetzungsschritt"
@@ -230,6 +233,33 @@ impl ActionExecutor {
         }
     }
 
+    /// Führt `BlockIp` aus (Schritt 6): befristeter Eintrag in ein
+    /// nftables-Set über den `nft`-Binärnamen, mit einzeln übergebenen
+    /// Argumenten (nie über eine Shell, siehe Modul-Dokumentation und
+    /// `docs/phase8-aktionen.md` Abschnitt 1). Kein Selbstfilter nötig --
+    /// eine IP-Sperre erzeugt keine Journal-Zeilen der beobachteten Units.
+    async fn dispatch_block_ip(&self, ip: std::net::IpAddr, duration_secs: u32) -> ActionOutcome {
+        let duration = duration_secs.clamp(
+            self.config.block_ip_min_duration_secs,
+            self.config.block_ip_max_duration_secs,
+        );
+
+        if self.config.dry_run {
+            return ActionOutcome::Completed {
+                message: format!("Dry-Run: block_ip für {ip} ({duration}s) würde jetzt ausgeführt"),
+                dry_run: true,
+            };
+        }
+
+        match block_ip_via_nft(&self.config, ip, duration).await {
+            Ok(()) => ActionOutcome::Completed {
+                message: format!("{ip} für {duration}s gesperrt"),
+                dry_run: false,
+            },
+            Err(message) => ActionOutcome::Failed { message },
+        }
+    }
+
     /// Prüft und aktualisiert das Rate-Limit für `key`. `Some(retry_after)`
     /// bei Überschreitung, sonst `None` und der Versuch zählt (Regel: auch
     /// ein späterer `Denied` zählt, damit das Limit nicht durch
@@ -294,6 +324,76 @@ fn spawn_kill_escalation(pid: Pid, grace_secs: u16) {
             }
         }
     });
+}
+
+/// Sperrt `ip` für `duration_secs` über ein nftables-Set. `nft add table`
+/// und `nft add set` sind von Haus aus idempotent (anders als `nft create
+/// ...`, das bei bereits vorhandenem Objekt einen Fehler liefert) --
+/// deshalb genügt es, Tabelle und Set bei jedem Aufruf "anzulegen", ohne
+/// vorher zu prüfen, ob sie schon existieren.
+async fn block_ip_via_nft(
+    config: &ActionsConfig,
+    ip: std::net::IpAddr,
+    duration_secs: u32,
+) -> Result<(), String> {
+    let (set_name, set_type): (&str, &str) = match ip {
+        std::net::IpAddr::V4(_) => (&config.nftables_set_v4, "ipv4_addr"),
+        std::net::IpAddr::V6(_) => (&config.nftables_set_v6, "ipv6_addr"),
+    };
+
+    run_nft(&["add", "table", &config.nftables_family, &config.nftables_table]).await?;
+    run_nft(&[
+        "add",
+        "set",
+        &config.nftables_family,
+        &config.nftables_table,
+        set_name,
+        "{",
+        "type",
+        set_type,
+        ";",
+        "flags",
+        "timeout",
+        ";",
+        "}",
+    ])
+    .await?;
+    let timeout_arg = format!("timeout {duration_secs}s");
+    run_nft(&[
+        "add",
+        "element",
+        &config.nftables_family,
+        &config.nftables_table,
+        set_name,
+        "{",
+        &ip.to_string(),
+        &timeout_arg,
+        "}",
+    ])
+    .await
+}
+
+/// Führt `nft` mit einzeln übergebenen Argumenten aus (kein `sh -c`, keine
+/// String-Interpolation in eine Shell hinein -- Regel 8 gilt sinngemäß
+/// auch für vom Daemon selbst konstruierte Kommandos). Ein nicht-Null-
+/// Exitcode liefert `stderr` als Fehlertext, damit `ActionOutcome::Failed`
+/// nie eine erfundene Erklärung zeigt.
+async fn run_nft(args: &[&str]) -> Result<(), String> {
+    let output = tokio::process::Command::new("nft")
+        .args(args)
+        .output()
+        .await
+        .map_err(|err| format!("nft konnte nicht gestartet werden: {err}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!(
+            "nft {} fehlgeschlagen: {}",
+            args.join(" "),
+            stderr.trim()
+        ))
+    }
 }
 
 /// Öffnet die Audit-Datei im Anhänge-Modus, legt das Elternverzeichnis bei
@@ -429,6 +529,64 @@ mod tests {
     fn restart(unit: &str) -> ActionRequest {
         ActionRequest::RestartUnit {
             unit: UnitName::parse(unit).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn block_ip_bleibt_im_dry_run_ohne_echten_nft_aufruf() {
+        // Regel 26: kein automatisierter Test verändert die echte
+        // nftables-Konfiguration dieser Maschine.
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&["block_ip"], &[]));
+        let action = ActionRequest::BlockIp {
+            ip: "203.0.113.5".parse().unwrap(),
+            duration_secs: 300,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        match outcome {
+            ActionOutcome::Completed { dry_run, message } => {
+                assert!(dry_run);
+                assert!(message.contains("Dry-Run"));
+                assert!(message.contains("300s"));
+            }
+            other => panic!("erwartete Completed, bekam {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn block_ip_ohne_allow_list_wird_abgelehnt() {
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&[], &[]));
+        let action = ActionRequest::BlockIp {
+            ip: "203.0.113.5".parse().unwrap(),
+            duration_secs: 300,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        assert_eq!(
+            outcome,
+            ActionOutcome::Denied {
+                reason: DenyReason::NotAllowed
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn block_ip_klemmt_dauer_auf_konfigurierte_grenzen() {
+        let state = test_state();
+        let mut cfg = config(&["block_ip"], &[]);
+        cfg.block_ip_min_duration_secs = 60;
+        cfg.block_ip_max_duration_secs = 120;
+        let executor = ActionExecutor::new(cfg);
+        let action = ActionRequest::BlockIp {
+            ip: "203.0.113.5".parse().unwrap(),
+            duration_secs: 999_999,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        match outcome {
+            ActionOutcome::Completed { message, .. } => {
+                assert!(message.contains("120s"), "Nachricht: {message}");
+            }
+            other => panic!("erwartete Completed, bekam {other:?}"),
         }
     }
 
