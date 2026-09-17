@@ -6,8 +6,15 @@
 //! Snapshots -- ein langsamer Client bekommt immer nur den neuesten
 //! Stand; `broadcast` für Anomalien -- Lag ist sichtbar, nichts wird
 //! stillschweigend verworfen) und Abschnitt 7.
+//!
+//! Selbstfilter und Mute-Speicher (`docs/phase8-aktionen.md` Abschnitt 4)
+//! sind Schritt 2 von Phase 8. `#[allow(dead_code)]` auf diesen Teilen:
+//! `daemon::actions` (Schritt 3+) und `pipeline.rs` (Schritt 7) rufen sie
+//! erst in späteren Schritten tatsächlich auf; bis dahin ist die
+//! Funktionalität über die Tests in diesem Modul abgedeckt. Wird entfernt,
+//! sobald Schritt 7 abgeschlossen ist.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -45,7 +52,28 @@ pub struct SharedState {
     /// aufgezwungener gemeinsamer Takt zwischen Analyse- und
     /// Systemmetriken-Pfad).
     system: Mutex<Option<SystemSnapshot>>,
+    /// Selbstfilter (Regel 13, `docs/phase8-aktionen.md` Abschnitt 4):
+    /// Units/PIDs, deren eigene Journal-Zeilen für ein Zeitfenster nach
+    /// einer ausgeführten Aktion nicht in die Anomalie-Erkennung
+    /// einfließen. Wert ist der Ablauf-Zeitstempel in µs.
+    #[allow(dead_code)]
+    self_filter: Mutex<HashMap<SelfFilterKey, u64>>,
+    /// Manuell stummgeschaltete `(template_id, unit)`-Paare aus
+    /// `ActionRequest::MuteAnomaly`. `unit: None` mutet das Template über
+    /// alle Units hinweg. Wert ist der Ablauf-Zeitstempel in µs
+    /// (`u64::MAX` für „dauerhaft", siehe `MuteScope::Permanent`).
+    #[allow(dead_code)]
+    mute_store: Mutex<HashMap<(u64, Option<String>), u64>>,
     pub session_id: u64,
+}
+
+/// Schlüssel für den Selbstfilter: entweder eine systemd-Unit
+/// (`RestartUnit`/`StopUnit`) oder eine Prozess-ID (`TerminateProcess`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
+pub enum SelfFilterKey {
+    Unit(String),
+    Pid(i32),
 }
 
 impl SharedState {
@@ -68,8 +96,65 @@ impl SharedState {
             next_anomaly_id: AtomicU64::new(0),
             client_count: AtomicU32::new(0),
             system: Mutex::new(None),
+            self_filter: Mutex::new(HashMap::new()),
+            mute_store: Mutex::new(HashMap::new()),
             session_id: random_session_id(),
         }
+    }
+
+    /// Nimmt die Ziel-Unit einer soeben ausgeführten `RestartUnit`/
+    /// `StopUnit`-Aktion für `until_us` (absoluter Zeitstempel in µs) in
+    /// den Selbstfilter auf.
+    #[allow(dead_code)]
+    pub fn suppress_unit(&self, unit: &str, until_us: u64) {
+        self.self_filter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(SelfFilterKey::Unit(unit.to_string()), until_us);
+    }
+
+    /// Nimmt die PID einer soeben per `TerminateProcess` beendeten
+    /// Prozesses für `until_us` in den Selbstfilter auf.
+    #[allow(dead_code)]
+    pub fn suppress_pid(&self, pid: i32, until_us: u64) {
+        self.self_filter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(SelfFilterKey::Pid(pid), until_us);
+    }
+
+    /// Ob ein Ereignis mit dieser Unit bzw. PID gerade durch den
+    /// Selbstfilter unterdrückt wird. Räumt dabei beiläufig abgelaufene
+    /// Einträge auf (Regel 18: kein unbeschränktes Wachstum), da Aktionen
+    /// selten genug sind, dass ein Full-Scan hier nicht ins Gewicht fällt.
+    #[allow(dead_code)]
+    pub fn is_self_filtered(&self, unit: Option<&str>, pid: Option<i32>, now_us: u64) -> bool {
+        let mut filter = self.self_filter.lock().unwrap_or_else(PoisonError::into_inner);
+        filter.retain(|_, expiry| *expiry > now_us);
+        unit.is_some_and(|u| filter.contains_key(&SelfFilterKey::Unit(u.to_string())))
+            || pid.is_some_and(|p| filter.contains_key(&SelfFilterKey::Pid(p)))
+    }
+
+    /// Trägt eine manuelle Stummschaltung ein (`ActionRequest::MuteAnomaly`).
+    /// `until_us = u64::MAX` bedeutet dauerhaft (`MuteScope::Permanent`).
+    #[allow(dead_code)]
+    pub fn mute(&self, template_id: u64, unit: Option<String>, until_us: u64) {
+        self.mute_store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert((template_id, unit), until_us);
+    }
+
+    /// Ob `(template_id, unit)` aktuell stummgeschaltet ist -- entweder
+    /// gezielt für `unit` oder global für das Template (`unit: None` beim
+    /// Eintragen). Räumt abgelaufene Einträge wie [`Self::is_self_filtered`]
+    /// beiläufig auf.
+    #[allow(dead_code)]
+    pub fn is_muted(&self, template_id: u64, unit: Option<&str>, now_us: u64) -> bool {
+        let mut store = self.mute_store.lock().unwrap_or_else(PoisonError::into_inner);
+        store.retain(|_, expiry| *expiry > now_us);
+        store.contains_key(&(template_id, unit.map(str::to_string)))
+            || store.contains_key(&(template_id, None))
     }
 
     /// Aktualisiert den zuletzt gemessenen Systemzustand.
@@ -502,5 +587,47 @@ mod tests {
         let (lines, truncated) = ring.query(0, 5, 5, None);
         assert!(lines.is_empty());
         assert!(truncated);
+    }
+
+    #[test]
+    fn unbekannte_unit_und_pid_sind_nie_selbstgefiltert() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        assert!(!state.is_self_filtered(Some("sshd.service"), Some(123), 1000));
+        assert!(!state.is_self_filtered(None, None, 1000));
+    }
+
+    #[test]
+    fn suppress_unit_filtert_bis_zum_ablauf_und_nicht_danach() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        state.suppress_unit("sshd.service", 1_000);
+        assert!(state.is_self_filtered(Some("sshd.service"), None, 500));
+        assert!(!state.is_self_filtered(Some("sshd.service"), None, 1_000));
+        assert!(!state.is_self_filtered(Some("cron.service"), None, 500));
+    }
+
+    #[test]
+    fn suppress_pid_filtert_unabhaengig_von_der_unit() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        state.suppress_pid(4242, 1_000);
+        assert!(state.is_self_filtered(Some("irgendeine.service"), Some(4242), 500));
+        assert!(!state.is_self_filtered(Some("irgendeine.service"), Some(1), 500));
+    }
+
+    #[test]
+    fn mute_gilt_nur_fuer_die_angegebene_unit() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        state.mute(7, Some("sshd.service".to_string()), 1_000);
+        assert!(state.is_muted(7, Some("sshd.service"), 500));
+        assert!(!state.is_muted(7, Some("cron.service"), 500));
+        assert!(!state.is_muted(7, Some("sshd.service"), 1_000));
+    }
+
+    #[test]
+    fn mute_ohne_unit_gilt_global_fuer_das_template() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        state.mute(9, None, u64::MAX);
+        assert!(state.is_muted(9, Some("beliebige.service"), 500));
+        assert!(state.is_muted(9, None, 500));
+        assert!(!state.is_muted(1, Some("beliebige.service"), 500));
     }
 }
