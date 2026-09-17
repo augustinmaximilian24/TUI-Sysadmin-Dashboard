@@ -272,9 +272,16 @@ impl ActionExecutor {
         state.suppress_pid(pid as i32, until_us);
 
         let nix_pid = Pid::from_raw(pid as i32);
+        // Vor dem Signal erfassen: die PID kann nach dem SIGTERM vom Kernel
+        // für einen neuen, unbeteiligten Prozess wiederverwendet werden --
+        // auf einem belebten Host innerhalb einer bis zu
+        // `terminate_max_grace_secs` (Default 60s) langen Gnadenfrist nicht
+        // unrealistisch. `spawn_kill_escalation` prüft vor dem SIGKILL, ob
+        // es sich noch um denselben Prozess handelt.
+        let start_time_before_sigterm = process_start_time(nix_pid.as_raw());
         match kill(nix_pid, Signal::SIGTERM) {
             Ok(()) => {
-                spawn_kill_escalation(nix_pid, grace);
+                spawn_kill_escalation(nix_pid, grace, start_time_before_sigterm);
                 ActionOutcome::Completed {
                     message: format!(
                         "SIGTERM an PID {pid} gesendet, SIGKILL nach {grace}s falls nötig"
@@ -459,21 +466,62 @@ impl ActionExecutor {
 /// Fehlercode) ob der Prozess noch existiert, und sendet in diesem Fall
 /// SIGKILL. Läuft entkoppelt vom aufrufenden Request -- der Client hat
 /// sein `ActionResult` für das SIGTERM bereits erhalten.
-fn spawn_kill_escalation(pid: Pid, grace_secs: u16) {
+fn spawn_kill_escalation(pid: Pid, grace_secs: u16, start_time_before_sigterm: Option<u64>) {
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(u64::from(grace_secs))).await;
-        if kill(pid, None).is_ok() {
-            match kill(pid, Signal::SIGKILL) {
-                Ok(()) => tracing::info!(
-                    pid = pid.as_raw(),
-                    "SIGKILL nach Ablauf der Gnadenfrist gesendet"
-                ),
-                Err(err) => {
-                    tracing::warn!(pid = pid.as_raw(), fehler = %err, "SIGKILL nach Gnadenfrist fehlgeschlagen")
-                }
+        if kill(pid, None).is_err() {
+            return;
+        }
+
+        // Reine Existenzprüfung unterscheidet nicht zwischen "derselbe
+        // Prozess läuft noch" und "die PID wurde inzwischen für einen
+        // neuen, unbeteiligten Prozess wiederverwendet" -- ohne diesen
+        // Abgleich könnte das SIGKILL einen völlig fremden Prozess treffen.
+        // Konnte die Startzeit vor dem SIGTERM nicht ermittelt werden (z. B.
+        // `/proc` nicht verfügbar), bleibt das alte Verhalten erhalten,
+        // statt durch einen unentscheidbaren Vergleich zusätzlich zu
+        // blockieren; ist sie jetzt dagegen nicht mehr lesbar, obwohl
+        // `kill(pid, None)` gerade noch Existenz meldete, wird im Zweifel
+        // NICHT signalisiert.
+        let still_same_process = match (start_time_before_sigterm, process_start_time(pid.as_raw())) {
+            (Some(before), Some(after)) => before == after,
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        if !still_same_process {
+            tracing::warn!(
+                pid = pid.as_raw(),
+                "SIGKILL übersprungen: PID wurde inzwischen für einen anderen Prozess wiederverwendet"
+            );
+            return;
+        }
+
+        match kill(pid, Signal::SIGKILL) {
+            Ok(()) => tracing::info!(
+                pid = pid.as_raw(),
+                "SIGKILL nach Ablauf der Gnadenfrist gesendet"
+            ),
+            Err(err) => {
+                tracing::warn!(pid = pid.as_raw(), fehler = %err, "SIGKILL nach Gnadenfrist fehlgeschlagen")
             }
         }
     });
+}
+
+/// Liest `starttime` (Feld 22) aus `/proc/<pid>/stat`, in Jiffies seit
+/// Systemstart -- dient als Identitätsmerkmal eines Prozesses über die
+/// reine (wiederverwendbare) PID hinaus: `starttime` ändert sich nur, wenn
+/// unter derselben PID tatsächlich ein neuer Prozess läuft. `None` bei
+/// jedem Lese-/Parse-Fehler (u. a. wenn der Prozess nicht mehr existiert).
+fn process_start_time(pid: i32) -> Option<u64> {
+    let content = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // Feld 2 (comm) steht in Klammern und kann selbst Leerzeichen und
+    // schließende Klammern enthalten -- deshalb ab der LETZTEN ')' weiter
+    // aufteilen statt naiv an Leerzeichen zu splitten. Ab dort beginnt
+    // Feld 3 (state); Feld 22 (starttime) ist damit Index 19 der
+    // verbleibenden, an Leerraum getrennten Werte.
+    let after_comm = content.rsplit_once(')')?.1;
+    after_comm.split_whitespace().nth(19)?.parse().ok()
 }
 
 /// Sperrt `ip` für `duration_secs` über ein nftables-Set. `nft add table`
@@ -713,6 +761,24 @@ mod tests {
             audit_log_path: String::new(),
             ..ActionsConfig::default()
         }
+    }
+
+    #[test]
+    fn process_start_time_ist_fuer_den_eigenen_prozess_stabil_und_lesbar() {
+        // Regression: Grundlage für die PID-Reuse-Prüfung in
+        // spawn_kill_escalation. Zwei Aufrufe auf denselben (laufenden)
+        // Prozess müssen denselben Wert liefern.
+        let a = process_start_time(std::process::id() as i32);
+        let b = process_start_time(std::process::id() as i32);
+        assert!(a.is_some());
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn process_start_time_ist_none_fuer_nicht_existierende_pid() {
+        // PID 0 gibt es unter /proc nie, i32::MAX ist praktisch garantiert
+        // kein laufender Prozess.
+        assert_eq!(process_start_time(i32::MAX), None);
     }
 
     #[test]
