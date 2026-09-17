@@ -23,7 +23,9 @@ zbus.workspace = true
 # Gruppe nach Namen auflösen, nur nach GID -- dafür braucht es getgrnam,
 # das nix bereitstellt. Einzige neue Abhängigkeit in Phase 6 (siehe
 # docs/phase6-protokoll.md Abschnitt 2).
-nix = { version = "0.29", default-features = false, features = ["user", "fs"] }
+# Feature "signal" (Phase 8, Schritt 5): SIGTERM/SIGKILL für
+# TerminateProcess, siehe docs/phase8-aktionen.md Abschnitt 6.
+nix = { version = "0.29", default-features = false, features = ["user", "fs", "signal"] }
 serde.workspace = true
 serde_json.workspace = true
 

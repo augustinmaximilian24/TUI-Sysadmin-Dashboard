@@ -17,6 +17,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::sync::Mutex;
 
+use nix::sys::signal::{kill, Signal};
+use nix::unistd::Pid;
 use serde::Serialize;
 use zbus::Connection;
 
@@ -130,7 +132,11 @@ impl ActionExecutor {
             ActionRequest::StopUnit { unit } => {
                 self.dispatch_unit_action(unit.as_str(), true, now_us, state).await
             }
-            // Schritt 5-7 implementieren TerminateProcess/BlockIp/MuteAnomaly.
+            ActionRequest::TerminateProcess { pid, grace_secs } => {
+                self.dispatch_terminate_process(*pid, *grace_secs, now_us, state)
+                    .await
+            }
+            // Schritt 6-7 implementieren BlockIp/MuteAnomaly.
             // Bis dahin bestätigt eine erlaubte, nicht rate-limitierte
             // Anfrage nur, dass sie prinzipiell ausführbar wäre.
             _ => ActionOutcome::Completed {
@@ -176,6 +182,51 @@ impl ActionExecutor {
                 }
             }
             Err(message) => ActionOutcome::Failed { message },
+        }
+    }
+
+    /// Führt `TerminateProcess` aus (Schritt 5): SIGTERM sofort, danach ein
+    /// entkoppelter Hintergrund-Task, der nach der (geklemmten) Gnadenfrist
+    /// per Existenzprüfung entscheidet, ob SIGKILL nötig ist. Der
+    /// `ActionOutcome` bezieht sich nur auf das SIGTERM -- das Protokoll
+    /// hat für die Eskalation keinen eigenen Rückmeldeweg, ein zweites
+    /// `ActionResult` für dieselbe `request_id` wäre nicht vorgesehen.
+    async fn dispatch_terminate_process(
+        &self,
+        pid: u32,
+        grace_secs: u16,
+        now_us: u64,
+        state: &SharedState,
+    ) -> ActionOutcome {
+        let grace = grace_secs.clamp(1, self.config.terminate_max_grace_secs);
+
+        if self.config.dry_run {
+            return ActionOutcome::Completed {
+                message: format!(
+                    "Dry-Run: terminate_process für PID {pid} (Grace {grace}s) würde jetzt ausgeführt"
+                ),
+                dry_run: true,
+            };
+        }
+
+        let nix_pid = Pid::from_raw(pid as i32);
+        match kill(nix_pid, Signal::SIGTERM) {
+            Ok(()) => {
+                let until_us = now_us.saturating_add(
+                    self.config.self_filter_window_secs.saturating_mul(1_000_000),
+                );
+                state.suppress_pid(pid as i32, until_us);
+                spawn_kill_escalation(nix_pid, grace);
+                ActionOutcome::Completed {
+                    message: format!(
+                        "SIGTERM an PID {pid} gesendet, SIGKILL nach {grace}s falls nötig"
+                    ),
+                    dry_run: false,
+                }
+            }
+            Err(errno) => ActionOutcome::Failed {
+                message: format!("SIGTERM an PID {pid} fehlgeschlagen: {errno}"),
+            },
         }
     }
 
@@ -227,6 +278,22 @@ impl ActionExecutor {
             }
         }
     }
+}
+
+/// Wartet `grace_secs`, prüft dann per Signal 0 (kein echtes Signal, nur
+/// Fehlercode) ob der Prozess noch existiert, und sendet in diesem Fall
+/// SIGKILL. Läuft entkoppelt vom aufrufenden Request -- der Client hat
+/// sein `ActionResult` für das SIGTERM bereits erhalten.
+fn spawn_kill_escalation(pid: Pid, grace_secs: u16) {
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(u64::from(grace_secs))).await;
+        if kill(pid, None).is_ok() {
+            match kill(pid, Signal::SIGKILL) {
+                Ok(()) => tracing::info!(pid = pid.as_raw(), "SIGKILL nach Ablauf der Gnadenfrist gesendet"),
+                Err(err) => tracing::warn!(pid = pid.as_raw(), fehler = %err, "SIGKILL nach Gnadenfrist fehlgeschlagen"),
+            }
+        }
+    });
 }
 
 /// Öffnet die Audit-Datei im Anhänge-Modus, legt das Elternverzeichnis bei
@@ -363,6 +430,65 @@ mod tests {
         ActionRequest::RestartUnit {
             unit: UnitName::parse(unit).unwrap(),
         }
+    }
+
+    #[tokio::test]
+    async fn terminate_process_bleibt_im_dry_run_ohne_echtes_signal() {
+        // Regel 26: automatisierte Tests senden nie ein echtes Signal.
+        // Default-Konfiguration ist dry_run=true, PID 1 (init/systemd)
+        // würde bei einem echten SIGTERM ohnehin sofort mit
+        // "Operation not permitted" scheitern -- hier zeigt gerade das
+        // Ausbleiben eines solchen Fehlers, dass kein Signal gesendet wurde.
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&["terminate_process"], &[]));
+        let action = ActionRequest::TerminateProcess {
+            pid: 1,
+            grace_secs: 5,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        match outcome {
+            ActionOutcome::Completed { dry_run, message } => {
+                assert!(dry_run);
+                assert!(message.contains("Dry-Run"));
+            }
+            other => panic!("erwartete Completed, bekam {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_process_klemmt_grace_secs_auf_das_konfigurierte_maximum() {
+        let state = test_state();
+        let mut cfg = config(&["terminate_process"], &[]);
+        cfg.terminate_max_grace_secs = 10;
+        let executor = ActionExecutor::new(cfg);
+        let action = ActionRequest::TerminateProcess {
+            pid: 1,
+            grace_secs: 999,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        match outcome {
+            ActionOutcome::Completed { message, .. } => {
+                assert!(message.contains("Grace 10s"), "Nachricht: {message}");
+            }
+            other => panic!("erwartete Completed, bekam {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn terminate_process_ohne_allow_list_wird_abgelehnt() {
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&[], &[]));
+        let action = ActionRequest::TerminateProcess {
+            pid: 1,
+            grace_secs: 5,
+        };
+        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        assert_eq!(
+            outcome,
+            ActionOutcome::Denied {
+                reason: DenyReason::NotAllowed
+            }
+        );
     }
 
     #[tokio::test]
