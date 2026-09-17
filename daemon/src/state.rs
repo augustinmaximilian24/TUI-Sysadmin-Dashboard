@@ -116,16 +116,28 @@ impl SharedState {
     }
 
     /// Ob ein Ereignis mit dieser Unit bzw. PID gerade durch den
-    /// Selbstfilter unterdrückt wird. Räumt dabei beiläufig abgelaufene
-    /// Einträge auf (Regel 18: kein unbeschränktes Wachstum), da Aktionen
-    /// selten genug sind, dass ein Full-Scan hier nicht ins Gewicht fällt.
-    pub fn is_self_filtered(&self, unit: Option<&str>, pid: Option<i32>, now_us: u64) -> bool {
+    /// Selbstfilter unterdrückt wird. `unit` ist `_SYSTEMD_UNIT` (die Unit,
+    /// aus deren Cgroup die Zeile stammt), `unit_field` das journal-eigene
+    /// `UNIT=`-Feld, das stattdessen bei von systemd selbst erzeugten
+    /// Lifecycle-Zeilen ("Stopping foo.service...") die betroffene Unit
+    /// trägt -- ohne diese zweite Prüfung liefen genau diese Zeilen am
+    /// Selbstfilter vorbei. Räumt dabei beiläufig abgelaufene Einträge auf
+    /// (Regel 18: kein unbeschränktes Wachstum), da Aktionen selten genug
+    /// sind, dass ein Full-Scan hier nicht ins Gewicht fällt.
+    pub fn is_self_filtered(
+        &self,
+        unit: Option<&str>,
+        unit_field: Option<&str>,
+        pid: Option<i32>,
+        now_us: u64,
+    ) -> bool {
         let mut filter = self
             .self_filter
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         filter.retain(|_, expiry| *expiry > now_us);
         unit.is_some_and(|u| filter.contains_key(&SelfFilterKey::Unit(u.to_string())))
+            || unit_field.is_some_and(|u| filter.contains_key(&SelfFilterKey::Unit(u.to_string())))
             || pid.is_some_and(|p| filter.contains_key(&SelfFilterKey::Pid(p)))
     }
 
@@ -587,25 +599,37 @@ mod tests {
     #[test]
     fn unbekannte_unit_und_pid_sind_nie_selbstgefiltert() {
         let state = SharedState::new(minimal_snapshot(), 10, 10);
-        assert!(!state.is_self_filtered(Some("sshd.service"), Some(123), 1000));
-        assert!(!state.is_self_filtered(None, None, 1000));
+        assert!(!state.is_self_filtered(Some("sshd.service"), None, Some(123), 1000));
+        assert!(!state.is_self_filtered(None, None, None, 1000));
     }
 
     #[test]
     fn suppress_unit_filtert_bis_zum_ablauf_und_nicht_danach() {
         let state = SharedState::new(minimal_snapshot(), 10, 10);
         state.suppress_unit("sshd.service", 1_000);
-        assert!(state.is_self_filtered(Some("sshd.service"), None, 500));
-        assert!(!state.is_self_filtered(Some("sshd.service"), None, 1_000));
-        assert!(!state.is_self_filtered(Some("cron.service"), None, 500));
+        assert!(state.is_self_filtered(Some("sshd.service"), None, None, 500));
+        assert!(!state.is_self_filtered(Some("sshd.service"), None, None, 1_000));
+        assert!(!state.is_self_filtered(Some("cron.service"), None, None, 500));
+    }
+
+    #[test]
+    fn suppress_unit_filtert_auch_ueber_das_unit_feld_von_pid1_zeilen() {
+        // Regression: systemds eigene Lifecycle-Zeilen ("Stopping
+        // foo.service...") tragen _SYSTEMD_UNIT=init.scope, die betroffene
+        // Unit steht nur im separaten UNIT=-Feld -- ohne diese zweite
+        // Prüfung liefen genau diese Zeilen am Selbstfilter vorbei.
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        state.suppress_unit("sshd.service", 1_000);
+        assert!(state.is_self_filtered(Some("init.scope"), Some("sshd.service"), None, 500));
+        assert!(!state.is_self_filtered(Some("init.scope"), Some("cron.service"), None, 500));
     }
 
     #[test]
     fn suppress_pid_filtert_unabhaengig_von_der_unit() {
         let state = SharedState::new(minimal_snapshot(), 10, 10);
         state.suppress_pid(4242, 1_000);
-        assert!(state.is_self_filtered(Some("irgendeine.service"), Some(4242), 500));
-        assert!(!state.is_self_filtered(Some("irgendeine.service"), Some(1), 500));
+        assert!(state.is_self_filtered(Some("irgendeine.service"), None, Some(4242), 500));
+        assert!(!state.is_self_filtered(Some("irgendeine.service"), None, Some(1), 500));
     }
 
     #[test]

@@ -13,8 +13,17 @@ use thiserror::Error;
 pub struct JournalEvent {
     /// Zeitstempel in Mikrosekunden seit der Unix-Epoche.
     pub realtime_timestamp_us: u64,
-    /// Name der systemd-Unit, sofern vom Journal gemeldet.
+    /// Name der systemd-Unit, sofern vom Journal gemeldet. Gesetzt, wenn die
+    /// Zeile von einem Prozess *innerhalb* der Unit stammt (`_SYSTEMD_UNIT`).
     pub systemd_unit: Option<String>,
+    /// Ziel-Unit einer von systemd (PID 1) selbst erzeugten Lifecycle-Zeile
+    /// ("Stopping foo.service...", "Deactivated successfully"), aus dem
+    /// journal-eigenen `UNIT=`-Feld. Diese Zeilen tragen `_SYSTEMD_UNIT`
+    /// gleich `init.scope`, nicht den Namen der betroffenen Unit -- ohne
+    /// dieses zweite Feld liefe der Selbstfilter (Regel 13) für genau die
+    /// charakteristischsten Folgezeilen eines `RestartUnit`/`StopUnit` ins
+    /// Leere.
+    pub unit_field: Option<String>,
     /// Prozess-ID des loggenden Prozesses.
     pub pid: Option<i32>,
     /// Syslog-Priorität (0 = emerg … 7 = debug).
@@ -50,6 +59,8 @@ struct RawJournalEntry {
     realtime_timestamp: Option<String>,
     #[serde(rename = "_SYSTEMD_UNIT")]
     systemd_unit: Option<String>,
+    #[serde(rename = "UNIT")]
+    unit_field: Option<String>,
     #[serde(rename = "_PID")]
     pid: Option<String>,
     #[serde(rename = "PRIORITY")]
@@ -102,6 +113,7 @@ pub fn parse_journal_line(line: &str) -> Result<JournalEvent, JournalParseError>
     Ok(JournalEvent {
         realtime_timestamp_us,
         systemd_unit: raw.systemd_unit,
+        unit_field: raw.unit_field,
         pid,
         priority,
         message,
@@ -166,6 +178,18 @@ mod tests {
     fn fehlender_zeitstempel_liefert_fehler() {
         let result = parse_journal_line(r#"{"MESSAGE": "ohne Zeitstempel"}"#);
         assert_eq!(result, Err(JournalParseError::MissingTimestamp));
+    }
+
+    #[test]
+    fn unit_feld_wird_getrennt_von_systemd_unit_erfasst() {
+        // Eine von systemd (PID 1) selbst erzeugte Lifecycle-Zeile trägt
+        // _SYSTEMD_UNIT=init.scope, aber die betroffene Unit im separaten
+        // UNIT=-Feld -- beide müssen getrennt ankommen, sonst kann der
+        // Selbstfilter (Regel 13) diese Zeilen nicht erkennen.
+        let line = r#"{"__REALTIME_TIMESTAMP": "1000000", "_SYSTEMD_UNIT": "init.scope", "UNIT": "sshd.service", "MESSAGE": "Stopping sshd.service..."}"#;
+        let event = parse_journal_line(line).expect("muss parsbar sein");
+        assert_eq!(event.systemd_unit.as_deref(), Some("init.scope"));
+        assert_eq!(event.unit_field.as_deref(), Some("sshd.service"));
     }
 
     #[test]

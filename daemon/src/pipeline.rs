@@ -157,6 +157,7 @@ impl Pipeline {
         // (Audit-Sichtbarkeit, `docs/phase6-protokoll.md` Abschnitt 9).
         if self.state.is_self_filtered(
             event.systemd_unit.as_deref(),
+            event.unit_field.as_deref(),
             event.pid,
             event.realtime_timestamp_us,
         ) {
@@ -407,6 +408,7 @@ mod tests {
         JournalEvent {
             realtime_timestamp_us: timestamp_us,
             systemd_unit: Some(unit.to_string()),
+            unit_field: None,
             pid: Some(pid),
             priority: Some(6),
             message: message.to_string(),
@@ -458,6 +460,30 @@ mod tests {
             0,
             "Analyse-Engine darf ein gemutetes Ereignis nie sehen"
         );
+    }
+
+    #[test]
+    fn pid1_lifecycle_zeile_wird_ueber_das_unit_feld_selbstgefiltert() {
+        // Regression: die von systemd (PID 1) selbst erzeugte
+        // "Stopping foo.service..."-Zeile trägt _SYSTEMD_UNIT=init.scope,
+        // die betroffene Unit steht nur im UNIT=-Feld.
+        let mut pipeline = test_pipeline();
+        pipeline.state.suppress_unit("sshd.service", u64::MAX);
+
+        let pid1_event = JournalEvent {
+            realtime_timestamp_us: 1,
+            systemd_unit: Some("init.scope".to_string()),
+            unit_field: Some("sshd.service".to_string()),
+            pid: Some(1),
+            priority: Some(6),
+            message: "Stopping sshd.service...".to_string(),
+            message_was_binary: false,
+            hostname: None,
+        };
+        pipeline.handle(&pid1_event);
+
+        assert_eq!(pipeline.self_filtered, 1);
+        assert_eq!(pipeline.engine.stats().processed, 0);
     }
 
     #[test]

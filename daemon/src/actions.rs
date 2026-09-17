@@ -201,19 +201,24 @@ impl ActionExecutor {
             };
         }
 
+        // Vor dem D-Bus-Aufruf eintragen, nicht danach: die parallel
+        // laufende Pipeline liest Journal-Zeilen unabhängig vom Ausgang
+        // dieses Aufrufs, und systemds erste Lifecycle-Zeilen zur Unit
+        // können eintreffen, bevor `restart_or_stop_unit_via_dbus`
+        // zurückkehrt. Ein Eintrag vor einem am Ende fehlgeschlagenen
+        // Versuch ist harmlos -- er läuft einfach ungenutzt ab.
+        let until_us = now_us.saturating_add(
+            self.config
+                .self_filter_window_secs
+                .saturating_mul(1_000_000),
+        );
+        state.suppress_unit(unit, until_us);
+
         match restart_or_stop_unit_via_dbus(unit, stop).await {
-            Ok(()) => {
-                let until_us = now_us.saturating_add(
-                    self.config
-                        .self_filter_window_secs
-                        .saturating_mul(1_000_000),
-                );
-                state.suppress_unit(unit, until_us);
-                ActionOutcome::Completed {
-                    message: format!("{kind} für {unit} ausgeführt"),
-                    dry_run: false,
-                }
-            }
+            Ok(()) => ActionOutcome::Completed {
+                message: format!("{kind} für {unit} ausgeführt"),
+                dry_run: false,
+            },
             Err(message) => ActionOutcome::Failed { message },
         }
     }
@@ -242,15 +247,21 @@ impl ActionExecutor {
             };
         }
 
+        // Vor dem Signal eintragen, nicht danach (siehe Begründung in
+        // `dispatch_unit_action`): sonst könnte eine vom Prozess selbst
+        // oder von systemd erzeugte Zeile ("Main process exited,
+        // code=killed...") die Pipeline erreichen, bevor die Suppression
+        // steht.
+        let until_us = now_us.saturating_add(
+            self.config
+                .self_filter_window_secs
+                .saturating_mul(1_000_000),
+        );
+        state.suppress_pid(pid as i32, until_us);
+
         let nix_pid = Pid::from_raw(pid as i32);
         match kill(nix_pid, Signal::SIGTERM) {
             Ok(()) => {
-                let until_us = now_us.saturating_add(
-                    self.config
-                        .self_filter_window_secs
-                        .saturating_mul(1_000_000),
-                );
-                state.suppress_pid(pid as i32, until_us);
                 spawn_kill_escalation(nix_pid, grace);
                 ActionOutcome::Completed {
                     message: format!(
