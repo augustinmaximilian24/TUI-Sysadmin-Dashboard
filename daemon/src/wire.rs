@@ -5,16 +5,6 @@
 //! Abschnitt 1) -- diese Datei ist der einzige Ort im Daemon, an dem beide
 //! Richtungen aufeinandertreffen. Reine Datentyp-Konvertierungen: kein I/O,
 //! kein `panic!` (Regel 16), jede Funktion ist auf ihrer Eingabe total.
-//!
-//! `#![allow(dead_code)]`: Dieses Modul ist Schritt 4 der
-//! Umsetzungsreihenfolge (`docs/phase6-protokoll.md` Abschnitt 8) und wird
-//! erst in Schritt 6 (`pipeline.rs` an `SharedState` angebunden) aus
-//! `main.rs`/`pipeline.rs` heraus tatsächlich aufgerufen. Bis dahin ist der
-//! Daemon ein Binary-Crate ohne öffentliche API-Oberfläche, gegen die
-//! `pub fn` sonst als "erreichbar" zählen würde -- die Warnung ist also
-//! kein Hinweis auf einen Bug, sondern auf noch fehlende Verdrahtung. Wird
-//! entfernt, sobald Schritt 6 abgeschlossen ist.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 

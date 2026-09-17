@@ -6,19 +6,14 @@
 //! Snapshots -- ein langsamer Client bekommt immer nur den neuesten
 //! Stand; `broadcast` für Anomalien -- Lag ist sichtbar, nichts wird
 //! stillschweigend verworfen) und Abschnitt 7.
-//!
-//! `#![allow(dead_code)]`: siehe Begründung in `wire.rs` -- dieses Modul
-//! wird erst ab Schritt 5 (`server.rs`/`client_task.rs`) und Schritt 6
-//! (Pipeline-Anbindung) tatsächlich verwendet.
-#![allow(dead_code)]
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::{broadcast, watch};
 
-use logsentry_proto::{AnomalyEvent, Snapshot};
+use logsentry_proto::{AnomalyEvent, Snapshot, SystemSnapshot};
 
 use crate::wire::ContextEntry;
 
@@ -39,6 +34,17 @@ pub struct SharedState {
     recent_capacity: usize,
     context: Mutex<ContextRing>,
     next_anomaly_id: AtomicU64,
+    /// Anzahl aktuell verbundener Clients. Lebt hier statt lokal in
+    /// `server.rs`, damit die Pipeline sie für `PipelineStats::clients` in
+    /// den Snapshot übernehmen kann, ohne eine zweite Zählvariable
+    /// durchzureichen.
+    client_count: AtomicU32,
+    /// Zuletzt vom Systemzustands-Task (`main.rs::run_system_monitor`)
+    /// gemessener Stand. Getrennt vom eigentlichen `Snapshot`, weil beide
+    /// Tasks mit unterschiedlicher Frequenz laufen (Regel: kein
+    /// aufgezwungener gemeinsamer Takt zwischen Analyse- und
+    /// Systemmetriken-Pfad).
+    system: Mutex<Option<SystemSnapshot>>,
     pub session_id: u64,
 }
 
@@ -60,8 +66,40 @@ impl SharedState {
             recent_capacity: recent_capacity.max(1),
             context: Mutex::new(ContextRing::new(context_capacity)),
             next_anomaly_id: AtomicU64::new(0),
+            client_count: AtomicU32::new(0),
+            system: Mutex::new(None),
             session_id: random_session_id(),
         }
+    }
+
+    /// Aktualisiert den zuletzt gemessenen Systemzustand.
+    pub fn set_system_snapshot(&self, snapshot: SystemSnapshot) {
+        *self.system.lock().unwrap_or_else(PoisonError::into_inner) = Some(snapshot);
+    }
+
+    /// Liefert den zuletzt gemessenen Systemzustand, sofern der
+    /// Systemzustands-Task bereits mindestens einmal gelaufen ist.
+    pub fn latest_system_snapshot(&self) -> Option<SystemSnapshot> {
+        self.system
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Meldet einen neu verbundenen Client an und liefert den neuen Zähler
+    /// (für `server.rs`s `max_clients`-Prüfung).
+    pub fn client_connected(&self) -> u32 {
+        self.client_count.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    /// Meldet ab, dass eine Client-Verbindung beendet wurde.
+    pub fn client_disconnected(&self) {
+        self.client_count.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Anzahl aktuell verbundener Clients (für `PipelineStats::clients`).
+    pub fn client_count(&self) -> u32 {
+        self.client_count.load(Ordering::SeqCst)
     }
 
     /// Veröffentlicht einen neuen Snapshot. Ersetzt den vorherigen für
@@ -79,11 +117,6 @@ impl SharedState {
     /// verbundenen Client, bevor er selbst einen `watch`-Abonnenten hält).
     pub fn latest_snapshot(&self) -> Arc<Snapshot> {
         self.snapshot_tx.borrow().clone()
-    }
-
-    /// Neuer `watch`-Abonnent für Snapshots.
-    pub fn subscribe_snapshot(&self) -> watch::Receiver<Arc<Snapshot>> {
-        self.snapshot_tx.subscribe()
     }
 
     /// Nächste, innerhalb dieser Session eindeutige Anomalie-ID, beginnend
@@ -194,14 +227,6 @@ impl ContextRing {
             self.entries.pop_front();
         }
         self.entries.push_back(entry);
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
     }
 
     /// Liefert bis zu `before` Einträge vor und `after` Einträge nach dem
@@ -333,8 +358,45 @@ mod tests {
         state.publish_snapshot(second);
 
         assert_eq!(state.latest_snapshot().timestamp_us, 2);
-        let rx = state.subscribe_snapshot();
-        assert_eq!(rx.borrow().timestamp_us, 2);
+    }
+
+    #[test]
+    fn latest_system_snapshot_ist_anfangs_leer_und_danach_gesetzt() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        assert!(state.latest_system_snapshot().is_none());
+        let snap = SystemSnapshot {
+            timestamp_us: 1,
+            cpu: logsentry_proto::CpuSnapshot {
+                global_usage_percent: 5.0,
+                per_core_usage_percent: vec![],
+            },
+            memory: logsentry_proto::MemorySnapshot {
+                total_bytes: 100,
+                used_bytes: 10,
+                used_percent: 10.0,
+            },
+            load: logsentry_proto::LoadSnapshot {
+                one: 0.0,
+                five: 0.0,
+                fifteen: 0.0,
+            },
+            disks: vec![],
+            temperatures: vec![],
+            units: vec![],
+        };
+        state.set_system_snapshot(snap.clone());
+        assert_eq!(state.latest_system_snapshot(), Some(snap));
+    }
+
+    #[test]
+    fn client_count_folgt_connect_und_disconnect() {
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        assert_eq!(state.client_count(), 0);
+        assert_eq!(state.client_connected(), 1);
+        assert_eq!(state.client_connected(), 2);
+        assert_eq!(state.client_count(), 2);
+        state.client_disconnected();
+        assert_eq!(state.client_count(), 1);
     }
 
     #[test]
@@ -383,7 +445,6 @@ mod tests {
         ring.push(entry(1, None, "eins"));
         ring.push(entry(2, None, "zwei"));
         ring.push(entry(3, None, "drei"));
-        assert_eq!(ring.len(), 2);
         let (lines, _) = ring.query(2, 5, 5, None);
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].message.as_ref(), "zwei");

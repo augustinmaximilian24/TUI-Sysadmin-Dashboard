@@ -2,21 +2,16 @@
 //! Client-Zähler, Shutdown-Pfad.
 //!
 //! Normativ: `docs/phase6-protokoll.md` Abschnitt 5 (Socket-Anlage,
-//! Rechte) und Abschnitt 7 (Daemon-Struktur). Wird ab Schritt 6 aus
-//! `main.rs` heraus verwendet; bis dahin ist dieses Modul über eigene
-//! Integrationstests abgedeckt.
-//!
-//! `#![allow(dead_code)]`: siehe Begründung in `wire.rs`.
-#![allow(dead_code)]
+//! Rechte) und Abschnitt 7 (Daemon-Struktur). Wird aus `main.rs` heraus
+//! verwendet.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use nix::errno::Errno;
-use nix::sys::stat::{umask, Mode};
 use nix::unistd::{chown, Group};
 use thiserror::Error;
 use tokio::net::{UnixListener, UnixStream};
@@ -54,8 +49,11 @@ pub enum ServerError {
 /// 2. Existierende Socket-Datei: Verbindungsversuch. `ECONNREFUSED` heißt
 ///    verwaist -> entfernen. Erfolgreiche Verbindung heißt eine zweite
 ///    Instanz läuft bereits -> Abbruch.
-/// 3. `umask` kurzzeitig setzen, binden, `umask` zurücksetzen -- so
-///    entsteht der gewünschte Modus ohne Race zwischen `bind` und `chmod`.
+/// 3. Auf einen temporären Namen im selben Verzeichnis binden, `chmod`,
+///    dann atomar auf den Zielpfad umbenennen -- so ist der Zielpfad nie
+///    unter falschen Rechten sichtbar, ohne die *prozessweite* `umask` zu
+///    verändern (die hätte parallele Dateizugriffe anderer Threads im
+///    selben Prozess mitgetroffen, siehe Regressionstest unten).
 /// 4. Gruppe aus der Konfiguration auflösen und die Socket-Datei ihr
 ///    zuordnen, sofern eine Gruppe konfiguriert ist (leer = kein `chown`,
 ///    für Dev-Betrieb ohne Root).
@@ -101,14 +99,44 @@ pub async fn bind_socket(config: &SocketConfig) -> Result<UnixListener, ServerEr
     Ok(listener)
 }
 
+/// Für den temporären Bind-Namen: eindeutig auch bei mehreren Aufrufen
+/// innerhalb derselben Sekunde im selben Prozess (z. B. der
+/// Regressionstest unten, der viele Sockets parallel anlegt).
+fn unique_suffix() -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Bindet `path` so, dass die entstehende Socket-Datei exakt `mode` als
-/// Zugriffsrechte bekommt, unabhängig vom Prozess-`umask`.
+/// Zugriffsrechte bekommt und unter diesem Namen nie mit anderen Rechten
+/// sichtbar ist: Binden auf einen temporären Namen im selben Verzeichnis
+/// (damit `rename` garantiert atomar und ohne Dateisystemgrenze bleibt),
+/// `chmod`, dann `rename` auf `path`. Räumt die temporäre Datei bei jedem
+/// Fehlerpfad auf.
 fn bind_with_mode(path: &Path, mode: u32) -> std::io::Result<UnixListener> {
-    let restrictive = Mode::from_bits_truncate((!mode & 0o777) as libc::mode_t);
-    let previous = umask(restrictive);
-    let result = UnixListener::bind(path);
-    umask(previous);
-    result
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("collector.sock");
+    let tmp_path: PathBuf = parent.join(format!(
+        ".{file_name}.tmp-{}-{}",
+        std::process::id(),
+        unique_suffix()
+    ));
+
+    let listener = UnixListener::bind(&tmp_path)?;
+
+    if let Err(err) = std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(mode)) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+    if let Err(err) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    Ok(listener)
 }
 
 /// Nimmt Verbindungen entgegen, bis `shutdown` auf `true` wechselt.
@@ -120,12 +148,11 @@ fn bind_with_mode(path: &Path, mode: u32) -> std::io::Result<UnixListener> {
 /// bevor die Socket-Datei entfernt wird.
 pub async fn run(
     listener: UnixListener,
-    config: &SocketConfig,
+    config: SocketConfig,
     hostname: Arc<str>,
     state: Arc<SharedState>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    let client_count = Arc::new(AtomicU32::new(0));
     let max_clients = config.max_clients;
     let task_config = Arc::new(ClientTaskConfig {
         hostname,
@@ -139,19 +166,18 @@ pub async fn run(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _addr)) => {
-                        let current = client_count.fetch_add(1, Ordering::SeqCst) + 1;
+                        let current = state.client_connected();
                         if current > max_clients {
-                            client_count.fetch_sub(1, Ordering::SeqCst);
+                            state.client_disconnected();
                             tokio::spawn(client_task::reject_too_many(stream, max_clients));
                             continue;
                         }
                         let state = Arc::clone(&state);
                         let task_config = Arc::clone(&task_config);
                         let client_shutdown = shutdown.clone();
-                        let client_count = Arc::clone(&client_count);
                         tokio::spawn(async move {
-                            client_task::run(stream, state, client_shutdown, task_config).await;
-                            client_count.fetch_sub(1, Ordering::SeqCst);
+                            client_task::run(stream, Arc::clone(&state), client_shutdown, task_config).await;
+                            state.client_disconnected();
                         });
                     }
                     Err(err) => {
@@ -186,6 +212,34 @@ mod tests {
             group: String::new(),
             mode: 0o660,
             ..Default::default()
+        }
+    }
+
+    /// Regressionstest für die `umask`-Race: `bind_with_mode` griff früher
+    /// ohne Sperre auf die prozessweite `umask` zu, wodurch ein
+    /// gleichzeitiger Aufruf mit anderem Modus die Rechte einer fremden
+    /// Socket-Datei verfälschen konnte -- reproduzierbar erst unter echter
+    /// Parallelität vieler `#[tokio::test]`s im selben Binary, deshalb hier
+    /// explizit mit vielen Threads statt nur zwei Tasks.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn paralleles_binden_mit_unterschiedlichem_modus_verfaelscht_keine_rechte() {
+        let dir = tempfile::tempdir().unwrap();
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let path = dir.path().join(format!("s{i}.sock"));
+                let mode: u32 = if i % 2 == 0 { 0o660 } else { 0o600 };
+                tokio::spawn(async move {
+                    let listener = bind_with_mode(&path, mode).unwrap();
+                    let got = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+                    drop(listener);
+                    (mode, got)
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            let (expected, got) = handle.await.unwrap();
+            assert_eq!(got, expected);
         }
     }
 

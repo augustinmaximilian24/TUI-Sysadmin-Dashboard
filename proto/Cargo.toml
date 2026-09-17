@@ -13,10 +13,14 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [features]
-# Reserviert für proto::client (Schritt 3): Reconnect-Task, der Daemon
-# selbst nicht braucht. tokio ist ab jetzt ohnehin immer vorhanden; dieses
-# Feature schaltet künftig nur das Modul frei, keine zusätzliche Dependency.
+# proto::client (Schritt 3): Reconnect-Task, der Daemon selbst nicht
+# braucht. tokio ist ab jetzt ohnehin immer vorhanden; dieses Feature
+# schaltet nur das Modul frei, keine zusätzliche Dependency.
 client = []
+
+[[example]]
+name = "tail"
+required-features = ["client"]
 
 [dev-dependencies]
 tempfile = "3"

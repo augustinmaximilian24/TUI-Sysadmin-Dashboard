@@ -1808,7 +1808,6 @@ name = "logsentry-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libc",
  "logsentry-core",
  "logsentry-proto",
  "nix",

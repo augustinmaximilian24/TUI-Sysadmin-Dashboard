@@ -31,7 +31,9 @@ use anyhow::Context;
 use ingestion::IngestionMode;
 use logsentry_core::baseline::{move_aside, BaselineDb, PersistError, PersistedState};
 use logsentry_core::{ring_channel, Config, JournalEvent};
+use logsentry_proto::{LearningState, PipelineStats, Snapshot, WindowStats};
 use pipeline::Pipeline;
+use state::SharedState;
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/logsentry/logsentry.toml";
 
@@ -124,15 +126,14 @@ async fn shutdown_signal() {
     }
 }
 
-/// Läuft im Hintergrund und protokolliert den Systemzustand periodisch.
-///
-/// Phase 5 liefert nur Protokoll-Zeilen; die Übergabe an den Socket-Client
-/// folgt in Phase 6, wenn ein Empfänger existiert. Ein fehlender D-Bus
+/// Läuft im Hintergrund, misst den Systemzustand periodisch und
+/// veröffentlicht ihn im geteilten Zustand, von wo ihn `Pipeline` in den
+/// nächsten Snapshot übernimmt (Phase 6 Schritt 6). Ein fehlender D-Bus
 /// (Test-/Container-Umgebungen, siehe `daemon::units`) wird einmalig
 /// gewarnt; danach laufen CPU/RAM/Load/Disk/Temperaturen unverändert
 /// weiter, nur ohne Unit-Status -- ein einzelner ausgefallener Sensor darf
 /// die übrigen Metriken nicht mitreißen.
-async fn run_system_monitor(config: logsentry_core::config::SystemConfig) {
+async fn run_system_monitor(config: logsentry_core::config::SystemConfig, state: Arc<SharedState>) {
     let mut sysmon = sysmon::SysMonitor::new(&config);
     let units = match units::UnitMonitor::connect().await {
         Ok(monitor) => Some(monitor),
@@ -165,12 +166,47 @@ async fn run_system_monitor(config: logsentry_core::config::SystemConfig) {
             units = snapshot.units.len(),
             "Systemzustand"
         );
+        state.set_system_snapshot(wire::map_system_snapshot(snapshot));
+    }
+}
+
+/// Baut den Platzhalter-Snapshot, den ein Client sieht, falls er sich
+/// verbindet, bevor die Pipeline den ersten echten Snapshot veröffentlicht
+/// hat.
+fn initial_snapshot(config: &Config, replay: bool) -> Snapshot {
+    Snapshot {
+        timestamp_us: now_us(),
+        daemon_uptime_secs: 0,
+        learning: LearningState {
+            active: true,
+            remaining_secs: None,
+        },
+        stats: PipelineStats {
+            events: 0,
+            parse_errors: 0,
+            dropped_overflow: 0,
+            templates: 0,
+            anomalies_emitted: 0,
+            suppressed: 0,
+            suppressed_learning: 0,
+            events_per_sec: 0.0,
+            clients: 0,
+        },
+        window: WindowStats {
+            window_secs: config.analysis.window_seconds as u32,
+            entropy_bits: 0.0,
+            entropy_z: 0.0,
+            events_in_window: 0,
+            distinct_templates: 0,
+        },
+        system: None,
+        replay,
     }
 }
 
 /// Mikrosekunden seit Unix-Epoch. `0` im (praktisch nie eintretenden) Fall
 /// einer Systemuhr vor 1970, statt zu paniken.
-fn now_us() -> u64 {
+pub(crate) fn now_us() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_micros() as u64)
@@ -226,6 +262,18 @@ async fn main() -> anyhow::Result<()> {
         None => None,
     };
 
+    let replay = matches!(cli.mode, IngestionMode::Replay { .. });
+    let hostname_arc: Arc<str> = Arc::from(hostname.as_str());
+    let state = Arc::new(SharedState::new(
+        initial_snapshot(&config, replay),
+        config.socket.recent_anomalies,
+        config.socket.context_lines,
+    ));
+
+    let listener = server::bind_socket(&config.socket)
+        .await
+        .with_context(|| format!("Socket {} anlegen", config.socket.path))?;
+
     tracing::info!(
         socket_pfad = %config.socket.path,
         baseline_pfad = %baseline_path.display(),
@@ -237,13 +285,22 @@ async fn main() -> anyhow::Result<()> {
     let (sender, receiver) = ring_channel::<JournalEvent>(config.ingestion.channel_capacity);
     let parse_error_counter = Arc::new(AtomicU64::new(0));
 
-    let pipeline = Pipeline::new(&config, db, restored);
+    let pipeline = Pipeline::new(&config, db, restored, Arc::clone(&state), replay);
     let consumer = tokio::spawn(pipeline.run(receiver, Arc::clone(&parse_error_counter)));
 
     // Der Systemzustands-Task hat keinen Zustand, der beim Beenden
     // gesichert werden müsste (anders als die Pipeline) -- er wird beim
     // Herunterfahren einfach abgebrochen, statt auf sein Ende zu warten.
-    let system_monitor = tokio::spawn(run_system_monitor(config.system.clone()));
+    let system_monitor = tokio::spawn(run_system_monitor(config.system.clone(), Arc::clone(&state)));
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server_task = tokio::spawn(server::run(
+        listener,
+        config.socket.clone(),
+        Arc::clone(&hostname_arc),
+        Arc::clone(&state),
+        shutdown_rx,
+    ));
 
     // Ingestion läuft, bis journalctl endet (Replay) oder ein Signal kommt.
     // Die Future lebt nur in diesem Block: Beim Verlassen fällt sie und mit
@@ -271,6 +328,11 @@ async fn main() -> anyhow::Result<()> {
     };
 
     system_monitor.abort();
+    // Signalisiert dem Socket-Server das Herunterfahren (Goodbye(Shutdown)
+    // an verbundene Clients, danach Entfernen der Socket-Datei -- Abschnitt
+    // 4, Regel 6). `send` schlägt nur fehl, wenn `server_task` bereits
+    // beendet ist, was hier kein Fehler ist.
+    let _ = shutdown_tx.send(true);
 
     if let Err(err) = &ingestion_result {
         tracing::error!(fehler = %err, "Ingestion beendet mit Fehler");
@@ -288,6 +350,10 @@ async fn main() -> anyhow::Result<()> {
             "logsentry-daemon beendet"
         ),
         Err(err) => tracing::error!(fehler = %err, "Pipeline-Task abgebrochen"),
+    }
+
+    if let Err(err) = server_task.await {
+        tracing::error!(fehler = %err, "Socket-Server-Task abgebrochen");
     }
 
     tracing::debug!(

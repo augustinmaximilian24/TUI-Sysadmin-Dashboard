@@ -3,13 +3,6 @@
 //!
 //! Normativ: `docs/phase6-protokoll.md` Abschnitt 4 (Verbindungsablauf)
 //! und Abschnitt 7 (Daemon-Struktur).
-//!
-//! `#![allow(dead_code)]`: siehe Begründung in `wire.rs` -- dieses Modul
-//! ist Schritt 5 der Umsetzungsreihenfolge und wird erst in Schritt 6
-//! (`pipeline.rs`/`main.rs` starten den Socket-Server tatsächlich) aus
-//! `main.rs` heraus aufgerufen. Bis dahin ist es über eigene
-//! Integrationstests abgedeckt.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -569,7 +562,7 @@ mod tests {
         };
 
         tokio::spawn(async move {
-            crate::server::run(listener, &config, hostname, state, shutdown_rx).await;
+            crate::server::run(listener, config, hostname, state, shutdown_rx).await;
         });
 
         (path, dir, shutdown_tx)

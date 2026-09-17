@@ -251,6 +251,40 @@ impl AnalysisEngine {
         self.window.len()
     }
 
+    /// Anzahl unterschiedlicher Templates im aktuellen Zeitfenster (für den
+    /// Snapshot, Phase 6).
+    pub fn distinct_templates(&self) -> usize {
+        self.window.distinct_templates()
+    }
+
+    /// Robuster Z-Score der aktuellen Fenster-Entropie gegen ihre Historie,
+    /// unabhängig von einem konkreten Ereignis -- für die periodische
+    /// Snapshot-Veröffentlichung (Phase 6), die nicht an ein `process()`
+    /// gekoppelt ist. Dieselbe Formel wie in [`Self::process`].
+    pub fn current_entropy_z(&self) -> f64 {
+        robust_z_score(self.window.entropy(), &self.entropy_history, ENTROPY_MIN_SCALE)
+    }
+
+    /// Konfigurierte Fenstergröße in Sekunden (Kopfzeile der GUI).
+    pub fn window_seconds(&self) -> u64 {
+        self.config.window_seconds
+    }
+
+    /// Verbleibende Sekunden der globalen Lernphase zum gegebenen Zeitpunkt,
+    /// `None` außerhalb der Lernphase.
+    pub fn learning_remaining_secs(&self, timestamp_us: u64) -> Option<u64> {
+        if !self.in_learning_phase(timestamp_us) {
+            return None;
+        }
+        let start = self.first_event_us?;
+        let learning_us = self
+            .config
+            .learning_phase_minutes
+            .saturating_mul(60)
+            .saturating_mul(1_000_000);
+        Some(learning_us.saturating_sub(timestamp_us.saturating_sub(start)) / 1_000_000)
+    }
+
     /// Überspringt die globale Lernphase. Sinnvoll nur, wenn beim Start
     /// vertrauenswürdige Baselines geladen wurden -- dann ist die Lernphase
     /// als Kaltstart-Schutz nicht mehr nötig, und wochenlang gelernte
@@ -613,6 +647,50 @@ mod tests {
         assert!(!engine.in_learning_phase(0));
         engine.process(input(0, 1));
         assert!(!engine.in_learning_phase(SEC));
+    }
+
+    #[test]
+    fn learning_remaining_secs_ist_none_ausserhalb_der_lernphase() {
+        let config = AnalysisConfig {
+            learning_phase_minutes: 1,
+            ..AnalysisConfig::default()
+        };
+        let mut engine = AnalysisEngine::new(config);
+        engine.process(input(0, 1));
+        assert_eq!(engine.learning_remaining_secs(120 * SEC), None);
+    }
+
+    #[test]
+    fn learning_remaining_secs_zaehlt_bis_zum_ende_der_lernphase_herunter() {
+        let config = AnalysisConfig {
+            learning_phase_minutes: 1,
+            ..AnalysisConfig::default()
+        };
+        let mut engine = AnalysisEngine::new(config);
+        engine.process(input(0, 1));
+        assert_eq!(engine.learning_remaining_secs(10 * SEC), Some(50));
+    }
+
+    #[test]
+    fn distinct_templates_und_entropy_z_spiegeln_das_fenster_ohne_ereignis() {
+        let mut engine = AnalysisEngine::new(test_config());
+        assert_eq!(engine.distinct_templates(), 0);
+        engine.process(input(0, 1));
+        engine.process(input(1, 2));
+        assert_eq!(engine.distinct_templates(), 2);
+        // Mit leerer Historie ist der Z-Score nicht NaN/unendlich, sondern
+        // per Konvention der neutrale Wert der robusten Skala.
+        assert!(engine.current_entropy_z().is_finite());
+    }
+
+    #[test]
+    fn window_seconds_liefert_konfigurierte_fenstergroesse() {
+        let config = AnalysisConfig {
+            window_seconds: 42,
+            ..AnalysisConfig::default()
+        };
+        let engine = AnalysisEngine::new(config);
+        assert_eq!(engine.window_seconds(), 42);
     }
 
     #[test]

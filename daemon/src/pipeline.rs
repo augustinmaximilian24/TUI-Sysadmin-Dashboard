@@ -6,32 +6,58 @@
 //! im selben Task geschrieben (ein Schreiber, kein geteilter Zustand; siehe
 //! `docs/phase4-baselines.md` Abschnitt 6.4).
 //!
-//! Anomalien werden in dieser Phase nur protokolliert; die Übergabe an den
-//! Socket-Client folgt in Phase 6.
+//! Seit Phase 6 Schritt 6 fließen Anomalien und periodische Snapshots
+//! zusätzlich in den geteilten Zustand (`state.rs`), von wo sie an
+//! verbundene Clients gehen; die `tracing`-Protokollierung bleibt für den
+//! Betrieb ohne GUI (Server-Log) bestehen.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::time::Instant;
+
 use logsentry_core::analysis::{AnalysisEngine, AnalysisInput};
 use logsentry_core::baseline::{BaselineDb, PersistedState};
 use logsentry_core::{Config, JournalEvent, RingReceiver, TemplateEngine};
+use logsentry_proto::{LearningState, PipelineStats, Snapshot, WindowStats};
+
+use crate::now_us;
+use crate::state::SharedState;
+use crate::wire::{self, AnomalyEventContext, ContextEntry};
 
 /// Zustand der Pipeline, aus persistierten Daten oder leer aufgebaut.
 pub struct Pipeline {
     templates: TemplateEngine,
     engine: AnalysisEngine,
     db: Option<BaselineDb>,
+    state: Arc<SharedState>,
+    persist_interval: Duration,
     snapshot_interval: Duration,
+    replay: bool,
+    started_at: Instant,
     events: u64,
     anomalies: u64,
+    /// Ereigniszähler beim letzten veröffentlichten Snapshot, für
+    /// `events_per_sec` (Regel: Magic Numbers gehören in Config, nicht der
+    /// Zähler selbst -- der bleibt reiner Laufzeitzustand).
+    events_at_last_snapshot: u64,
 }
 
 impl Pipeline {
-    /// Baut die Pipeline aus der Konfiguration und -- falls vorhanden -- dem
-    /// beim Start geladenen Bestand. Wurden vertrauenswürdige Baselines
-    /// geladen, wird die globale Lernphase übersprungen.
-    pub fn new(config: &Config, db: Option<BaselineDb>, restored: Option<PersistedState>) -> Self {
+    /// Baut die Pipeline aus der Konfiguration, dem geteilten Zustand für
+    /// die Socket-Verteilung (Phase 6) und -- falls vorhanden -- dem beim
+    /// Start geladenen Bestand. Wurden vertrauenswürdige Baselines geladen,
+    /// wird die globale Lernphase übersprungen. `replay` steuert nur das
+    /// `Snapshot::replay`-Feld für die GUI-Anzeige, nicht das Verhalten der
+    /// Analyse.
+    pub fn new(
+        config: &Config,
+        db: Option<BaselineDb>,
+        restored: Option<PersistedState>,
+        state: Arc<SharedState>,
+        replay: bool,
+    ) -> Self {
         let similarity = config.analysis.template_similarity_threshold;
         let max_templates = config.analysis.max_templates;
 
@@ -62,11 +88,18 @@ impl Pipeline {
             templates,
             engine,
             db,
-            snapshot_interval: Duration::from_secs(
+            state,
+            persist_interval: Duration::from_secs(
                 config.persistence.snapshot_interval_minutes.max(1) * 60,
             ),
+            snapshot_interval: Duration::from_millis(
+                u64::from(config.socket.snapshot_interval_ms).max(50),
+            ),
+            replay,
+            started_at: Instant::now(),
             events: 0,
             anomalies: 0,
+            events_at_last_snapshot: 0,
         }
     }
 
@@ -76,6 +109,15 @@ impl Pipeline {
         let matched = self
             .templates
             .process(&event.message, event.realtime_timestamp_us);
+
+        self.state.push_context(ContextEntry {
+            timestamp_us: event.realtime_timestamp_us,
+            unit: event.systemd_unit.as_deref().map(Arc::from),
+            pid: event.pid,
+            priority: event.priority,
+            message: Arc::from(event.message.as_str()),
+        });
+
         let result = self.engine.process(AnalysisInput {
             timestamp_us: event.realtime_timestamp_us,
             template_id: matched.id,
@@ -95,7 +137,62 @@ impl Pipeline {
                 nachricht = %event.message,
                 "Anomalie"
             );
+
+            let event_ctx = AnomalyEventContext {
+                template_text: &matched.template,
+                raw_message: &event.message,
+                pid: event.pid,
+                priority: event.priority,
+            };
+            if let Some(wire_event) =
+                wire::build_anomaly_event(self.state.next_anomaly_id(), &anomaly, event_ctx)
+            {
+                self.state.publish_anomaly(wire_event);
+            }
         }
+    }
+
+    /// Baut und veröffentlicht einen aktuellen Snapshot im geteilten
+    /// Zustand. `system` kommt vom unabhängigen Systemzustands-Task
+    /// (`main.rs::run_system_monitor`), der zuletzt gemessene Stand wird
+    /// hier nur durchgereicht.
+    fn publish_snapshot(&mut self, timestamp_us: u64, parse_errors: u64, dropped_overflow: u64) {
+        let stats = self.engine.stats();
+        let elapsed_secs = self.snapshot_interval.as_secs_f64().max(0.001);
+        let events_per_sec =
+            (self.events.saturating_sub(self.events_at_last_snapshot)) as f64 / elapsed_secs;
+        self.events_at_last_snapshot = self.events;
+
+        let learning_remaining = self.engine.learning_remaining_secs(timestamp_us);
+        let snapshot = Snapshot {
+            timestamp_us,
+            daemon_uptime_secs: self.started_at.elapsed().as_secs(),
+            learning: LearningState {
+                active: learning_remaining.is_some(),
+                remaining_secs: learning_remaining,
+            },
+            stats: PipelineStats {
+                events: self.events,
+                parse_errors,
+                dropped_overflow,
+                templates: self.templates.template_count() as u64,
+                anomalies_emitted: self.anomalies,
+                suppressed: stats.suppressed,
+                suppressed_learning: stats.suppressed_learning,
+                events_per_sec,
+                clients: self.state.client_count(),
+            },
+            window: WindowStats {
+                window_secs: self.engine.window_seconds() as u32,
+                entropy_bits: self.engine.current_entropy(),
+                entropy_z: self.engine.current_entropy_z(),
+                events_in_window: self.engine.window_len() as u64,
+                distinct_templates: self.engine.distinct_templates() as u64,
+            },
+            system: self.state.latest_system_snapshot(),
+            replay: self.replay,
+        };
+        self.state.publish_snapshot(snapshot);
     }
 
     /// Sichert Baselines und Template-Registry, falls Persistenz aktiv ist.
@@ -120,18 +217,22 @@ impl Pipeline {
         }
     }
 
-    /// Hauptschleife: Ereignisse verarbeiten, periodisch sichern, beim
-    /// Schließen des Kanals ein letztes Mal sichern.
+    /// Hauptschleife: Ereignisse verarbeiten, periodisch Baselines sichern
+    /// und einen Socket-Snapshot veröffentlichen, beim Schließen des Kanals
+    /// ein letztes Mal beides.
     pub async fn run(
         mut self,
         mut receiver: RingReceiver<JournalEvent>,
         parse_error_counter: Arc<AtomicU64>,
     ) -> PipelineSummary {
-        let mut ticker = tokio::time::interval(self.snapshot_interval);
-        // Der erste Tick eines Intervalls feuert sofort; den wollen wir
-        // nicht, sonst würde direkt nach dem Start ein leerer Snapshot
-        // geschrieben.
-        ticker.tick().await;
+        let mut persist_ticker = tokio::time::interval(self.persist_interval);
+        let mut snapshot_ticker = tokio::time::interval(self.snapshot_interval);
+        // Der erste Tick eines Intervalls feuert sofort; den wollen wir für
+        // die Baseline-Persistenz nicht, sonst würde direkt nach dem Start
+        // ein leerer Bestand geschrieben. Der erste Socket-Snapshot darf
+        // dagegen sofort raus, damit ein früh verbundener Client nicht bis
+        // zum ersten Intervall auf Daten wartet.
+        persist_ticker.tick().await;
 
         loop {
             tokio::select! {
@@ -141,13 +242,25 @@ impl Pipeline {
                         None => break,
                     }
                 }
-                _ = ticker.tick() => {
+                _ = persist_ticker.tick() => {
                     self.snapshot("periodisch");
+                }
+                _ = snapshot_ticker.tick() => {
+                    self.publish_snapshot(
+                        now_us(),
+                        parse_error_counter.load(Ordering::Relaxed),
+                        receiver.dropped_count(),
+                    );
                 }
             }
         }
 
         self.snapshot("beenden");
+        self.publish_snapshot(
+            now_us(),
+            parse_error_counter.load(Ordering::Relaxed),
+            receiver.dropped_count(),
+        );
 
         let stats = self.engine.stats();
         PipelineSummary {
