@@ -274,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
     let listener = server::bind_socket(&config.socket)
         .await
         .with_context(|| format!("Socket {} anlegen", config.socket.path))?;
+    let action_executor = Arc::new(actions::ActionExecutor::new(config.actions.clone()));
 
     tracing::info!(
         socket_pfad = %config.socket.path,
@@ -300,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
         config.socket.clone(),
         Arc::clone(&hostname_arc),
         Arc::clone(&state),
+        Arc::clone(&action_executor),
         shutdown_rx,
     ));
 

@@ -1,17 +1,8 @@
 //! Aktions-Subsystem: Allow-List- und Rate-Limit-Prüfung, Dispatch je
 //! Aktionsart, Audit-Log.
 //!
-//! Normativ: `docs/phase8-aktionen.md`. Dieser Schritt (3 der dortigen
-//! Umsetzungsreihenfolge) prüft Allow-List und Rate-Limit bereits
-//! vollständig und schreibt das Audit-Log, führt aber noch keine echte
-//! Aktion aus -- jede erlaubte Anfrage bekommt `Completed{dry_run: true}`.
-//! Die echte Ausführung je Aktionsart folgt in den Schritten 4-7.
-//!
-//! `#![allow(dead_code)]`: `client_task.rs` ruft `ActionExecutor` erst ab
-//! Schritt 8 auf (`docs/phase8-aktionen.md` Abschnitt 8); bis dahin ist
-//! dieses Modul über seine eigenen Tests abgedeckt. Wird entfernt, sobald
-//! Schritt 8 abgeschlossen ist.
-#![allow(dead_code)]
+//! Normativ: `docs/phase8-aktionen.md`. Von `client_task.rs` aus über
+//! `ClientTaskConfig::actions` erreichbar.
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -75,6 +66,24 @@ impl ActionExecutor {
             rate_limits: Mutex::new(HashMap::new()),
             audit_log: Mutex::new(audit_log),
         }
+    }
+
+    /// Die konfigurierten Aktionsarten, geparst zu `ActionKind` -- fürs
+    /// `Hello` an frisch verbundene Clients (Abschnitt 4). Unbekannte
+    /// Zeichenketten in `allowed_kinds` fallen dabei weg, statt den
+    /// Handshake zu verhindern (siehe Begründung bei `ActionsConfig`).
+    pub fn allowed_kinds(&self) -> Vec<logsentry_proto::ActionKind> {
+        self.config
+            .allowed_kinds
+            .iter()
+            .filter_map(|s| parse_action_kind(s))
+            .collect()
+    }
+
+    /// Der globale Dry-Run-Schalter, fürs `Hello` an frisch verbundene
+    /// Clients.
+    pub fn dry_run(&self) -> bool {
+        self.config.dry_run
     }
 
     /// Prüft Allow-List und Rate-Limit und führt die Aktion aus (Schritt 3:
@@ -464,6 +473,20 @@ fn action_kind_str(action: &ActionRequest) -> &'static str {
     }
 }
 
+/// Kehrfunktion zu [`action_kind_str`]: bildet einen konfigurierten Namen
+/// auf `ActionKind` ab, `None` bei unbekannten Werten.
+fn parse_action_kind(s: &str) -> Option<logsentry_proto::ActionKind> {
+    use logsentry_proto::ActionKind;
+    match s {
+        "restart_unit" => Some(ActionKind::RestartUnit),
+        "stop_unit" => Some(ActionKind::StopUnit),
+        "terminate_process" => Some(ActionKind::TerminateProcess),
+        "block_ip" => Some(ActionKind::BlockIp),
+        "mute_anomaly" => Some(ActionKind::MuteAnomaly),
+        _ => None,
+    }
+}
+
 /// Menschlich lesbares Ziel für Rate-Limit-Schlüssel und Audit-Log.
 fn action_target(action: &ActionRequest) -> String {
     match action {
@@ -522,6 +545,18 @@ mod tests {
             audit_log_path: String::new(),
             ..ActionsConfig::default()
         }
+    }
+
+    #[test]
+    fn allowed_kinds_ignoriert_unbekannte_werte_statt_zu_scheitern() {
+        let mut cfg = config(&["restart_unit", "diesen-wert-gibt-es-nicht"], &[]);
+        cfg.dry_run = false;
+        let executor = ActionExecutor::new(cfg);
+        assert_eq!(
+            executor.allowed_kinds(),
+            vec![logsentry_proto::ActionKind::RestartUnit]
+        );
+        assert!(!executor.dry_run());
     }
 
     fn test_state() -> SharedState {

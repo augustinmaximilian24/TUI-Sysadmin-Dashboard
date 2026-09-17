@@ -13,11 +13,12 @@ use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
 use logsentry_proto::{
-    read_frame, write_frame, ActionOutcome, ClientMessage, ContextLine, ContextReply, DenyReason,
-    ErrorCode, FrameError, GoodbyeReason, ServerMessage, Subscription, MAX_CLIENT_LINE_BYTES,
-    PROTOCOL_VERSION,
+    read_frame, write_frame, ClientMessage, ContextLine, ContextReply, ErrorCode, FrameError,
+    GoodbyeReason, ServerMessage, Subscription, MAX_CLIENT_LINE_BYTES, PROTOCOL_VERSION,
 };
 
+use crate::actions::ActionExecutor;
+use crate::now_us;
 use crate::state::SharedState;
 
 /// Obergrenze für das clientseitig gewünschte Snapshot-Intervall
@@ -34,6 +35,9 @@ pub struct ClientTaskConfig {
     pub hello_timeout: Duration,
     pub min_snapshot_interval_ms: u32,
     pub context_max_lines: u16,
+    /// Aktions-Subsystem (Phase 8): Allow-List/Rate-Limit-Prüfung und
+    /// Dispatch für `ClientMessage::Action`.
+    pub actions: Arc<ActionExecutor>,
 }
 
 /// Ergebnis des Handshakes: entweder eine ausgehandelte `Subscription`,
@@ -103,10 +107,8 @@ pub async fn run(
             daemon_version: DAEMON_VERSION.to_string(),
             hostname: config.hostname.to_string(),
             session_id: state.session_id,
-            // Phase 6: das Aktions-Subsystem folgt in Phase 8, bis dahin
-            // ist die Liste der erlaubten Aktionen leer.
-            allowed_actions: Vec::new(),
-            dry_run: true,
+            allowed_actions: config.actions.allowed_kinds(),
+            dry_run: config.actions.dry_run(),
         },
     )
     .await;
@@ -362,22 +364,13 @@ async fn handle_client_message<W>(
             send_message(writer, &ServerMessage::Context(reply)).await;
         }
         ClientMessage::Action { request_id, action } => {
-            // Phase 6: Das Aktions-Subsystem (Phase 8) existiert noch
-            // nicht -- jede Anfrage wird protokolliert und abgelehnt,
-            // niemals stillschweigend verworfen.
-            tracing::info!(
-                ?action,
-                request_id,
-                "Aktionsanfrage abgelehnt (Phase 6: keine Aktionen erlaubt)"
-            );
+            let outcome = config
+                .actions
+                .execute(&action, request_id, state.session_id, now_us(), state)
+                .await;
             send_message(
                 writer,
-                &ServerMessage::ActionResult {
-                    request_id,
-                    outcome: ActionOutcome::Denied {
-                        reason: DenyReason::NotAllowed,
-                    },
-                },
+                &ServerMessage::ActionResult { request_id, outcome },
             )
             .await;
         }
@@ -426,7 +419,8 @@ mod tests {
     use super::*;
 
     use logsentry_proto::{
-        AnomalyEvent, AnomalyLevel, LearningState, PipelineStats, RateSource, Snapshot, WindowStats,
+        ActionOutcome, AnomalyEvent, AnomalyLevel, DenyReason, LearningState, PipelineStats,
+        RateSource, Snapshot, WindowStats,
     };
     use std::path::Path;
 
@@ -542,6 +536,15 @@ mod tests {
         state: Arc<SharedState>,
         max_clients: u32,
     ) -> (std::path::PathBuf, tempfile::TempDir, watch::Sender<bool>) {
+        let actions = Arc::new(ActionExecutor::new(logsentry_core::config::ActionsConfig::default()));
+        spawn_server_with_actions(state, max_clients, actions).await
+    }
+
+    async fn spawn_server_with_actions(
+        state: Arc<SharedState>,
+        max_clients: u32,
+        actions: Arc<ActionExecutor>,
+    ) -> (std::path::PathBuf, tempfile::TempDir, watch::Sender<bool>) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("collector.sock");
         let listener = UnixListener::bind(&path).unwrap();
@@ -562,7 +565,7 @@ mod tests {
         };
 
         tokio::spawn(async move {
-            crate::server::run(listener, config, hostname, state, shutdown_rx).await;
+            crate::server::run(listener, config, hostname, state, actions, shutdown_rx).await;
         });
 
         (path, dir, shutdown_tx)
@@ -755,7 +758,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn action_wird_immer_abgelehnt() {
+    async fn action_ohne_konfigurierte_allow_list_wird_abgelehnt() {
+        // spawn_server() baut den ActionExecutor mit ActionsConfig::default()
+        // (leere Allow-Liste, Regel 9) -- die Ablehnung kommt jetzt vom
+        // echten Executor, nicht mehr von einer Phase-6-Pauschalablehnung.
         let state = Arc::new(SharedState::new(minimal_snapshot(), 10, 10));
         let (path, _dir, _shutdown) = spawn_server(state, 8).await;
 
@@ -785,6 +791,53 @@ mod tests {
             } => assert_eq!(request_id, 1),
             other => panic!("ActionResult(Denied) erwartet, bekam {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn erlaubte_action_wird_ausgefuehrt_und_wirkt_im_shared_state() {
+        // MuteAnomaly hat als einzige Aktionsart keinen externen
+        // Seiteneffekt (kein D-Bus, kein Signal, kein Subprozess) --
+        // anders als bei RestartUnit/TerminateProcess/BlockIp ist ein
+        // echter (nicht Dry-Run-) Testlauf hier unbedenklich (Regel 26
+        // schützt das reale System, nicht den eigenen Prozessspeicher).
+        let state = Arc::new(SharedState::new(minimal_snapshot(), 10, 10));
+        let actions_config = logsentry_core::config::ActionsConfig {
+            dry_run: false,
+            allowed_kinds: vec!["mute_anomaly".to_string()],
+            ..logsentry_core::config::ActionsConfig::default()
+        };
+        let actions = Arc::new(ActionExecutor::new(actions_config));
+        let (path, _dir, _shutdown) =
+            spawn_server_with_actions(Arc::clone(&state), 8, actions).await;
+
+        let mut conn = TestConn::connect(&path).await;
+        conn.send(&default_hello(Subscription::default())).await;
+        let _ = conn.recv_timeout().await;
+        let _ = conn.recv_timeout().await;
+        let _ = conn.recv_timeout().await;
+
+        conn.send(&ClientMessage::Action {
+            request_id: 7,
+            action: logsentry_proto::ActionRequest::MuteAnomaly {
+                template_id: 42,
+                unit: None,
+                scope: logsentry_proto::MuteScope::Permanent,
+            },
+        })
+        .await;
+
+        match conn.recv_timeout().await.unwrap() {
+            ServerMessage::ActionResult {
+                request_id,
+                outcome: ActionOutcome::Completed { dry_run, .. },
+            } => {
+                assert_eq!(request_id, 7);
+                assert!(!dry_run);
+            }
+            other => panic!("ActionResult(Completed) erwartet, bekam {other:?}"),
+        }
+
+        assert!(state.is_muted(42, None, 0));
     }
 
     #[tokio::test]

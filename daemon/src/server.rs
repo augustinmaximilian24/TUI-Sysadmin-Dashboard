@@ -151,6 +151,7 @@ pub async fn run(
     config: SocketConfig,
     hostname: Arc<str>,
     state: Arc<SharedState>,
+    actions: Arc<crate::actions::ActionExecutor>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     let max_clients = config.max_clients;
@@ -159,6 +160,7 @@ pub async fn run(
         hello_timeout: Duration::from_millis(u64::from(config.hello_timeout_ms)),
         min_snapshot_interval_ms: config.min_snapshot_interval_ms,
         context_max_lines: config.context_max_lines,
+        actions,
     });
 
     loop {
