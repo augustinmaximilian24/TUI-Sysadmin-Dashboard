@@ -88,9 +88,13 @@ impl RateTracker {
             self.roll_over_to(bucket);
         }
 
-        // Verspätete Ereignisse aus einem bereits abgeschlossenen Bucket
-        // werden dem laufenden Bucket zugeschlagen, statt sie zu verwerfen.
-        self.ensure_capacity();
+        // Nur beim Anlegen eines wirklich neuen Templates nach Platz sehen --
+        // sonst würde ensure_capacity an der Kapazitätsgrenze bei jedem
+        // Ereignis ein (möglicherweise gerade aktives) Template verdrängen,
+        // obwohl gar kein neuer Eintrag entsteht.
+        if !self.templates.contains_key(&template_id) {
+            self.ensure_capacity();
+        }
 
         // Ein erstmals gesehenes Template bekommt eine Historie aus Nullen
         // für die Zeit, die seit Beobachtungsbeginn vergangen ist. Das ist
@@ -377,6 +381,36 @@ mod tests {
             tracker.tracked_templates() <= 5,
             "Kapazitätsgrenze verletzt: {}",
             tracker.tracked_templates()
+        );
+    }
+
+    #[test]
+    fn an_der_kapazitaetsgrenze_bleiben_aktive_templates_stabil() {
+        // Regression: ensure_capacity() darf nur beim Anlegen eines neuen
+        // Templates greifen. Vorher wurde bei erreichter Grenze bei JEDEM
+        // Ereignis ein Template entfernt -- auch bereits bekannte, aktive --
+        // wodurch sie mit Nullhistorie neu angelegt wurden und eine völlig
+        // konstante Rate einen künstlich hohen Z-Score erzeugte.
+        let mut tracker = RateTracker::new(1, 60, 3, 10_000);
+        for i in 0..1 {
+            tracker.record(i * SEC, tid(1));
+            tracker.record(i * SEC, tid(2));
+            tracker.record(i * SEC, tid(3));
+        }
+        let mut last_z = 0.0;
+        for i in 1..60 {
+            tracker.record(i * SEC, tid(1));
+            tracker.record(i * SEC, tid(2));
+            last_z = tracker.record(i * SEC, tid(3));
+        }
+        assert_eq!(
+            tracker.tracked_templates(),
+            3,
+            "alle drei Templates bleiben unter der Grenze verfolgt"
+        );
+        assert!(
+            last_z.abs() < 3.0,
+            "konstante Rate an der Kapazitätsgrenze darf keinen Alarm auslösen, war {last_z}"
         );
     }
 }
