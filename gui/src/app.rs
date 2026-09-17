@@ -110,6 +110,10 @@ pub struct LogsentryApp {
     /// Hintergrund-Thread läuft (Regel 21) und sein Ergebnis von dort aus
     /// zurückmelden muss.
     export_message: Arc<Mutex<Option<String>>>,
+    /// Eingabefeld für `ActionRequest::BlockIp` (Phase 8) -- diese Aktion
+    /// hängt an keinem Feld der Anomalie selbst (anders als Unit/PID), die
+    /// IP muss deshalb manuell eingegeben werden.
+    block_ip_input: String,
     render: RenderSnapshot,
 }
 
@@ -132,6 +136,7 @@ impl LogsentryApp {
             pending_context_request: None,
             pending_confirmation: None,
             export_message: Arc::new(Mutex::new(None)),
+            block_ip_input: String::new(),
             render: RenderSnapshot::default(),
         }
     }
@@ -615,6 +620,35 @@ impl LogsentryApp {
                         grace_secs: 5,
                     },
                 });
+            }
+        }
+
+        if allowed.contains(&ActionKind::BlockIp) {
+            ui.label(format!("{}:", action_kind_label(ActionKind::BlockIp)));
+            let parsed_ip = self.block_ip_input.trim().parse::<std::net::IpAddr>();
+            ui.horizontal(|ui| {
+                ui.label("IP:");
+                ui.text_edit_singleline(&mut self.block_ip_input);
+                for (label, duration_secs) in [
+                    ("1 Stunde", 3_600u32),
+                    ("1 Tag", 86_400u32),
+                    ("7 Tage", 604_800u32),
+                ] {
+                    if ui
+                        .add_enabled(connected && parsed_ip.is_ok(), egui::Button::new(label))
+                        .clicked()
+                    {
+                        if let Ok(ip) = parsed_ip {
+                            self.pending_confirmation = Some(PendingConfirmation {
+                                description: format!("IP „{ip}“ für {label} sperren?"),
+                                action: ActionRequest::BlockIp { ip, duration_secs },
+                            });
+                        }
+                    }
+                }
+            });
+            if !self.block_ip_input.trim().is_empty() && parsed_ip.is_err() {
+                ui.colored_label(egui::Color32::LIGHT_RED, "keine gültige IP-Adresse");
             }
         }
 
