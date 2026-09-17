@@ -135,6 +135,20 @@ impl Pipeline {
             message: Arc::from(event.message.as_str()),
         });
 
+        // Regel 13 verlangt den Selbstfilter auch für die Zeilen, die der
+        // Daemon selbst über `tracing` erzeugt (u. a. die Anomalie-Meldung
+        // unten) -- ohne diesen unbedingten Filter läse `journalctl -f`
+        // diese Zeilen zurück, sie erzeugten neue Anomalien, deren Meldung
+        // wieder eingelesen würde usw. Der Ereignis-`pid` ist bei
+        // journalgeloggten stdout/stderr-Zeilen die tatsächliche PID des
+        // schreibenden Prozesses, unabhängig von der konfigurierten
+        // Unit-/Socket-Einstellung.
+        let own_pid = std::process::id();
+        if event.pid.is_some_and(|pid| u32::try_from(pid) == Ok(own_pid)) {
+            self.self_filtered += 1;
+            return;
+        }
+
         // Selbstfilter (Regel 13) vor Mute geprüft: eine per Aktion
         // ausgelöste Folgezeile soll auch dann nicht als Anomalie
         // erscheinen, wenn zufällig kein Mute für ihr Template existiert.
@@ -443,6 +457,24 @@ mod tests {
             pipeline.engine.stats().processed,
             0,
             "Analyse-Engine darf ein gemutetes Ereignis nie sehen"
+        );
+    }
+
+    #[test]
+    fn eigene_journalzeilen_des_daemons_werden_unbedingt_selbstgefiltert() {
+        // Regression: der Daemon las seine eigenen tracing-Ausgaben (u. a.
+        // die Anomalie-Meldung selbst) zurück und lag damit offen für die
+        // in Regel 13 verbotene Rückkopplungsschleife.
+        let mut pipeline = test_pipeline();
+        let own_pid = std::process::id() as i32;
+
+        pipeline.handle(&event("logsentry.service", own_pid, "Anomalie", 1));
+
+        assert_eq!(pipeline.self_filtered, 1);
+        assert_eq!(
+            pipeline.engine.stats().processed,
+            0,
+            "eigene Zeilen dürfen nie in der Analyse landen"
         );
     }
 
