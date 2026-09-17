@@ -104,6 +104,9 @@ pub struct LogsentryApp {
     /// Per Button vorbereitete, aber noch nicht bestätigte Aktion
     /// (Regel 12: Bestätigungsdialog mit Vorschau, kein Ein-Klick-Vollzug).
     pending_confirmation: Option<PendingConfirmation>,
+    /// Rückmeldung des letzten Export-Versuchs (Phase 10, optional) --
+    /// rein lokaler UI-Zustand, nicht Teil von `GuiState`.
+    export_message: Option<String>,
     render: RenderSnapshot,
 }
 
@@ -125,6 +128,7 @@ impl LogsentryApp {
             next_request_id: 1,
             pending_context_request: None,
             pending_confirmation: None,
+            export_message: None,
             render: RenderSnapshot::default(),
         }
     }
@@ -162,6 +166,33 @@ impl LogsentryApp {
         let _ = self.outbound.try_send(ClientMessage::Action {
             request_id,
             action: pending.action,
+        });
+    }
+
+    /// Schreibt `content` (falls vorhanden -- `None` bedeutet einen
+    /// Serialisierungsfehler) in eine neue Datei im Home-Verzeichnis
+    /// (Fallback: aktuelles Arbeitsverzeichnis, falls `$HOME` fehlt) und
+    /// merkt sich das Ergebnis für die Anzeige. Kein Datei-Dialog -- dafür
+    /// bräuchte es eine zusätzliche Abhängigkeit (z. B. `rfd`), die für
+    /// dieses optionale Phase-10-Feature nicht gerechtfertigt ist.
+    fn export_anomalies(&mut self, content: Option<String>, extension: &str) {
+        let Some(content) = content else {
+            self.export_message =
+                Some("Export fehlgeschlagen: Serialisierung nicht möglich".to_string());
+            return;
+        };
+        let dir = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let path = dir.join(format!("logsentry-export-{timestamp}.{extension}"));
+
+        self.export_message = Some(match std::fs::write(&path, content) {
+            Ok(()) => format!("Exportiert nach {}", path.display()),
+            Err(err) => format!("Export nach {} fehlgeschlagen: {err}", path.display()),
         });
     }
 
@@ -669,7 +700,23 @@ impl LogsentryApp {
                     });
                 ui.selectable_value(&mut self.sort_key, SortKey::Time, "nach Zeit");
                 ui.selectable_value(&mut self.sort_key, SortKey::Score, "nach Score");
+
+                ui.separator();
+                ui.label("Export (alle geladenen Anomalien):");
+                if ui.button("JSON").clicked() {
+                    self.export_anomalies(
+                        crate::export::anomalies_to_json(&self.render.anomalies).ok(),
+                        "json",
+                    );
+                }
+                if ui.button("CSV").clicked() {
+                    let csv = crate::export::anomalies_to_csv(&self.render.anomalies);
+                    self.export_anomalies(Some(csv), "csv");
+                }
             });
+            if let Some(message) = &self.export_message {
+                ui.label(message);
+            }
 
             ui.separator();
 

@@ -13,6 +13,7 @@
 
 mod app;
 mod client;
+mod export;
 
 use std::path::PathBuf;
 

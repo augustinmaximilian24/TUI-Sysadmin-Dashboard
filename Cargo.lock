@@ -1842,6 +1842,7 @@ dependencies = [
  "egui_plot",
  "logsentry-core",
  "logsentry-proto",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
