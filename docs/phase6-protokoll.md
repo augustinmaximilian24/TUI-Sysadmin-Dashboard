@@ -369,6 +369,9 @@ Die GUI bleibt in Phase 6 unverändert bis auf `gui/Cargo.toml` (Abhängigkeit a
 
 ## 9. Offene Punkte / Messwerte
 
-- Idle-Last (Schritt 7): _noch nicht gemessen_
+- Idle-Last (Schritt 7), gemessen mit `--release` auf dem Ziel-Desktop (Linux Mint, Ryzen 5 7600X), Live-Modus gegen das echte System-Journal, 15 s Messfenster, `snapshot_interval_ms` auf Default (1000):
+  - 0 Clients: ≈ 0,0 % CPU (0,01 s CPU-Zeit über 15 s Wandzeit), RSS 22,5 MB
+  - 2 Clients (`proto/examples/tail`, Default-Subscription): ≈ 0,0 % CPU, RSS 22,4 MB
+  - Beide liegen deutlich unter dem Zielwert aus Regel 27 (< 1 % CPU); der Socket-Server selbst macht in der Praxis keinen messbaren Unterschied zur Baseline ohne Clients. Erneut zu messen, sobald das Aktions-Subsystem (Phase 8) und mehr Clients hinzukommen.
 - Ob `Anomaly`-Push zusätzlich einen Debounce für die GUI braucht, entscheidet Phase 7 anhand echter Replays.
 - Selbstfilter für Aktions-Logs (Regel 13) ist Phase 8; der `ContextRing` muss diese Zeilen dann trotzdem enthalten (Audit-Sichtbarkeit) – nur die Analyse filtert.

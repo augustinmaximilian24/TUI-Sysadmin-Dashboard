@@ -153,49 +153,49 @@ dem Benutzerkonto. Diese Trennung ist verpflichtend.
 ## 6. Aufgaben / Phasen
 
 **Phase 0 – Gerüst**
-- [ ] `cargo new logsentry`, Workspace-Struktur (`core/`, `daemon/`, `gui/`, `proto/`)
-- [ ] `rustfmt.toml`, `clippy.toml`, `justfile` oder `Makefile`
-- [ ] Konfigurations-Struct + TOML-Laden, Default-Konfiguration
-- [ ] Minimales eframe-Fenster, das startet und sauber schließt
+- [x] `cargo new logsentry`, Workspace-Struktur (`core/`, `daemon/`, `gui/`, `proto/`)
+- [x] `rustfmt.toml`, `clippy.toml`, `justfile` oder `Makefile`
+- [x] Konfigurations-Struct + TOML-Laden, Default-Konfiguration
+- [x] Minimales eframe-Fenster, das startet und sauber schließt
 
 **Phase 1 – Ingestion**
-- [ ] `journalctl -f -o json --no-pager -n 0` als Tokio-Subprozess, zeilenweise lesen
-- [ ] Deserialisierung der relevanten Felder (`__REALTIME_TIMESTAMP`, `_SYSTEMD_UNIT`, `_PID`, `PRIORITY`, `MESSAGE`, `_HOSTNAME`)
-- [ ] Byte-Array-Variante von `MESSAGE` behandeln
-- [ ] Rechteprüfung beim Start: Ist der Benutzer in Gruppe `systemd-journal`/`adm`? Sonst klare Fehlermeldung mit Lösungsvorschlag
-- [ ] Prozessabbruch erkennen und mit Backoff neu starten
-- [ ] Replay-Modus: `--since`/`--until` statt `-f`
+- [x] `journalctl -f -o json --no-pager -n 0` als Tokio-Subprozess, zeilenweise lesen
+- [x] Deserialisierung der relevanten Felder (`__REALTIME_TIMESTAMP`, `_SYSTEMD_UNIT`, `_PID`, `PRIORITY`, `MESSAGE`, `_HOSTNAME`)
+- [x] Byte-Array-Variante von `MESSAGE` behandeln
+- [x] Rechteprüfung beim Start: Ist der Benutzer in Gruppe `systemd-journal`/`adm`? Sonst klare Fehlermeldung mit Lösungsvorschlag
+- [x] Prozessabbruch erkennen und mit Backoff neu starten
+- [x] Replay-Modus: `--since`/`--until` statt `-f`
 
 **Phase 2 – Normalisierung**
-- [ ] Regex-Masken für Zeitstempel, PIDs, IPv4/IPv6, MAC, UUIDs, Pfade, Hex-Adressen, Zahlen
-- [ ] Template-ID über stabilen Hash, Template-Registry mit Erstsichtungs-Zeitpunkt
-- [ ] Einfaches Drain-artiges Clustering für Zeilen, die die Masken nicht abdecken
-- [ ] Tests: 30 reale Beispielzeilen → erwartete Templates
+- [x] Regex-Masken für Zeitstempel, PIDs, IPv4/IPv6, MAC, UUIDs, Pfade, Hex-Adressen, Zahlen
+- [x] Template-ID über stabilen Hash, Template-Registry mit Erstsichtungs-Zeitpunkt
+- [x] Einfaches Drain-artiges Clustering für Zeilen, die die Masken nicht abdecken
+- [x] Tests: 30 reale Beispielzeilen → erwartete Templates
 
 **Phase 3 – Analyse**
-- [ ] Ringpuffer über konfigurierbares Zeitfenster (Default 60 s)
-- [ ] Shannon-Entropie über die Template-Verteilung im Fenster
-- [ ] Robuster Z-Score über Median/MAD statt Mittelwert/σ (Log-Raten sind nicht normalverteilt)
-- [ ] Surprisal `-log2 P(template)` → hoher Score für erstmals gesehene Templates
-- [ ] Score-Kombination zu einem Anomalie-Level (info/warn/critical) mit Hysterese
-- [ ] Dedup + Cooldown, damit dieselbe Anomalie nicht 200× erscheint
-- [ ] Lernphase: erste N Minuten nur beobachten, nicht alarmieren
+- [x] Ringpuffer über konfigurierbares Zeitfenster (Default 60 s)
+- [x] Shannon-Entropie über die Template-Verteilung im Fenster
+- [x] Robuster Z-Score über Median/MAD statt Mittelwert/σ (Log-Raten sind nicht normalverteilt)
+- [x] Surprisal `-log2 P(template)` → hoher Score für erstmals gesehene Templates
+- [x] Score-Kombination zu einem Anomalie-Level (info/warn/critical) mit Hysterese
+- [x] Dedup + Cooldown, damit dieselbe Anomalie nicht 200× erscheint
+- [x] Lernphase: erste N Minuten nur beobachten, nicht alarmieren
 
 **Phase 4 – Baselines & Persistenz**
-- [ ] Baselines pro Unit statt global
-- [ ] Tageszeit-/Wochentagsprofil (nachts andere Normalität als Montag früh)
-- [ ] Persistenz über Neustart, Migrationspfad für das Schema
+- [x] Baselines pro Unit statt global
+- [x] Tageszeit-/Wochentagsprofil (nachts andere Normalität als Montag früh)
+- [x] Persistenz über Neustart, Migrationspfad für das Schema
 
 **Phase 5 – Systemzustand**
-- [ ] `sysinfo`: CPU, RAM, Load, Disk, Temperaturen
-- [ ] `zbus`: Status ausgewählter systemd-Units (`ListUnits`, `ActiveState`, `SubState`)
-- [ ] GPU-Temperatur nur, wenn eine Quelle vorhanden ist (hwmon bzw. NVML) – sonst Feld ausblenden statt raten
+- [x] `sysinfo`: CPU, RAM, Load, Disk, Temperaturen
+- [x] `zbus`: Status ausgewählter systemd-Units (`ListUnits`, `ActiveState`, `SubState`)
+- [x] GPU-Temperatur nur, wenn eine Quelle vorhanden ist (hwmon bzw. NVML) – sonst Feld ausblenden statt raten
 
 **Phase 6 – Daemon & Protokoll**
-- [ ] Collector-Binary mit Unix-Socket-Server unter `/run/logsentry/`
-- [ ] Protokoll in eigenem Crate `proto/`: Snapshot-Nachrichten und Aktions-Requests als versionierte Enums
-- [ ] Mehrere gleichzeitige Clients, Reconnect-Verhalten definiert
-- [ ] Socket-Rechte über eigene Gruppe, Zugriffsverweigerung sauber melden
+- [x] Collector-Binary mit Unix-Socket-Server unter `/run/logsentry/`
+- [x] Protokoll in eigenem Crate `proto/`: Snapshot-Nachrichten und Aktions-Requests als versionierte Enums
+- [x] Mehrere gleichzeitige Clients, Reconnect-Verhalten definiert
+- [x] Socket-Rechte über eigene Gruppe, Zugriffsverweigerung sauber melden
 
 **Phase 7 – GUI**
 - [ ] Kopfbereich: Host, Uptime, Entropie, Drop-Counter, Lernphasen-Status, Verbindungsstatus
