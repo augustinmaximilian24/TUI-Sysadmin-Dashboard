@@ -18,6 +18,7 @@ mod actions;
 mod client_task;
 mod ingestion;
 mod pipeline;
+mod prometheus_export;
 mod server;
 mod state;
 mod sysmon;

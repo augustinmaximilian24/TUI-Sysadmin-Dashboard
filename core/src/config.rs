@@ -44,6 +44,8 @@ pub struct Config {
     /// Allow-List, Rate-Limit und Ausführungsparameter des
     /// Aktions-Subsystems (Phase 8).
     pub actions: ActionsConfig,
+    /// Prometheus-Textfile-Export (Phase 10, optional).
+    pub prometheus: PrometheusConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -368,6 +370,30 @@ impl Default for ActionsConfig {
     }
 }
 
+/// Prometheus-Textfile-Export (Phase 10, optional): schreibt bei jedem
+/// Socket-Snapshot eine `.prom`-Datei im node_exporter-Textfile-Format.
+/// Deaktiviert per Default -- reines Opt-in für Installationen, die
+/// bereits Prometheus/node_exporter betreiben.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PrometheusConfig {
+    pub enabled: bool,
+    /// Zielpfad, typischerweise das Textfile-Collector-Verzeichnis von
+    /// node_exporter (z. B. `/var/lib/node_exporter/textfile_collector/`).
+    /// Wird atomar geschrieben (temporäre Datei + `rename`), damit
+    /// node_exporter nie eine unvollständige Datei liest.
+    pub textfile_path: String,
+}
+
+impl Default for PrometheusConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            textfile_path: "/var/lib/logsentry/logsentry.prom".to_string(),
+        }
+    }
+}
+
 impl Config {
     /// Lädt die Konfiguration aus einer TOML-Datei am gegebenen Pfad.
     ///
@@ -438,6 +464,24 @@ mod tests {
         // Nicht gesetzte Felder bleiben beim Default.
         assert_eq!(config.actions.rate_limit_max_actions, 3);
         assert_eq!(config.actions.self_filter_window_secs, 30);
+    }
+
+    #[test]
+    fn default_prometheus_config_ist_deaktiviert() {
+        let config = Config::default();
+        assert!(!config.prometheus.enabled);
+    }
+
+    #[test]
+    fn prometheus_config_kann_aktiviert_werden() {
+        let raw = r#"
+            [prometheus]
+            enabled = true
+            textfile_path = "/tmp/logsentry.prom"
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert!(config.prometheus.enabled);
+        assert_eq!(config.prometheus.textfile_path, "/tmp/logsentry.prom");
     }
 
     #[test]

@@ -11,6 +11,7 @@
 //! verbundene Clients gehen; die `tracing`-Protokollierung bleibt für den
 //! Betrieb ohne GUI (Server-Log) bestehen.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +50,9 @@ pub struct Pipeline {
     /// `events_per_sec` (Regel: Magic Numbers gehören in Config, nicht der
     /// Zähler selbst -- der bleibt reiner Laufzeitzustand).
     events_at_last_snapshot: u64,
+    /// Ziel für den Prometheus-Textfile-Export (Phase 10, optional),
+    /// `None` wenn `config.prometheus.enabled == false`.
+    prometheus_path: Option<PathBuf>,
 }
 
 impl Pipeline {
@@ -109,6 +113,10 @@ impl Pipeline {
             self_filtered: 0,
             muted: 0,
             events_at_last_snapshot: 0,
+            prometheus_path: config
+                .prometheus
+                .enabled
+                .then(|| PathBuf::from(&config.prometheus.textfile_path)),
         }
     }
 
@@ -224,6 +232,13 @@ impl Pipeline {
             system: self.state.latest_system_snapshot(),
             replay: self.replay,
         };
+
+        if let Some(path) = &self.prometheus_path {
+            if let Err(err) = crate::prometheus_export::write_prometheus_textfile(path, &snapshot) {
+                tracing::warn!(fehler = %err, pfad = %path.display(), "Prometheus-Textfile-Export fehlgeschlagen");
+            }
+        }
+
         self.state.publish_snapshot(snapshot);
     }
 
