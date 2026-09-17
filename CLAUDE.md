@@ -198,13 +198,13 @@ dem Benutzerkonto. Diese Trennung ist verpflichtend.
 - [x] Socket-Rechte über eigene Gruppe, Zugriffsverweigerung sauber melden
 
 **Phase 7 – GUI**
-- [ ] Kopfbereich: Host, Uptime, Entropie, Drop-Counter, Lernphasen-Status, Verbindungsstatus
-- [ ] Live-Graph mit `egui_plot` und **dynamischer** Y-Achse (keine feste Obergrenze)
-- [ ] Anomalie-Liste, sortier- und filterbar nach Unit, Priorität und Score
-- [ ] Detail-Panel: Rohzeilen um die Anomalie herum, betroffene Unit und PID, Score-Aufschlüsselung
-- [ ] Systemzustands-Panel mit Unit-Status
-- [ ] Pause-Funktion, Suchfeld, Hell/Dunkel-Umschaltung
-- [ ] Reaktiver Repaint-Modus verifiziert (Leerlauf-Last gemessen)
+- [x] Kopfbereich: Host, Uptime, Entropie, Drop-Counter, Lernphasen-Status, Verbindungsstatus
+- [x] Live-Graph mit `egui_plot` und **dynamischer** Y-Achse (keine feste Obergrenze)
+- [x] Anomalie-Liste, sortier- und filterbar nach Unit, Priorität und Score
+- [x] Detail-Panel: Rohzeilen um die Anomalie herum, betroffene Unit und PID, Score-Aufschlüsselung
+- [x] Systemzustands-Panel mit Unit-Status
+- [x] Pause-Funktion, Suchfeld, Hell/Dunkel-Umschaltung
+- [x] Reaktiver Repaint-Modus verifiziert (Leerlauf-Last gemessen)
 
 **Phase 8 – Aktions-Subsystem**
 - [ ] `ActionRequest`-Enum im Protokoll, Allow-List in der Konfiguration

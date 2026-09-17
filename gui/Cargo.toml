@@ -10,8 +10,12 @@ path = "src/main.rs"
 
 [dependencies]
 logsentry-core = { path = "../core" }
-logsentry-proto = { path = "../proto" }
+logsentry-proto = { path = "../proto", features = ["client"] }
 anyhow.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 eframe = "0.29"
+# egui_plot: Live-Graph mit dynamischer Y-Achse (Phase 7, Regel: Live-Graph
+# ohne feste Obergrenze). Version an `eframe`/`egui` 0.29 gekoppelt.
+egui_plot = "0.29"
