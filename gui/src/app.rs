@@ -451,6 +451,15 @@ impl LogsentryApp {
                         if reply.truncated {
                             ui.colored_label(egui::Color32::YELLOW, "Ausschnitt gekürzt");
                         }
+                        if ui.button("In Zwischenablage kopieren").clicked() {
+                            let text = reply
+                                .lines
+                                .iter()
+                                .map(|line| line.message.as_str())
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            ui.ctx().copy_text(text);
+                        }
                         egui::ScrollArea::vertical()
                             .id_salt("context_scroll")
                             .max_height(300.0)
@@ -520,26 +529,33 @@ impl LogsentryApp {
             }
         }
 
-        if allowed.contains(&ActionKind::MuteAnomaly)
-            && ui
-                .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::MuteAnomaly)))
-                .clicked()
-        {
-            self.pending_confirmation = Some(PendingConfirmation {
-                description: format!(
-                    "Template „{}“{} dauerhaft stummschalten?",
-                    anomaly.template_text,
-                    anomaly
-                        .unit
-                        .as_deref()
-                        .map(|u| format!(" für Unit „{u}“"))
-                        .unwrap_or_default()
-                ),
-                action: ActionRequest::MuteAnomaly {
-                    template_id: anomaly.template_id,
-                    unit: anomaly.unit.clone(),
-                    scope: MuteScope::Permanent,
-                },
+        if allowed.contains(&ActionKind::MuteAnomaly) {
+            ui.label(format!("{}:", action_kind_label(ActionKind::MuteAnomaly)));
+            ui.horizontal(|ui| {
+                for (label, scope) in [
+                    ("1 Stunde", MuteScope::OneHour),
+                    ("1 Tag", MuteScope::OneDay),
+                    ("dauerhaft", MuteScope::Permanent),
+                ] {
+                    if ui.add_enabled(connected, egui::Button::new(label)).clicked() {
+                        self.pending_confirmation = Some(PendingConfirmation {
+                            description: format!(
+                                "Template „{}“{} für {label} stummschalten?",
+                                anomaly.template_text,
+                                anomaly
+                                    .unit
+                                    .as_deref()
+                                    .map(|u| format!(" für Unit „{u}“"))
+                                    .unwrap_or_default()
+                            ),
+                            action: ActionRequest::MuteAnomaly {
+                                template_id: anomaly.template_id,
+                                unit: anomaly.unit.clone(),
+                                scope,
+                            },
+                        });
+                    }
+                }
             });
         }
 

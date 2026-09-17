@@ -207,16 +207,16 @@ dem Benutzerkonto. Diese Trennung ist verpflichtend.
 - [x] Reaktiver Repaint-Modus verifiziert (Leerlauf-Last gemessen)
 
 **Phase 8 – Aktions-Subsystem**
-- [ ] `ActionRequest`-Enum im Protokoll, Allow-List in der Konfiguration
-- [ ] Executor im Daemon mit Dry-Run-Schalter, Audit-Log und Rate-Limit
-- [ ] Selbstfilter: eigene Aktions-Logs fließen nicht in die Anomalie-Erkennung
-- [ ] Aktion: Unit neu starten / stoppen (D-Bus + polkit), Ergebnis live im UI verfolgen
-- [ ] Aktion: Prozess beenden (SIGTERM, nach Timeout SIGKILL)
-- [ ] Aktion: IP temporär sperren über `nftables`-Set mit Ablaufzeit
-- [ ] Aktion: Anomalie stummschalten (1 h / 1 Tag / dauerhaft in Baseline übernehmen)
-- [ ] Aktion: Journal-Ausschnitt exportieren bzw. in die Zwischenablage
-- [ ] Bestätigungsdialog mit Vorschau für jede Aktion, kein Ein-Klick-Vollzug
-- [ ] Audit-Ansicht im UI: was wurde wann von wem ausgelöst
+- [x] `ActionRequest`-Enum im Protokoll, Allow-List in der Konfiguration
+- [x] Executor im Daemon mit Dry-Run-Schalter, Audit-Log und Rate-Limit
+- [x] Selbstfilter: eigene Aktions-Logs fließen nicht in die Anomalie-Erkennung
+- [x] Aktion: Unit neu starten / stoppen (D-Bus + polkit), Ergebnis live im UI verfolgen
+- [x] Aktion: Prozess beenden (SIGTERM, nach Timeout SIGKILL)
+- [x] Aktion: IP temporär sperren über `nftables`-Set mit Ablaufzeit
+- [x] Aktion: Anomalie stummschalten (1 h / 1 Tag / dauerhaft in Baseline übernehmen)
+- [x] Aktion: Journal-Ausschnitt exportieren bzw. in die Zwischenablage
+- [x] Bestätigungsdialog mit Vorschau für jede Aktion, kein Ein-Klick-Vollzug
+- [x] Audit-Ansicht im UI: was wurde wann von wem ausgelöst
 
 **Phase 9 – Auslieferung**
 - [ ] systemd-Unit für den Daemon mit `Nice=10`, `IOSchedulingClass=idle`, `MemoryMax=`, `ProtectSystem=strict`, `NoNewPrivileges=yes`
