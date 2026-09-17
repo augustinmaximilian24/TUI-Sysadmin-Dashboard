@@ -105,8 +105,11 @@ pub struct LogsentryApp {
     /// (Regel 12: Bestätigungsdialog mit Vorschau, kein Ein-Klick-Vollzug).
     pending_confirmation: Option<PendingConfirmation>,
     /// Rückmeldung des letzten Export-Versuchs (Phase 10, optional) --
-    /// rein lokaler UI-Zustand, nicht Teil von `GuiState`.
-    export_message: Option<String>,
+    /// rein lokaler UI-Zustand, nicht Teil von `GuiState`. Geteilt statt
+    /// direkt gehalten, weil der eigentliche Schreibvorgang in einem
+    /// Hintergrund-Thread läuft (Regel 21) und sein Ergebnis von dort aus
+    /// zurückmelden muss.
+    export_message: Arc<Mutex<Option<String>>>,
     render: RenderSnapshot,
 }
 
@@ -128,7 +131,7 @@ impl LogsentryApp {
             next_request_id: 1,
             pending_context_request: None,
             pending_confirmation: None,
-            export_message: None,
+            export_message: Arc::new(Mutex::new(None)),
             render: RenderSnapshot::default(),
         }
     }
@@ -169,17 +172,36 @@ impl LogsentryApp {
         });
     }
 
-    /// Schreibt `content` (falls vorhanden -- `None` bedeutet einen
-    /// Serialisierungsfehler) in eine neue Datei im Home-Verzeichnis
-    /// (Fallback: aktuelles Arbeitsverzeichnis, falls `$HOME` fehlt) und
-    /// merkt sich das Ergebnis für die Anzeige. Kein Datei-Dialog -- dafür
-    /// bräuchte es eine zusätzliche Abhängigkeit (z. B. `rfd`), die für
-    /// dieses optionale Phase-10-Feature nicht gerechtfertigt ist.
-    fn export_anomalies(&mut self, content: Option<String>, extension: &str) {
-        let Some(content) = content else {
-            self.export_message =
-                Some("Export fehlgeschlagen: Serialisierung nicht möglich".to_string());
-            return;
+    /// Schreibt `content` (bzw. meldet einen Serialisierungsfehler) in eine
+    /// neue Datei im Home-Verzeichnis (Fallback: aktuelles Arbeitsverzeichnis,
+    /// falls `$HOME` fehlt) und merkt sich das Ergebnis für die Anzeige.
+    /// Kein Datei-Dialog -- dafür bräuchte es eine zusätzliche Abhängigkeit
+    /// (z. B. `rfd`), die für dieses optionale Phase-10-Feature nicht
+    /// gerechtfertigt ist.
+    ///
+    /// Der eigentliche Schreibvorgang läuft in einem eigenen
+    /// `std::thread`, nicht direkt hier: `update()` läuft auf dem
+    /// Render-Thread, und `std::fs::write` blockiert je nach Anzahl
+    /// geladener Anomalien und Datenträgergeschwindigkeit spürbar (Regel
+    /// 21: die GUI blockiert nie auf I/O). `ctx` wird geklont, um den
+    /// Hintergrund-Thread nach Abschluss gezielt einen Repaint auslösen zu
+    /// lassen, statt auf den nächsten ohnehin fälligen Redraw zu warten.
+    fn export_anomalies(
+        &mut self,
+        ctx: &egui::Context,
+        content: Result<String, serde_json::Error>,
+        extension: &str,
+    ) {
+        let content = match content {
+            Ok(content) => content,
+            Err(err) => {
+                *self
+                    .export_message
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) =
+                    Some(format!("Export fehlgeschlagen: Serialisierung nicht möglich ({err})"));
+                return;
+            }
         };
         let dir = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
@@ -190,9 +212,17 @@ impl LogsentryApp {
             .unwrap_or(0);
         let path = dir.join(format!("logsentry-export-{timestamp}.{extension}"));
 
-        self.export_message = Some(match std::fs::write(&path, content) {
-            Ok(()) => format!("Exportiert nach {}", path.display()),
-            Err(err) => format!("Export nach {} fehlgeschlagen: {err}", path.display()),
+        let export_message = Arc::clone(&self.export_message);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let message = match std::fs::write(&path, content) {
+                Ok(()) => format!("Exportiert nach {}", path.display()),
+                Err(err) => format!("Export nach {} fehlgeschlagen: {err}", path.display()),
+            };
+            *export_message
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Some(message);
+            ctx.request_repaint();
         });
     }
 
@@ -705,16 +735,22 @@ impl LogsentryApp {
                 ui.label("Export (alle geladenen Anomalien):");
                 if ui.button("JSON").clicked() {
                     self.export_anomalies(
-                        crate::export::anomalies_to_json(&self.render.anomalies).ok(),
+                        ctx,
+                        crate::export::anomalies_to_json(&self.render.anomalies),
                         "json",
                     );
                 }
                 if ui.button("CSV").clicked() {
                     let csv = crate::export::anomalies_to_csv(&self.render.anomalies);
-                    self.export_anomalies(Some(csv), "csv");
+                    self.export_anomalies(ctx, Ok(csv), "csv");
                 }
             });
-            if let Some(message) = &self.export_message {
+            let export_message = self
+                .export_message
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            if let Some(message) = export_message {
                 ui.label(message);
             }
 
