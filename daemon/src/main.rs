@@ -348,6 +348,8 @@ async fn main() -> anyhow::Result<()> {
             parse_fehler = summary.parse_errors,
             unterdrueckt = summary.suppressed,
             unterdrueckt_lernphase = summary.suppressed_learning,
+            selbstgefiltert = summary.self_filtered,
+            stummgeschaltet = summary.muted,
             "logsentry-daemon beendet"
         ),
         Err(err) => tracing::error!(fehler = %err, "Pipeline-Task abgebrochen"),

@@ -38,6 +38,13 @@ pub struct Pipeline {
     started_at: Instant,
     events: u64,
     anomalies: u64,
+    /// Wegen Selbstfilter (Regel 13) von der Analyse ausgenommene
+    /// Ereignisse -- Folgezeilen einer eigenen `RestartUnit`/`StopUnit`/
+    /// `TerminateProcess`-Aktion.
+    self_filtered: u64,
+    /// Wegen `ActionRequest::MuteAnomaly` von der Analyse ausgenommene
+    /// Ereignisse.
+    muted: u64,
     /// Ereigniszähler beim letzten veröffentlichten Snapshot, für
     /// `events_per_sec` (Regel: Magic Numbers gehören in Config, nicht der
     /// Zähler selbst -- der bleibt reiner Laufzeitzustand).
@@ -99,6 +106,8 @@ impl Pipeline {
             started_at: Instant::now(),
             events: 0,
             anomalies: 0,
+            self_filtered: 0,
+            muted: 0,
             events_at_last_snapshot: 0,
         }
     }
@@ -117,6 +126,28 @@ impl Pipeline {
             priority: event.priority,
             message: Arc::from(event.message.as_str()),
         });
+
+        // Selbstfilter (Regel 13) vor Mute geprüft: eine per Aktion
+        // ausgelöste Folgezeile soll auch dann nicht als Anomalie
+        // erscheinen, wenn zufällig kein Mute für ihr Template existiert.
+        // Beide Prüfungen laufen unabhängig vom Analyseergebnis -- der
+        // `ContextRing` oben hat die Zeile bereits unbedingt aufgenommen
+        // (Audit-Sichtbarkeit, `docs/phase6-protokoll.md` Abschnitt 9).
+        if self.state.is_self_filtered(
+            event.systemd_unit.as_deref(),
+            event.pid,
+            event.realtime_timestamp_us,
+        ) {
+            self.self_filtered += 1;
+            return;
+        }
+        if self
+            .state
+            .is_muted(matched.id.0, event.systemd_unit.as_deref(), event.realtime_timestamp_us)
+        {
+            self.muted += 1;
+            return;
+        }
 
         let result = self.engine.process(AnalysisInput {
             timestamp_us: event.realtime_timestamp_us,
@@ -271,6 +302,8 @@ impl Pipeline {
             parse_errors: parse_error_counter.load(Ordering::Relaxed),
             suppressed: stats.suppressed,
             suppressed_learning: stats.suppressed_learning,
+            self_filtered: self.self_filtered,
+            muted: self.muted,
         }
     }
 }
@@ -292,4 +325,120 @@ pub struct PipelineSummary {
     pub suppressed: u64,
     /// Während der Lernphase unterdrückte Meldungen.
     pub suppressed_learning: u64,
+    /// Wegen Selbstfilter (Regel 13) von der Analyse ausgenommene
+    /// Ereignisse.
+    pub self_filtered: u64,
+    /// Wegen `MuteAnomaly` von der Analyse ausgenommene Ereignisse.
+    pub muted: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn minimal_snapshot() -> logsentry_proto::Snapshot {
+        logsentry_proto::Snapshot {
+            timestamp_us: 0,
+            daemon_uptime_secs: 0,
+            learning: logsentry_proto::LearningState {
+                active: false,
+                remaining_secs: None,
+            },
+            stats: PipelineStats {
+                events: 0,
+                parse_errors: 0,
+                dropped_overflow: 0,
+                templates: 0,
+                anomalies_emitted: 0,
+                suppressed: 0,
+                suppressed_learning: 0,
+                events_per_sec: 0.0,
+                clients: 0,
+            },
+            window: WindowStats {
+                window_secs: 60,
+                entropy_bits: 0.0,
+                entropy_z: 0.0,
+                events_in_window: 0,
+                distinct_templates: 0,
+            },
+            system: None,
+            replay: false,
+        }
+    }
+
+    fn test_pipeline() -> Pipeline {
+        let config = Config::default();
+        let state = Arc::new(SharedState::new(minimal_snapshot(), 10, 10));
+        Pipeline::new(&config, None, None, state, false)
+    }
+
+    fn event(unit: &str, pid: i32, message: &str, timestamp_us: u64) -> JournalEvent {
+        JournalEvent {
+            realtime_timestamp_us: timestamp_us,
+            systemd_unit: Some(unit.to_string()),
+            pid: Some(pid),
+            priority: Some(6),
+            message: message.to_string(),
+            message_was_binary: false,
+            hostname: None,
+        }
+    }
+
+    #[test]
+    fn selbstgefilterte_unit_wird_gezaehlt_aber_nicht_analysiert() {
+        let mut pipeline = test_pipeline();
+        pipeline
+            .state
+            .suppress_unit("sshd.service", u64::MAX);
+
+        pipeline.handle(&event("sshd.service", 100, "Failed password for root", 1));
+
+        assert_eq!(pipeline.self_filtered, 1);
+        assert_eq!(pipeline.events, 1, "Ereignis zählt trotzdem als verarbeitet");
+        assert_eq!(
+            pipeline.engine.stats().processed,
+            0,
+            "Analyse-Engine darf ein selbstgefiltertes Ereignis nie sehen"
+        );
+        // Audit-Sichtbarkeit bleibt erhalten (docs/phase6-protokoll.md
+        // Abschnitt 9): der ContextRing bekommt die Zeile trotzdem.
+        let (lines, _) = pipeline.state.query_context(1, 1, 1, None);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn gemutetes_template_wird_gezaehlt_aber_nicht_analysiert() {
+        let mut pipeline = test_pipeline();
+        let message = "immer dieselbe Testnachricht";
+        // Dieselbe Maskierung/ID-Bildung wie in `handle`, um die Mute-ID
+        // vorab zu kennen -- weißes Kästchen-Wissen über `templates` ist
+        // hier bewusst, da beide Aufrufe im selben Prozess auf derselben
+        // Registry laufen und für dieselbe Nachricht deterministisch
+        // dieselbe ID liefern.
+        let template_id = pipeline.templates.process(message, 0).id.0;
+        pipeline.state.mute(template_id, None, u64::MAX);
+
+        pipeline.handle(&event("cron.service", 200, message, 1));
+
+        assert_eq!(pipeline.muted, 1);
+        assert_eq!(
+            pipeline.engine.stats().processed,
+            0,
+            "Analyse-Engine darf ein gemutetes Ereignis nie sehen"
+        );
+    }
+
+    #[test]
+    fn unbeteiligtes_ereignis_wird_normal_analysiert() {
+        let mut pipeline = test_pipeline();
+        pipeline.state.suppress_unit("anderer.service", u64::MAX);
+        pipeline.state.mute(999, None, u64::MAX);
+
+        pipeline.handle(&event("sshd.service", 100, "eine ganz normale Zeile", 1));
+
+        assert_eq!(pipeline.self_filtered, 0);
+        assert_eq!(pipeline.muted, 0);
+        assert_eq!(pipeline.engine.stats().processed, 1);
+    }
 }

@@ -23,7 +23,7 @@ use serde::Serialize;
 use zbus::Connection;
 
 use logsentry_core::config::ActionsConfig;
-use logsentry_proto::{ActionOutcome, ActionRequest, DenyReason};
+use logsentry_proto::{ActionOutcome, ActionRequest, DenyReason, MuteScope};
 
 use crate::state::SharedState;
 use crate::units::SystemdManagerProxy;
@@ -139,15 +139,13 @@ impl ActionExecutor {
             ActionRequest::BlockIp { ip, duration_secs } => {
                 self.dispatch_block_ip(*ip, *duration_secs).await
             }
-            // Schritt 7 implementiert MuteAnomaly. Bis dahin bestätigt eine
-            // erlaubte, nicht rate-limitierte Anfrage nur, dass sie
-            // prinzipiell ausführbar wäre.
-            _ => ActionOutcome::Completed {
-                message: format!(
-                    "{kind} für {target}: Allow-List und Rate-Limit bestanden, echte Ausführung folgt in einem späteren Umsetzungsschritt"
-                ),
-                dry_run: true,
-            },
+            ActionRequest::MuteAnomaly {
+                template_id,
+                unit,
+                scope,
+            } => {
+                self.dispatch_mute_anomaly(*template_id, unit.clone(), *scope, now_us, state)
+            }
         };
         self.audit(ctx, &outcome, now_us);
         outcome
@@ -257,6 +255,41 @@ impl ActionExecutor {
                 dry_run: false,
             },
             Err(message) => ActionOutcome::Failed { message },
+        }
+    }
+
+    /// Führt `MuteAnomaly` aus (Schritt 7): reiner Zustandseintrag im
+    /// `SharedState`-Mute-Speicher, kein externer Seiteneffekt -- deshalb
+    /// synchron statt `async`. `unit: None` mutet das Template über alle
+    /// Units hinweg (siehe `SharedState::mute`).
+    fn dispatch_mute_anomaly(
+        &self,
+        template_id: u64,
+        unit: Option<String>,
+        scope: MuteScope,
+        now_us: u64,
+        state: &SharedState,
+    ) -> ActionOutcome {
+        let target = unit
+            .as_deref()
+            .map_or_else(|| template_id.to_string(), |u| format!("{template_id}@{u}"));
+
+        if self.config.dry_run {
+            return ActionOutcome::Completed {
+                message: format!("Dry-Run: mute_anomaly für {target} würde jetzt eingetragen"),
+                dry_run: true,
+            };
+        }
+
+        let until_us = match scope {
+            MuteScope::OneHour => now_us.saturating_add(3_600 * 1_000_000),
+            MuteScope::OneDay => now_us.saturating_add(86_400 * 1_000_000),
+            MuteScope::Permanent => u64::MAX,
+        };
+        state.mute(template_id, unit, until_us);
+        ActionOutcome::Completed {
+            message: format!("{target} stummgeschaltet ({scope:?})"),
+            dry_run: false,
         }
     }
 

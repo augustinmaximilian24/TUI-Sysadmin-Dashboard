@@ -8,11 +8,8 @@
 //! stillschweigend verworfen) und Abschnitt 7.
 //!
 //! Selbstfilter und Mute-Speicher (`docs/phase8-aktionen.md` Abschnitt 4)
-//! sind Schritt 2 von Phase 8. `#[allow(dead_code)]` auf diesen Teilen:
-//! `daemon::actions` (Schritt 3+) und `pipeline.rs` (Schritt 7) rufen sie
-//! erst in späteren Schritten tatsächlich auf; bis dahin ist die
-//! Funktionalität über die Tests in diesem Modul abgedeckt. Wird entfernt,
-//! sobald Schritt 7 abgeschlossen ist.
+//! werden von `daemon::actions` beim Ausführen einer Aktion befüllt und
+//! von `pipeline.rs` vor jeder Analyse abgefragt.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
@@ -56,13 +53,11 @@ pub struct SharedState {
     /// Units/PIDs, deren eigene Journal-Zeilen für ein Zeitfenster nach
     /// einer ausgeführten Aktion nicht in die Anomalie-Erkennung
     /// einfließen. Wert ist der Ablauf-Zeitstempel in µs.
-    #[allow(dead_code)]
     self_filter: Mutex<HashMap<SelfFilterKey, u64>>,
     /// Manuell stummgeschaltete `(template_id, unit)`-Paare aus
     /// `ActionRequest::MuteAnomaly`. `unit: None` mutet das Template über
     /// alle Units hinweg. Wert ist der Ablauf-Zeitstempel in µs
     /// (`u64::MAX` für „dauerhaft", siehe `MuteScope::Permanent`).
-    #[allow(dead_code)]
     mute_store: Mutex<HashMap<(u64, Option<String>), u64>>,
     pub session_id: u64,
 }
@@ -70,7 +65,6 @@ pub struct SharedState {
 /// Schlüssel für den Selbstfilter: entweder eine systemd-Unit
 /// (`RestartUnit`/`StopUnit`) oder eine Prozess-ID (`TerminateProcess`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
 pub enum SelfFilterKey {
     Unit(String),
     Pid(i32),
@@ -105,7 +99,6 @@ impl SharedState {
     /// Nimmt die Ziel-Unit einer soeben ausgeführten `RestartUnit`/
     /// `StopUnit`-Aktion für `until_us` (absoluter Zeitstempel in µs) in
     /// den Selbstfilter auf.
-    #[allow(dead_code)]
     pub fn suppress_unit(&self, unit: &str, until_us: u64) {
         self.self_filter
             .lock()
@@ -115,7 +108,6 @@ impl SharedState {
 
     /// Nimmt die PID einer soeben per `TerminateProcess` beendeten
     /// Prozesses für `until_us` in den Selbstfilter auf.
-    #[allow(dead_code)]
     pub fn suppress_pid(&self, pid: i32, until_us: u64) {
         self.self_filter
             .lock()
@@ -127,7 +119,6 @@ impl SharedState {
     /// Selbstfilter unterdrückt wird. Räumt dabei beiläufig abgelaufene
     /// Einträge auf (Regel 18: kein unbeschränktes Wachstum), da Aktionen
     /// selten genug sind, dass ein Full-Scan hier nicht ins Gewicht fällt.
-    #[allow(dead_code)]
     pub fn is_self_filtered(&self, unit: Option<&str>, pid: Option<i32>, now_us: u64) -> bool {
         let mut filter = self.self_filter.lock().unwrap_or_else(PoisonError::into_inner);
         filter.retain(|_, expiry| *expiry > now_us);
@@ -137,7 +128,6 @@ impl SharedState {
 
     /// Trägt eine manuelle Stummschaltung ein (`ActionRequest::MuteAnomaly`).
     /// `until_us = u64::MAX` bedeutet dauerhaft (`MuteScope::Permanent`).
-    #[allow(dead_code)]
     pub fn mute(&self, template_id: u64, unit: Option<String>, until_us: u64) {
         self.mute_store
             .lock()
@@ -149,7 +139,6 @@ impl SharedState {
     /// gezielt für `unit` oder global für das Template (`unit: None` beim
     /// Eintragen). Räumt abgelaufene Einträge wie [`Self::is_self_filtered`]
     /// beiläufig auf.
-    #[allow(dead_code)]
     pub fn is_muted(&self, template_id: u64, unit: Option<&str>, now_us: u64) -> bool {
         let mut store = self.mute_store.lock().unwrap_or_else(PoisonError::into_inner);
         store.retain(|_, expiry| *expiry > now_us);
