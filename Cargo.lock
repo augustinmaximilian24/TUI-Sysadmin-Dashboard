@@ -1808,10 +1808,13 @@ name = "logsentry-daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "logsentry-core",
  "logsentry-proto",
  "nix",
+ "serde_json",
  "sysinfo",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tracing",
