@@ -406,6 +406,23 @@ impl ActionExecutor {
         line.push('\n');
 
         let mut guard = self.audit_log.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Größe vor dem Schreiben prüfen und bei Bedarf rotieren: abgelehnte
+        // Versuche (u. a. NotAllowed) werden schon vor der Rate-Limit-Prüfung
+        // auditiert, ein Client könnte die Datei also mit Socket-Zeilenrate
+        // beschreiben lassen (Regel 18: harte Obergrenze statt
+        // unbeschränktem Wachstum).
+        if let Some(file) = guard.as_ref() {
+            let too_big = file
+                .metadata()
+                .map(|meta| meta.len() >= AUDIT_LOG_MAX_BYTES)
+                .unwrap_or(false);
+            if too_big {
+                rotate_audit_log(&self.config.audit_log_path);
+                *guard = open_audit_log(&self.config.audit_log_path);
+            }
+        }
+
         match guard.as_mut() {
             Some(file) => {
                 if let Err(err) = file.write_all(line.as_bytes()) {
@@ -524,6 +541,20 @@ async fn run_nft(args: &[&str]) -> Result<(), String> {
             args.join(" "),
             stderr.trim()
         ))
+    }
+}
+
+/// Harte Obergrenze der Audit-Log-Größe, bevor sie rotiert wird (Regel 18).
+const AUDIT_LOG_MAX_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Rotiert die Audit-Datei auf `<pfad>.1` (eine vorherige `.1`-Datei wird
+/// dabei überschrieben). Ein Fehlschlag wird protokolliert, verhindert aber
+/// nicht den Weiterbetrieb -- die nächste `open_audit_log`-Öffnung legt bei
+/// Bedarf einfach eine neue Datei an.
+fn rotate_audit_log(path: &str) {
+    let rotated = format!("{path}.1");
+    if let Err(err) = std::fs::rename(path, &rotated) {
+        tracing::warn!(pfad = %path, ziel = %rotated, fehler = %err, "Audit-Log-Rotation fehlgeschlagen");
     }
 }
 
@@ -944,6 +975,41 @@ mod tests {
         let content = std::fs::read_to_string(&audit_path).unwrap();
         let entry: serde_json::Value = serde_json::from_str(content.trim_end()).unwrap();
         assert_eq!(entry["peer_uid"], serde_json::json!(4242));
+    }
+
+    #[tokio::test]
+    async fn audit_log_wird_bei_ueberschreitung_der_groessengrenze_rotiert() {
+        // Regression: abgelehnte Versuche (u. a. NotAllowed) werden schon
+        // vor der Rate-Limit-Prüfung auditiert -- ein Client könnte die
+        // Audit-Datei sonst mit Socket-Zeilenrate unbegrenzt wachsen lassen
+        // (Regel 18).
+        let dir = tempfile::tempdir().unwrap();
+        let audit_path = dir.path().join("audit.jsonl");
+        std::fs::write(&audit_path, vec![b'x'; AUDIT_LOG_MAX_BYTES as usize]).unwrap();
+
+        let state = test_state();
+        let mut cfg = config(&["mute_anomaly"], &[]);
+        cfg.audit_log_path = audit_path.to_string_lossy().to_string();
+        let executor = ActionExecutor::new(cfg);
+
+        let mute = ActionRequest::MuteAnomaly {
+            template_id: 1,
+            unit: None,
+            scope: MuteScope::OneHour,
+        };
+        executor.execute(&mute, origin(1), 0, &state).await;
+
+        let rotated_path = format!("{}.1", audit_path.display());
+        let rotated_size = std::fs::metadata(&rotated_path)
+            .expect("rotierte Datei muss existieren")
+            .len();
+        assert_eq!(rotated_size, AUDIT_LOG_MAX_BYTES);
+
+        let current_size = std::fs::metadata(&audit_path).unwrap().len();
+        assert!(
+            current_size < AUDIT_LOG_MAX_BYTES,
+            "neue Datei sollte klein sein, war {current_size}"
+        );
     }
 
     #[tokio::test]
