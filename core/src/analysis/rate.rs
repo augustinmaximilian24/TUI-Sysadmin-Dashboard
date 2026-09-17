@@ -203,7 +203,10 @@ mod tests {
     fn erster_eintrag_ohne_historie_ergibt_z_score_null() {
         let mut tracker = RateTracker::new(5, 60, 100, 1000);
         let z = tracker.record(0, tid(1));
-        assert!(z.abs() < 1e-9, "ohne Historie darf kein Alarm entstehen, war {z}");
+        assert!(
+            z.abs() < 1e-9,
+            "ohne Historie darf kein Alarm entstehen, war {z}"
+        );
     }
 
     #[test]
@@ -241,7 +244,10 @@ mod tests {
         for _ in 0..50 {
             last_z = tracker.record(30 * SEC, tid(1));
         }
-        assert!(last_z > 5.0, "Burst sollte deutlichen Z-Score liefern, war {last_z}");
+        assert!(
+            last_z > 5.0,
+            "Burst sollte deutlichen Z-Score liefern, war {last_z}"
+        );
     }
 
     #[test]
@@ -341,7 +347,10 @@ mod tests {
         // neuen Template zuschreiben könnte.
         let z = tracker.record(0, tid(1));
         assert_eq!(tracker.history_len_of(tid(1)), 0);
-        assert!(z.abs() < 1e-9, "am Beobachtungsbeginn darf kein Alarm entstehen");
+        assert!(
+            z.abs() < 1e-9,
+            "am Beobachtungsbeginn darf kein Alarm entstehen"
+        );
     }
 
     #[test]

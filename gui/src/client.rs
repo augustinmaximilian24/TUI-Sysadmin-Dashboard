@@ -106,7 +106,10 @@ impl GuiState {
 pub fn spawn_bridge(
     socket_path: PathBuf,
     ctx: eframe::egui::Context,
-) -> (Arc<Mutex<GuiState>>, mpsc::Sender<logsentry_proto::ClientMessage>) {
+) -> (
+    Arc<Mutex<GuiState>>,
+    mpsc::Sender<logsentry_proto::ClientMessage>,
+) {
     let state = Arc::new(Mutex::new(GuiState::default()));
     let (outbound, mut inbound, mut connection_state) = spawn(ClientConfig {
         socket_path,
@@ -170,7 +173,10 @@ fn apply_message(state: &mut GuiState, message: ServerMessage, started_at: std::
         ServerMessage::Snapshot(snapshot) => state.apply_snapshot(snapshot, started_at),
         ServerMessage::Anomaly(event) => state.push_anomaly(event),
         ServerMessage::Context(reply) => state.context_reply = Some(reply),
-        ServerMessage::ActionResult { request_id, outcome } => {
+        ServerMessage::ActionResult {
+            request_id,
+            outcome,
+        } => {
             state.push_action_result(request_id, outcome);
         }
         ServerMessage::Pong { .. } => {}
@@ -302,7 +308,11 @@ mod tests {
     #[test]
     fn is_connected_erkennt_nur_den_connected_zustand() {
         assert!(!is_connected(None));
-        assert!(!is_connected(Some(&ConnectionState::Connecting { attempt: 0 })));
-        assert!(is_connected(Some(&ConnectionState::Connected { session_id: 1 })));
+        assert!(!is_connected(Some(&ConnectionState::Connecting {
+            attempt: 0
+        })));
+        assert!(is_connected(Some(&ConnectionState::Connected {
+            session_id: 1
+        })));
     }
 }

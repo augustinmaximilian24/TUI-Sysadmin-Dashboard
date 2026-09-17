@@ -136,10 +136,12 @@ impl ActionExecutor {
 
         let outcome = match action {
             ActionRequest::RestartUnit { unit } => {
-                self.dispatch_unit_action(unit.as_str(), false, now_us, state).await
+                self.dispatch_unit_action(unit.as_str(), false, now_us, state)
+                    .await
             }
             ActionRequest::StopUnit { unit } => {
-                self.dispatch_unit_action(unit.as_str(), true, now_us, state).await
+                self.dispatch_unit_action(unit.as_str(), true, now_us, state)
+                    .await
             }
             ActionRequest::TerminateProcess { pid, grace_secs } => {
                 self.dispatch_terminate_process(*pid, *grace_secs, now_us, state)
@@ -152,9 +154,7 @@ impl ActionExecutor {
                 template_id,
                 unit,
                 scope,
-            } => {
-                self.dispatch_mute_anomaly(*template_id, unit.clone(), *scope, now_us, state)
-            }
+            } => self.dispatch_mute_anomaly(*template_id, unit.clone(), *scope, now_us, state),
         };
         self.audit(ctx, &outcome, now_us);
         outcome
@@ -183,7 +183,9 @@ impl ActionExecutor {
         match restart_or_stop_unit_via_dbus(unit, stop).await {
             Ok(()) => {
                 let until_us = now_us.saturating_add(
-                    self.config.self_filter_window_secs.saturating_mul(1_000_000),
+                    self.config
+                        .self_filter_window_secs
+                        .saturating_mul(1_000_000),
                 );
                 state.suppress_unit(unit, until_us);
                 ActionOutcome::Completed {
@@ -223,7 +225,9 @@ impl ActionExecutor {
         match kill(nix_pid, Signal::SIGTERM) {
             Ok(()) => {
                 let until_us = now_us.saturating_add(
-                    self.config.self_filter_window_secs.saturating_mul(1_000_000),
+                    self.config
+                        .self_filter_window_secs
+                        .saturating_mul(1_000_000),
                 );
                 state.suppress_pid(pid as i32, until_us);
                 spawn_kill_escalation(nix_pid, grace);
@@ -338,7 +342,11 @@ impl ActionExecutor {
             outcome,
         };
         let Ok(mut line) = serde_json::to_string(&entry) else {
-            tracing::warn!(kind = entry.kind, target = entry.target, "Audit-Eintrag konnte nicht serialisiert werden");
+            tracing::warn!(
+                kind = entry.kind,
+                target = entry.target,
+                "Audit-Eintrag konnte nicht serialisiert werden"
+            );
             return;
         };
         line.push('\n');
@@ -361,8 +369,13 @@ fn spawn_kill_escalation(pid: Pid, grace_secs: u16) {
         tokio::time::sleep(std::time::Duration::from_secs(u64::from(grace_secs))).await;
         if kill(pid, None).is_ok() {
             match kill(pid, Signal::SIGKILL) {
-                Ok(()) => tracing::info!(pid = pid.as_raw(), "SIGKILL nach Ablauf der Gnadenfrist gesendet"),
-                Err(err) => tracing::warn!(pid = pid.as_raw(), fehler = %err, "SIGKILL nach Gnadenfrist fehlgeschlagen"),
+                Ok(()) => tracing::info!(
+                    pid = pid.as_raw(),
+                    "SIGKILL nach Ablauf der Gnadenfrist gesendet"
+                ),
+                Err(err) => {
+                    tracing::warn!(pid = pid.as_raw(), fehler = %err, "SIGKILL nach Gnadenfrist fehlgeschlagen")
+                }
             }
         }
     });
@@ -383,7 +396,13 @@ async fn block_ip_via_nft(
         std::net::IpAddr::V6(_) => (&config.nftables_set_v6, "ipv6_addr"),
     };
 
-    run_nft(&["add", "table", &config.nftables_family, &config.nftables_table]).await?;
+    run_nft(&[
+        "add",
+        "table",
+        &config.nftables_family,
+        &config.nftables_table,
+    ])
+    .await?;
     run_nft(&[
         "add",
         "set",
@@ -451,7 +470,11 @@ fn open_audit_log(path: &str) -> Option<std::fs::File> {
             }
         }
     }
-    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         Ok(file) => Some(file),
         Err(err) => {
             tracing::warn!(pfad = %path.display(), fehler = %err, "Audit-Log konnte nicht geöffnet werden, Aktionen laufen ohne Audit-Log");

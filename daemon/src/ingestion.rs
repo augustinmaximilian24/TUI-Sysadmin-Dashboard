@@ -108,7 +108,11 @@ pub async fn check_journal_permissions() -> Result<(), IngestionError> {
 /// Baut die Argumentliste für `journalctl` aus dem gewählten Modus.
 /// Reine Funktion (kein Prozessstart), daher direkt testbar.
 fn journalctl_args(mode: &IngestionMode) -> Vec<String> {
-    let mut args = vec!["-o".to_string(), "json".to_string(), "--no-pager".to_string()];
+    let mut args = vec![
+        "-o".to_string(),
+        "json".to_string(),
+        "--no-pager".to_string(),
+    ];
     match mode {
         IngestionMode::Live => {
             args.push("-f".to_string());
@@ -150,7 +154,10 @@ async fn read_one_pass(
     let mut lines = BufReader::new(stdout).lines();
 
     loop {
-        let next = lines.next_line().await.map_err(IngestionError::ReadFailed)?;
+        let next = lines
+            .next_line()
+            .await
+            .map_err(IngestionError::ReadFailed)?;
         let Some(line) = next else {
             break;
         };
@@ -235,7 +242,9 @@ mod tests {
     fn live_args_enthalten_follow_und_no_backlog() {
         let args = journalctl_args(&IngestionMode::Live);
         assert!(args.contains(&"-f".to_string()));
-        assert!(args.windows(2).any(|w| w == ["-n".to_string(), "0".to_string()]));
+        assert!(args
+            .windows(2)
+            .any(|w| w == ["-n".to_string(), "0".to_string()]));
         assert!(args.contains(&"json".to_string()));
     }
 
@@ -283,7 +292,10 @@ mod tests {
         let counter = Arc::new(AtomicU64::new(0));
 
         let result = run_ingestion(mode, &config, tx, counter).await;
-        assert!(result.is_ok(), "Replay-Durchlauf sollte fehlerfrei enden: {result:?}");
+        assert!(
+            result.is_ok(),
+            "Replay-Durchlauf sollte fehlerfrei enden: {result:?}"
+        );
     }
 
     fn which_journalctl() -> Option<()> {

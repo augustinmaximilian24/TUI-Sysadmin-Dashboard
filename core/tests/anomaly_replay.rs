@@ -25,10 +25,8 @@ fn replay() -> Vec<(Anomaly, String)> {
         learning_phase_minutes: 5,
         ..AnalysisConfig::default()
     };
-    let mut templates = TemplateEngine::new(
-        config.template_similarity_threshold,
-        config.max_templates,
-    );
+    let mut templates =
+        TemplateEngine::new(config.template_similarity_threshold, config.max_templates);
     let mut engine = AnalysisEngine::new(config);
 
     let mut anomalies = Vec::new();
@@ -53,8 +51,7 @@ fn replay() -> Vec<(Anomaly, String)> {
 fn erkennt_ssh_bruteforce_im_replay() {
     let anomalies = replay();
     let treffer = anomalies.iter().any(|(anomaly, message)| {
-        message.contains("Failed password")
-            && anomaly.unit.as_deref() == Some("sshd.service")
+        message.contains("Failed password") && anomaly.unit.as_deref() == Some("sshd.service")
     });
     assert!(
         treffer,

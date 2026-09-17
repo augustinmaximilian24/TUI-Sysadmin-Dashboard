@@ -187,7 +187,15 @@ mod tests {
             std::env::remove_var("TZ");
         }
 
-        assert_eq!(vorher.hour(), Some(1), "vor der Umstellung 01:30 CET erwartet");
-        assert_eq!(nachher.hour(), Some(3), "nach der Umstellung 03:30 CEST erwartet");
+        assert_eq!(
+            vorher.hour(),
+            Some(1),
+            "vor der Umstellung 01:30 CET erwartet"
+        );
+        assert_eq!(
+            nachher.hour(),
+            Some(3),
+            "nach der Umstellung 03:30 CEST erwartet"
+        );
     }
 }

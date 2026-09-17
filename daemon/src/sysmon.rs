@@ -54,7 +54,12 @@ impl SysMonitor {
 
         let cpu = CpuSnapshot {
             global_usage_percent: self.system.global_cpu_usage(),
-            per_core_usage_percent: self.system.cpus().iter().map(sysinfo::Cpu::cpu_usage).collect(),
+            per_core_usage_percent: self
+                .system
+                .cpus()
+                .iter()
+                .map(sysinfo::Cpu::cpu_usage)
+                .collect(),
         };
 
         let total = self.system.total_memory();
@@ -138,7 +143,10 @@ mod tests {
         let zweite = monitor.poll(2000);
 
         assert!(zweite.cpu.global_usage_percent >= 0.0);
-        assert!(zweite.memory.total_bytes > 0, "ein Testsystem ohne RAM ist unplausibel");
+        assert!(
+            zweite.memory.total_bytes > 0,
+            "ein Testsystem ohne RAM ist unplausibel"
+        );
         assert!((0.0..=100.0).contains(&zweite.memory.used_percent));
         for disk in &zweite.disks {
             assert!((0.0..=100.0).contains(&disk.used_percent));

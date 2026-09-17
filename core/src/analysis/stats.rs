@@ -263,7 +263,10 @@ mod tests {
     fn z_score_erkennt_ausreisser_nach_oben() {
         let values = [1.0, 2.0, 3.0, 4.0, 5.0];
         let z = robust_z_score(100.0, &values, COUNT_MIN_SCALE);
-        assert!(z > 10.0, "Ausreißer sollte deutlich positiven Z-Score haben, war {z}");
+        assert!(
+            z > 10.0,
+            "Ausreißer sollte deutlich positiven Z-Score haben, war {z}"
+        );
         assert!(z <= 50.0, "Z-Score muss gedeckelt sein, war {z}");
     }
 
@@ -274,7 +277,10 @@ mod tests {
         // Schwachpunkt von Mittelwert/σ und auch der MeanAD-Rückfallebene.
         let mit_ausreisser = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1000.0];
         let z = robust_z_score(20.0, &mit_ausreisser, COUNT_MIN_SCALE);
-        assert!(z > 3.0, "Burst sollte trotz Ausreißer in der Historie auffallen, war {z}");
+        assert!(
+            z > 3.0,
+            "Burst sollte trotz Ausreißer in der Historie auffallen, war {z}"
+        );
     }
 
     #[test]
@@ -333,13 +339,19 @@ mod tests {
     fn surprisal_ist_fuer_neues_template_hoch_aber_endlich() {
         let s = surprisal(0, 10_000, 50, 0.5);
         assert!(s.is_finite());
-        assert!(s > 10.0, "unbekanntes Template sollte hohes Surprisal haben, war {s}");
+        assert!(
+            s > 10.0,
+            "unbekanntes Template sollte hohes Surprisal haben, war {s}"
+        );
     }
 
     #[test]
     fn surprisal_ist_fuer_haeufiges_template_niedrig() {
         let s = surprisal(9_000, 10_000, 50, 0.5);
-        assert!(s < 1.0, "dominantes Template sollte niedriges Surprisal haben, war {s}");
+        assert!(
+            s < 1.0,
+            "dominantes Template sollte niedriges Surprisal haben, war {s}"
+        );
     }
 
     #[test]

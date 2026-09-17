@@ -133,7 +133,6 @@ struct TemplateState {
     suppressed_since_last: u64,
 }
 
-
 /// Statistik über die Arbeit der Engine, für Anzeige und Diagnose.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AnalysisStats {
@@ -214,7 +213,8 @@ impl AnalysisEngine {
     /// Baseline-Zustand geht verloren; alles andere (Kurzzeit-Historie,
     /// Meldezustand) bleibt unverändert.
     pub fn restore_baselines(&mut self, snapshot: crate::baseline::BaselineSnapshot) {
-        self.baselines = BaselineStore::restore(snapshot, self.config.bucket_seconds, &self.baseline_config);
+        self.baselines =
+            BaselineStore::restore(snapshot, self.config.bucket_seconds, &self.baseline_config);
     }
 
     /// Serialisierbare Kopie der aktuellen Zeitprofil-Baselines (Schritt 9).
@@ -262,7 +262,11 @@ impl AnalysisEngine {
     /// Snapshot-Veröffentlichung (Phase 6), die nicht an ein `process()`
     /// gekoppelt ist. Dieselbe Formel wie in [`Self::process`].
     pub fn current_entropy_z(&self) -> f64 {
-        robust_z_score(self.window.entropy(), &self.entropy_history, ENTROPY_MIN_SCALE)
+        robust_z_score(
+            self.window.entropy(),
+            &self.entropy_history,
+            ENTROPY_MIN_SCALE,
+        )
     }
 
     /// Konfigurierte Fenstergröße in Sekunden (Kopfzeile der GUI).
@@ -338,14 +342,24 @@ impl AnalysisEngine {
 
         // Zeitprofil-Baseline (Phase 4) zählt das Ereignis mit und liefert,
         // sofern vertrauenswürdig, den bevorzugten Rate-Z-Score.
-        self.baselines.record(input.timestamp_us, unit_key, input.template_id);
-        let current_bucket_count = self.baselines.current_bucket_count(unit_key, input.template_id);
-        let baseline_rate =
-            self.baselines
-                .rate_z(input.timestamp_us, unit_key, input.template_id, current_bucket_count);
+        self.baselines
+            .record(input.timestamp_us, unit_key, input.template_id);
+        let current_bucket_count = self
+            .baselines
+            .current_bucket_count(unit_key, input.template_id);
+        let baseline_rate = self.baselines.rate_z(
+            input.timestamp_us,
+            unit_key,
+            input.template_id,
+            current_bucket_count,
+        );
 
-        let breakdown =
-            self.compute_breakdown(unit_key, input.template_id, short_term_rate_z, baseline_rate);
+        let breakdown = self.compute_breakdown(
+            unit_key,
+            input.template_id,
+            short_term_rate_z,
+            baseline_rate,
+        );
         let level = self.level_with_hysteresis(input.template_id, breakdown.combined);
 
         if level == AnomalyLevel::Normal {
@@ -445,8 +459,7 @@ impl AnalysisEngine {
         // zählt dagegen der Betrag, weil beide Richtungen auffällig sind
         // (Einbruch = Log-Sturm, Anstieg = Wildwuchs).
         let rate_component = normalize(rate_z.max(0.0), self.config.rate_z_reference);
-        let surprisal_component =
-            normalize(surprisal_bits, self.config.surprisal_reference_bits);
+        let surprisal_component = normalize(surprisal_bits, self.config.surprisal_reference_bits);
 
         // Die Entropie ist ein *systemweites* Signal: sie sagt, dass die
         // Mischung im Fenster ungewöhnlich ist, aber nicht, wer sie
@@ -459,8 +472,7 @@ impl AnalysisEngine {
         } else {
             0.0
         };
-        let entropy_component =
-            normalize(entropy_z.abs(), self.config.entropy_z_reference) * share;
+        let entropy_component = normalize(entropy_z.abs(), self.config.entropy_z_reference) * share;
 
         let combined = noisy_or(&[
             (self.config.weight_rate, rate_component),
@@ -618,7 +630,10 @@ mod tests {
         // Selbst ein massiver Burst darf während der Lernphase nichts melden.
         for i in 0..500 {
             let result = engine.process(input(i * 1000, 1));
-            assert!(result.is_none(), "während der Lernphase darf nichts gemeldet werden");
+            assert!(
+                result.is_none(),
+                "während der Lernphase darf nichts gemeldet werden"
+            );
         }
         assert!(engine.stats().emitted == 0);
     }
@@ -911,10 +926,22 @@ mod tests {
             ..AnalysisConfig::default()
         };
         let mut engine = AnalysisEngine::new(config);
-        assert_eq!(engine.level_with_hysteresis(tid(1), 0.1), AnomalyLevel::Normal);
-        assert_eq!(engine.level_with_hysteresis(tid(2), 0.35), AnomalyLevel::Info);
-        assert_eq!(engine.level_with_hysteresis(tid(3), 0.6), AnomalyLevel::Warn);
-        assert_eq!(engine.level_with_hysteresis(tid(4), 0.9), AnomalyLevel::Critical);
+        assert_eq!(
+            engine.level_with_hysteresis(tid(1), 0.1),
+            AnomalyLevel::Normal
+        );
+        assert_eq!(
+            engine.level_with_hysteresis(tid(2), 0.35),
+            AnomalyLevel::Info
+        );
+        assert_eq!(
+            engine.level_with_hysteresis(tid(3), 0.6),
+            AnomalyLevel::Warn
+        );
+        assert_eq!(
+            engine.level_with_hysteresis(tid(4), 0.9),
+            AnomalyLevel::Critical
+        );
     }
 
     #[test]

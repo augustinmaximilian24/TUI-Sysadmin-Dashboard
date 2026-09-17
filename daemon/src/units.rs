@@ -69,7 +69,9 @@ pub struct UnitMonitor {
 impl UnitMonitor {
     /// Baut die Verbindung zum System-Bus auf.
     pub async fn connect() -> Result<Self, UnitMonitorError> {
-        let connection = Connection::system().await.map_err(UnitMonitorError::Connect)?;
+        let connection = Connection::system()
+            .await
+            .map_err(UnitMonitorError::Connect)?;
         Ok(Self { connection })
     }
 
@@ -80,7 +82,10 @@ impl UnitMonitor {
         let manager = SystemdManagerProxy::new(&self.connection)
             .await
             .map_err(UnitMonitorError::ListUnits)?;
-        let raw = manager.list_units().await.map_err(UnitMonitorError::ListUnits)?;
+        let raw = manager
+            .list_units()
+            .await
+            .map_err(UnitMonitorError::ListUnits)?;
         Ok(filter_watched_units(raw, watched))
     }
 }
@@ -90,11 +95,13 @@ impl UnitMonitor {
 fn filter_watched_units(raw: Vec<RawUnitEntry>, watched: &[String]) -> Vec<UnitStatus> {
     raw.into_iter()
         .filter(|(name, ..)| watched.iter().any(|w| w == name))
-        .map(|(name, _description, _load_state, active_state, sub_state, ..)| UnitStatus {
-            name,
-            active_state,
-            sub_state,
-        })
+        .map(
+            |(name, _description, _load_state, active_state, sub_state, ..)| UnitStatus {
+                name,
+                active_state,
+                sub_state,
+            },
+        )
         .collect()
 }
 
@@ -128,14 +135,21 @@ mod tests {
         let result = filter_watched_units(raw, &watched);
 
         assert_eq!(result.len(), 2);
-        assert!(result.iter().any(|u| u.name == "sshd.service" && u.active_state == "active"));
-        assert!(result.iter().any(|u| u.name == "cron.service" && u.sub_state == "dead"));
+        assert!(result
+            .iter()
+            .any(|u| u.name == "sshd.service" && u.active_state == "active"));
+        assert!(result
+            .iter()
+            .any(|u| u.name == "cron.service" && u.sub_state == "dead"));
     }
 
     #[test]
     fn nicht_existierende_beobachtete_unit_erzeugt_keinen_fehler_nur_eine_luecke() {
         let raw = vec![entry("sshd.service", "active", "running")];
-        let watched = vec!["sshd.service".to_string(), "gibt-es-nicht.service".to_string()];
+        let watched = vec![
+            "sshd.service".to_string(),
+            "gibt-es-nicht.service".to_string(),
+        ];
         let result = filter_watched_units(raw, &watched);
         assert_eq!(result.len(), 1);
     }
@@ -156,7 +170,10 @@ mod tests {
         match UnitMonitor::connect().await {
             Ok(monitor) => {
                 let result = monitor.poll(&["dbus.service".to_string()]).await;
-                assert!(result.is_ok(), "ListUnits sollte bei bestehender Verbindung funktionieren");
+                assert!(
+                    result.is_ok(),
+                    "ListUnits sollte bei bestehender Verbindung funktionieren"
+                );
             }
             Err(err) => {
                 eprintln!("kein System-Bus verfügbar, Test übersprungen: {err}");

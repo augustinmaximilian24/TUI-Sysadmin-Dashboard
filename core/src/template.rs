@@ -204,7 +204,11 @@ impl TemplateEngine {
     /// Reihenfolge die zuletzt angelegten, also tendenziell jüngsten und
     /// am wenigsten bestätigten Cluster. Leere Token-Listen werden
     /// übersprungen, da sie keinem gültigen Cluster entsprechen.
-    pub fn restore(snapshot: TemplateSnapshot, similarity_threshold: f64, max_templates: usize) -> Self {
+    pub fn restore(
+        snapshot: TemplateSnapshot,
+        similarity_threshold: f64,
+        max_templates: usize,
+    ) -> Self {
         let mut engine = Self::new(similarity_threshold, max_templates);
         // Stabil nach `order` sortieren: Bestände aus einem Key/Value-Speicher
         // kommen nach Template-ID geordnet an, nicht in Registry-Reihenfolge.
@@ -359,9 +363,18 @@ mod tests {
     #[test]
     fn abweichende_zahlen_werden_von_masken_bereits_vereinheitlicht() {
         let mut engine = TemplateEngine::new(0.7, 100);
-        let a = engine.process("Failed password for root from 203.0.113.9 port 51422 ssh2", 1000);
-        let b = engine.process("Failed password for root from 203.0.113.9 port 51423 ssh2", 1001);
-        assert_eq!(a.id, b.id, "Ports/IPs werden schon durch Masken vereinheitlicht");
+        let a = engine.process(
+            "Failed password for root from 203.0.113.9 port 51422 ssh2",
+            1000,
+        );
+        let b = engine.process(
+            "Failed password for root from 203.0.113.9 port 51423 ssh2",
+            1001,
+        );
+        assert_eq!(
+            a.id, b.id,
+            "Ports/IPs werden schon durch Masken vereinheitlicht"
+        );
     }
 
     #[test]
@@ -369,7 +382,10 @@ mod tests {
         let mut engine = TemplateEngine::new(0.7, 100);
         let a = engine.process("Started backup job for user alice", 1000);
         let b = engine.process("Started backup job for user bob", 1001);
-        assert_eq!(a.id, b.id, "einzelnes abweichendes Token sollte gemergt werden");
+        assert_eq!(
+            a.id, b.id,
+            "einzelnes abweichendes Token sollte gemergt werden"
+        );
         assert!(b.template.contains(WILDCARD));
     }
 
@@ -435,17 +451,28 @@ mod tests {
         let json = serde_json::to_string(&snapshot).expect("serialisierbar");
         let restored_snapshot: TemplateSnapshot =
             serde_json::from_str(&json).expect("deserialisierbar");
-        assert_eq!(restored_snapshot, snapshot, "JSON-Roundtrip muss verlustfrei sein");
+        assert_eq!(
+            restored_snapshot, snapshot,
+            "JSON-Roundtrip muss verlustfrei sein"
+        );
 
         let mut restored = TemplateEngine::restore(restored_snapshot, 0.7, 100);
         assert_eq!(restored.template_count(), vorher_count);
 
         // Das verallgemeinerte Wildcard-Template muss erhalten sein: ein
         // dritter Name landet ohne Neulernen im bestehenden Cluster.
-        let original_id = engine.process("Started backup job for user charlie", 2000).id;
-        let restored_id = restored.process("Started backup job for user charlie", 2000).id;
+        let original_id = engine
+            .process("Started backup job for user charlie", 2000)
+            .id;
+        let restored_id = restored
+            .process("Started backup job for user charlie", 2000)
+            .id;
         assert_eq!(original_id, restored_id);
-        assert!(!restored.process("Started backup job for user dave", 2001).is_new);
+        assert!(
+            !restored
+                .process("Started backup job for user dave", 2001)
+                .is_new
+        );
     }
 
     #[test]
@@ -456,8 +483,14 @@ mod tests {
 
         let mut restored = TemplateEngine::restore(engine.snapshot(), 0.7, 100);
         let m = restored.process("Accepted publickey for admin from 10.0.0.5", 3000);
-        assert_eq!(m.first_seen_us, 1000, "Erstsichtung darf beim Neustart nicht verloren gehen");
-        assert_eq!(m.count, 3, "Zähler muss über den Neustart hinweg weiterzählen");
+        assert_eq!(
+            m.first_seen_us, 1000,
+            "Erstsichtung darf beim Neustart nicht verloren gehen"
+        );
+        assert_eq!(
+            m.count, 3,
+            "Zähler muss über den Neustart hinweg weiterzählen"
+        );
         assert!(!m.is_new);
     }
 
@@ -470,7 +503,11 @@ mod tests {
         assert_eq!(engine.template_count(), 3);
 
         let restored = TemplateEngine::restore(engine.snapshot(), 0.7, 2);
-        assert_eq!(restored.template_count(), 2, "Obergrenze muss beim Wiederherstellen greifen");
+        assert_eq!(
+            restored.template_count(),
+            2,
+            "Obergrenze muss beim Wiederherstellen greifen"
+        );
     }
 
     #[test]
@@ -486,7 +523,11 @@ mod tests {
         let mut verwuerfelt = original.clone();
         verwuerfelt.clusters.sort_by_key(|r| r.id.0);
         assert_ne!(
-            verwuerfelt.clusters.iter().map(|r| r.id).collect::<Vec<_>>(),
+            verwuerfelt
+                .clusters
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
             original.clusters.iter().map(|r| r.id).collect::<Vec<_>>(),
             "Testvoraussetzung: ID-Sortierung muss die Reihenfolge tatsächlich ändern"
         );

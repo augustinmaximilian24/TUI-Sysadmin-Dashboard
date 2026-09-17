@@ -120,7 +120,10 @@ impl SharedState {
     /// Einträge auf (Regel 18: kein unbeschränktes Wachstum), da Aktionen
     /// selten genug sind, dass ein Full-Scan hier nicht ins Gewicht fällt.
     pub fn is_self_filtered(&self, unit: Option<&str>, pid: Option<i32>, now_us: u64) -> bool {
-        let mut filter = self.self_filter.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut filter = self
+            .self_filter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         filter.retain(|_, expiry| *expiry > now_us);
         unit.is_some_and(|u| filter.contains_key(&SelfFilterKey::Unit(u.to_string())))
             || pid.is_some_and(|p| filter.contains_key(&SelfFilterKey::Pid(p)))
@@ -140,7 +143,10 @@ impl SharedState {
     /// Eintragen). Räumt abgelaufene Einträge wie [`Self::is_self_filtered`]
     /// beiläufig auf.
     pub fn is_muted(&self, template_id: u64, unit: Option<&str>, now_us: u64) -> bool {
-        let mut store = self.mute_store.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut store = self
+            .mute_store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         store.retain(|_, expiry| *expiry > now_us);
         store.contains_key(&(template_id, unit.map(str::to_string)))
             || store.contains_key(&(template_id, None))

@@ -154,10 +154,11 @@ impl BaselineStore {
         let bucket = timestamp_us / self.bucket_us;
         let slot = Slot::from_timestamp_us(timestamp_us);
 
-        self.unit_profiles
-            .entry(unit_key)
-            .or_default()
-            .observe(template, bucket, &self.profile_config);
+        self.unit_profiles.entry(unit_key).or_default().observe(
+            template,
+            bucket,
+            &self.profile_config,
+        );
 
         let hist_config = self.hist_config;
         let max_known = self.max_known_templates;
@@ -253,7 +254,9 @@ impl BaselineStore {
     /// vertrauenswürdig ist. Der Daemon nutzt dies, um die globale
     /// Lernphase nach dem Laden persistierter Baselines zu überspringen.
     pub fn has_trusted_baselines(&self) -> bool {
-        self.histograms.values().any(|hist| hist.is_trusted(self.min_weight))
+        self.histograms
+            .values()
+            .any(|hist| hist.is_trusted(self.min_weight))
             || self
                 .unit_profiles
                 .values()
@@ -309,7 +312,11 @@ impl BaselineStore {
     /// rechtfertigt.
     pub fn snapshot(&self) -> BaselineSnapshot {
         BaselineSnapshot {
-            histograms: self.histograms.iter().map(|(key, hist)| (*key, hist.clone())).collect(),
+            histograms: self
+                .histograms
+                .iter()
+                .map(|(key, hist)| (*key, hist.clone()))
+                .collect(),
             profiles: self
                 .unit_profiles
                 .iter()
@@ -319,7 +326,11 @@ impl BaselineStore {
     }
 
     /// Baut einen Store aus einem zuvor erstellten Schnappschuss wieder auf.
-    pub fn restore(snapshot: BaselineSnapshot, bucket_seconds: u64, config: &BaselineConfig) -> Self {
+    pub fn restore(
+        snapshot: BaselineSnapshot,
+        bucket_seconds: u64,
+        config: &BaselineConfig,
+    ) -> Self {
         let mut store = Self::new(bucket_seconds, config);
         store.histograms = snapshot.histograms.into_iter().collect();
         store.unit_profiles = snapshot.profiles.into_iter().collect();
@@ -327,7 +338,12 @@ impl BaselineStore {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_histogram_weight(&self, unit_key: u64, template: TemplateId, slot: Slot) -> f64 {
+    pub(crate) fn test_histogram_weight(
+        &self,
+        unit_key: u64,
+        template: TemplateId,
+        slot: Slot,
+    ) -> f64 {
         self.histograms
             .get(&BaselineKey {
                 unit_key,
@@ -385,14 +401,20 @@ fn observe_both_slots(
     bucket: u64,
     hist_config: &HistogramConfig,
 ) {
-    histograms.entry(key).or_default().observe(count, bucket, hist_config);
+    histograms
+        .entry(key)
+        .or_default()
+        .observe(count, bucket, hist_config);
 
     if key.slot != Slot::ANY {
         let any_key = BaselineKey {
             slot: Slot::ANY,
             ..key
         };
-        histograms.entry(any_key).or_default().observe(count, bucket, hist_config);
+        histograms
+            .entry(any_key)
+            .or_default()
+            .observe(count, bucket, hist_config);
     }
 }
 
@@ -475,7 +497,7 @@ mod tests {
         // Bucket 0: X und Y feuern gemeinsam.
         store.record(t(0), 1, tid(1)); // X
         store.record(t(0), 1, tid(2)); // Y
-        // Bucket 5: nur Y feuert (aktiver Bucket, X bleibt stumm).
+                                       // Bucket 5: nur Y feuert (aktiver Bucket, X bleibt stumm).
         store.record(t(5), 1, tid(2));
         // Bucket 10: erneut Y -> schließt Bucket 5 ab.
         store.record(t(10), 1, tid(2));
@@ -485,15 +507,22 @@ mod tests {
             (store.test_histogram_weight(1, tid(1), slot) - 2.0).abs() < 1e-6,
             "X sollte in Bucket 5 eine Nullbeobachtung bekommen haben"
         );
-        let (median_x, _) = store.test_histogram_median_mad(1, tid(1), slot).expect("Histogramm vorhanden");
+        let (median_x, _) = store
+            .test_histogram_median_mad(1, tid(1), slot)
+            .expect("Histogramm vorhanden");
         assert!(
             (median_x - 0.5).abs() < 1e-6,
             "Median aus {{1,0}} sollte 0.5 sein, war {median_x}"
         );
 
         // Y: "1" aus Bucket 0, "1" aus Bucket 5 -> Gewicht 2, kein Nullwert.
-        let (median_y, mad_y) = store.test_histogram_median_mad(1, tid(2), slot).expect("Histogramm vorhanden");
-        assert!((median_y - 1.0).abs() < 1e-6, "Y feuerte immer, Median sollte 1 sein");
+        let (median_y, mad_y) = store
+            .test_histogram_median_mad(1, tid(2), slot)
+            .expect("Histogramm vorhanden");
+        assert!(
+            (median_y - 1.0).abs() < 1e-6,
+            "Y feuerte immer, Median sollte 1 sein"
+        );
         assert!((mad_y - 0.0).abs() < 1e-6);
     }
 
@@ -529,9 +558,14 @@ mod tests {
             store.record(t(bucket * 2 + 1), 1, tid(99)); // Fülltemplate zum Schließen
         }
 
-        let (z, source) = store.rate_z(t(20), 1, tid(1), 40).expect("sollte trainiert sein");
+        let (z, source) = store
+            .rate_z(t(20), 1, tid(1), 40)
+            .expect("sollte trainiert sein");
         assert_eq!(source, RateSource::SlotBaseline);
-        assert!(z > 3.0, "starker Ausschlag sollte hohen Z-Score liefern, war {z}");
+        assert!(
+            z > 3.0,
+            "starker Ausschlag sollte hohen Z-Score liefern, war {z}"
+        );
     }
 
     #[test]
@@ -570,7 +604,9 @@ mod tests {
         for _ in 0..10 {
             store.record(t(0), 1, tid(1));
         }
-        let s = store.surprisal(1, tid(1), 0.5).expect("sollte trainiert sein");
+        let s = store
+            .surprisal(1, tid(1), 0.5)
+            .expect("sollte trainiert sein");
         assert!(s.is_finite());
         assert!(s >= 0.0);
     }

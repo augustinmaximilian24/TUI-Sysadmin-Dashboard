@@ -279,7 +279,10 @@ impl BaselineDb {
         let templates = txn.open_table(TEMPLATES).map_err(redb::Error::from)?;
         for entry in templates.iter().map_err(redb::Error::from)? {
             let (_, value) = entry.map_err(redb::Error::from)?;
-            state.templates.clusters.push(serde_json::from_str(value.value())?);
+            state
+                .templates
+                .clusters
+                .push(serde_json::from_str(value.value())?);
             any = true;
         }
 
@@ -287,7 +290,10 @@ impl BaselineDb {
         for entry in baselines.iter().map_err(redb::Error::from)? {
             let (key, value) = entry.map_err(redb::Error::from)?;
             let hist: CountHistogram = serde_json::from_str(value.value())?;
-            state.baselines.histograms.push((unpack_key(key.value()), hist));
+            state
+                .baselines
+                .histograms
+                .push((unpack_key(key.value()), hist));
             any = true;
         }
 
@@ -311,9 +317,7 @@ impl BaselineDb {
         let txn = self.db.begin_write().map_err(redb::Error::from)?;
         {
             let mut templates = txn.open_table(TEMPLATES).map_err(redb::Error::from)?;
-            templates
-                .retain(|_, _| false)
-                .map_err(redb::Error::from)?;
+            templates.retain(|_, _| false).map_err(redb::Error::from)?;
             for record in &state.templates.clusters {
                 let json = serde_json::to_string(record)?;
                 templates
@@ -322,9 +326,7 @@ impl BaselineDb {
             }
 
             let mut baselines = txn.open_table(BASELINES).map_err(redb::Error::from)?;
-            baselines
-                .retain(|_, _| false)
-                .map_err(redb::Error::from)?;
+            baselines.retain(|_, _| false).map_err(redb::Error::from)?;
             for (key, hist) in &state.baselines.histograms {
                 let json = serde_json::to_string(hist)?;
                 baselines
@@ -333,9 +335,7 @@ impl BaselineDb {
             }
 
             let mut profiles = txn.open_table(UNIT_PROFILES).map_err(redb::Error::from)?;
-            profiles
-                .retain(|_, _| false)
-                .map_err(redb::Error::from)?;
+            profiles.retain(|_, _| false).map_err(redb::Error::from)?;
             for (unit_key, profile) in &state.baselines.profiles {
                 let json = serde_json::to_string(profile)?;
                 profiles
@@ -358,7 +358,9 @@ impl BaselineDb {
         let dump = Dump {
             schema_version: self.read_schema_version()?.unwrap_or(SCHEMA_VERSION),
             hostname: self.read_meta(META_HOSTNAME)?,
-            created_us: self.read_meta(META_CREATED_US)?.and_then(|s| s.parse().ok()),
+            created_us: self
+                .read_meta(META_CREATED_US)?
+                .and_then(|s| s.parse().ok()),
             last_snapshot_us: self
                 .read_meta(META_LAST_SNAPSHOT_US)?
                 .and_then(|s| s.parse().ok()),
@@ -476,8 +478,14 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
         let db = BaselineDb::open(&path, "testhost").expect("öffnen");
-        assert_eq!(db.read_schema_version().expect("meta"), Some(SCHEMA_VERSION));
-        assert_eq!(db.read_meta(META_HOSTNAME).expect("meta").as_deref(), Some("testhost"));
+        assert_eq!(
+            db.read_schema_version().expect("meta"),
+            Some(SCHEMA_VERSION)
+        );
+        assert_eq!(
+            db.read_meta(META_HOSTNAME).expect("meta").as_deref(),
+            Some("testhost")
+        );
         assert!(db.load().expect("laden").is_none());
     }
 
@@ -488,7 +496,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
         let _db = BaselineDb::open(&path, "testhost").expect("öffnen");
-        let mode = std::fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(mode, 0o600, "Modus war {mode:o}");
     }
 
@@ -565,7 +577,10 @@ mod tests {
             db.write_meta(META_SCHEMA_VERSION, "0").expect("meta");
         }
         let err = BaselineDb::open(&path, "testhost").expect_err("kein Migrationspfad");
-        assert!(matches!(err, PersistError::NoMigrationPath(0)), "war {err:?}");
+        assert!(
+            matches!(err, PersistError::NoMigrationPath(0)),
+            "war {err:?}"
+        );
         assert!(
             dir.path().join("baselines.redb.bak-0").exists(),
             "vor der Migration muss eine Sicherung existieren"
@@ -587,7 +602,11 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().into_owned())
             .filter(|n| n.starts_with("baselines.redb.corrupt-"))
             .collect();
-        assert_eq!(verschoben.len(), 1, "genau eine verschobene Datei erwartet: {verschoben:?}");
+        assert_eq!(
+            verschoben.len(),
+            1,
+            "genau eine verschobene Datei erwartet: {verschoben:?}"
+        );
     }
 
     #[test]

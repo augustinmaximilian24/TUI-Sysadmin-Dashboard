@@ -84,14 +84,18 @@ pub fn parse_journal_line(line: &str) -> Result<JournalEvent, JournalParseError>
         .and_then(|value| value.parse::<u64>().ok())
         .ok_or(JournalParseError::MissingTimestamp)?;
 
-    let pid = raw.pid.as_deref().and_then(|value| value.parse::<i32>().ok());
-    let priority = raw.priority.as_deref().and_then(|value| value.parse::<u8>().ok());
+    let pid = raw
+        .pid
+        .as_deref()
+        .and_then(|value| value.parse::<i32>().ok());
+    let priority = raw
+        .priority
+        .as_deref()
+        .and_then(|value| value.parse::<u8>().ok());
 
     let (message, message_was_binary) = match raw.message {
         Some(RawMessage::Text(text)) => (text, false),
-        Some(RawMessage::Bytes(bytes)) => {
-            (String::from_utf8_lossy(&bytes).into_owned(), true)
-        }
+        Some(RawMessage::Bytes(bytes)) => (String::from_utf8_lossy(&bytes).into_owned(), true),
         None => (String::new(), false),
     };
 

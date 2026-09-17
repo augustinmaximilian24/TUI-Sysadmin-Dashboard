@@ -266,7 +266,8 @@ mod tests {
         // Vernachlässigbarkeitsschwelle und muss verschwinden.
         hist.observe(9, 1000, &cfg);
         assert!(
-            hist.median_mad().is_some_and(|(m, _)| (m - 9.0).abs() < 1e-9),
+            hist.median_mad()
+                .is_some_and(|(m, _)| (m - 9.0).abs() < 1e-9),
             "die uralte Beobachtung darf den Median nicht mehr verfälschen"
         );
     }

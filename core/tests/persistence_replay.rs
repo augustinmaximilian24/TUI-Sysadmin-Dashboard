@@ -26,7 +26,9 @@ fn fixture_events() -> Vec<JournalEvent> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/anomaly_replay.ndjson");
     let raw = fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("Fixture {path:?} nicht lesbar: {err}"));
-    raw.lines().filter_map(|line| parse_journal_line(line).ok()).collect()
+    raw.lines()
+        .filter_map(|line| parse_journal_line(line).ok())
+        .collect()
 }
 
 fn test_config() -> Config {
@@ -106,7 +108,9 @@ fn assert_angriffe_erkannt(report: &Report, lauf: &str) {
         "{lauf}: Bruteforce muss bis critical eskalieren"
     );
     assert!(
-        report.iter().any(|(_, _, m)| m.contains("due to memory pressure")),
+        report
+            .iter()
+            .any(|(_, _, m)| m.contains("due to memory pressure")),
         "{lauf}: OOM-Kill muss erkannt werden"
     );
 }
@@ -117,7 +121,10 @@ fn zweiter_lauf_aus_persistenz_ist_identisch_zum_in_memory_lauf_und_ohne_lernpha
 
     // Lauf 1: aus dem Nichts.
     let erster = run(&config, None);
-    assert!(erster.learning_at_first_event, "Lauf 1 muss mit Lernphase beginnen");
+    assert!(
+        erster.learning_at_first_event,
+        "Lauf 1 muss mit Lernphase beginnen"
+    );
     assert_angriffe_erkannt(&erster.report, "Lauf 1");
     assert!(
         !erster.state.baselines.profiles.is_empty(),

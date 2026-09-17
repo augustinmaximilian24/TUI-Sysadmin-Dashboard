@@ -293,7 +293,10 @@ async fn main() -> anyhow::Result<()> {
     // Der Systemzustands-Task hat keinen Zustand, der beim Beenden
     // gesichert werden müsste (anders als die Pipeline) -- er wird beim
     // Herunterfahren einfach abgebrochen, statt auf sein Ende zu warten.
-    let system_monitor = tokio::spawn(run_system_monitor(config.system.clone(), Arc::clone(&state)));
+    let system_monitor = tokio::spawn(run_system_monitor(
+        config.system.clone(),
+        Arc::clone(&state),
+    ));
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let server_task = tokio::spawn(server::run(

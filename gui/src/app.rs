@@ -229,7 +229,10 @@ impl eframe::App for LogsentryApp {
         // Nur während des Reconnects erneut aufwecken, damit die
         // Sekundenanzeige der Wartezeit weiterläuft, ohne in den
         // Continuous-Modus zu wechseln (Regel 20).
-        if !matches!(self.render.connection, Some(ConnectionState::Connected { .. })) {
+        if !matches!(
+            self.render.connection,
+            Some(ConnectionState::Connected { .. })
+        ) {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
@@ -286,12 +289,20 @@ impl LogsentryApp {
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .button(if self.dark_mode { "☀ Hell" } else { "🌙 Dunkel" })
+                        .button(if self.dark_mode {
+                            "☀ Hell"
+                        } else {
+                            "🌙 Dunkel"
+                        })
                         .clicked()
                     {
                         self.dark_mode = !self.dark_mode;
                     }
-                    let pause_label = if self.paused { "▶ Fortsetzen" } else { "⏸ Pause" };
+                    let pause_label = if self.paused {
+                        "▶ Fortsetzen"
+                    } else {
+                        "⏸ Pause"
+                    };
                     if ui.button(pause_label).clicked() {
                         self.paused = !self.paused;
                     }
@@ -306,7 +317,12 @@ impl LogsentryApp {
             .default_width(260.0)
             .show(ctx, |ui| {
                 ui.heading("Systemzustand");
-                match self.render.snapshot.as_ref().and_then(|s| s.system.as_ref()) {
+                match self
+                    .render
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.system.as_ref())
+                {
                     None => {
                         ui.label("noch keine Messung");
                     }
@@ -403,7 +419,10 @@ impl LogsentryApp {
 
                 ui.label(format!("ID {}", anomaly.id));
                 ui.label(format!("Unit: {}", anomaly.unit.as_deref().unwrap_or("–")));
-                ui.label(format!("PID: {}", anomaly.pid.map_or("–".to_string(), |p| p.to_string())));
+                ui.label(format!(
+                    "PID: {}",
+                    anomaly.pid.map_or("–".to_string(), |p| p.to_string())
+                ));
                 ui.label(format!("Level: {:?}", anomaly.level));
                 ui.label(format!("Template: {}", anomaly.template_text));
                 ui.label(format!("Beispielzeile: {}", anomaly.sample_message));
@@ -488,7 +507,10 @@ impl LogsentryApp {
             if allowed.contains(&ActionKind::RestartUnit) {
                 if let Ok(unit_name) = UnitName::parse(unit) {
                     if ui
-                        .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::RestartUnit)))
+                        .add_enabled(
+                            connected,
+                            egui::Button::new(action_kind_label(ActionKind::RestartUnit)),
+                        )
                         .clicked()
                     {
                         self.pending_confirmation = Some(PendingConfirmation {
@@ -501,7 +523,10 @@ impl LogsentryApp {
             if allowed.contains(&ActionKind::StopUnit) {
                 if let Ok(unit_name) = UnitName::parse(unit) {
                     if ui
-                        .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::StopUnit)))
+                        .add_enabled(
+                            connected,
+                            egui::Button::new(action_kind_label(ActionKind::StopUnit)),
+                        )
                         .clicked()
                     {
                         self.pending_confirmation = Some(PendingConfirmation {
@@ -516,7 +541,10 @@ impl LogsentryApp {
         if let Some(pid) = anomaly.pid {
             if allowed.contains(&ActionKind::TerminateProcess)
                 && ui
-                    .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::TerminateProcess)))
+                    .add_enabled(
+                        connected,
+                        egui::Button::new(action_kind_label(ActionKind::TerminateProcess)),
+                    )
                     .clicked()
             {
                 self.pending_confirmation = Some(PendingConfirmation {
@@ -537,7 +565,10 @@ impl LogsentryApp {
                     ("1 Tag", MuteScope::OneDay),
                     ("dauerhaft", MuteScope::Permanent),
                 ] {
-                    if ui.add_enabled(connected, egui::Button::new(label)).clicked() {
+                    if ui
+                        .add_enabled(connected, egui::Button::new(label))
+                        .clicked()
+                    {
                         self.pending_confirmation = Some(PendingConfirmation {
                             description: format!(
                                 "Template „{}“{} für {label} stummschalten?",

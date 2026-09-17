@@ -8,8 +8,7 @@ use std::fs;
 use std::path::Path;
 
 fn load_corpus() -> Vec<String> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/normalize_corpus.txt");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/normalize_corpus.txt");
     fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("Fixture {path:?} konnte nicht gelesen werden: {err}"))
         .lines()
@@ -47,12 +46,18 @@ fn kompression_ueber_reale_beispielzeilen() {
 
     // Gezielte Stichproben bekannter Duplikat-Paare (0-indiziert):
     // Zeile 0/1: "Accepted publickey ... from <verschiedene IP>" -> gleiche IDs.
-    assert_eq!(ids[0], ids[1], "unterschiedliche IPs sollten dasselbe Template ergeben");
+    assert_eq!(
+        ids[0], ids[1],
+        "unterschiedliche IPs sollten dasselbe Template ergeben"
+    );
 
     // Zeile 2-5: "Failed password ..." mit wechselnder IP/Port/Nutzername.
     assert_eq!(ids[2], ids[3]);
     assert_eq!(ids[2], ids[4]);
-    assert_eq!(ids[2], ids[5], "ein abweichendes Token von mehreren sollte noch mergen");
+    assert_eq!(
+        ids[2], ids[5],
+        "ein abweichendes Token von mehreren sollte noch mergen"
+    );
 
     // Zeile 6/7: "sshd[PID]: Connection closed ..." unterschiedliche PID/Port.
     assert_eq!(ids[6], ids[7]);

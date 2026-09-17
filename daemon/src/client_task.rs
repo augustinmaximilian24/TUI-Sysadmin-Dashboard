@@ -370,7 +370,10 @@ async fn handle_client_message<W>(
                 .await;
             send_message(
                 writer,
-                &ServerMessage::ActionResult { request_id, outcome },
+                &ServerMessage::ActionResult {
+                    request_id,
+                    outcome,
+                },
             )
             .await;
         }
@@ -536,7 +539,9 @@ mod tests {
         state: Arc<SharedState>,
         max_clients: u32,
     ) -> (std::path::PathBuf, tempfile::TempDir, watch::Sender<bool>) {
-        let actions = Arc::new(ActionExecutor::new(logsentry_core::config::ActionsConfig::default()));
+        let actions = Arc::new(ActionExecutor::new(
+            logsentry_core::config::ActionsConfig::default(),
+        ));
         spawn_server_with_actions(state, max_clients, actions).await
     }
 

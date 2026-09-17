@@ -141,10 +141,11 @@ impl Pipeline {
             self.self_filtered += 1;
             return;
         }
-        if self
-            .state
-            .is_muted(matched.id.0, event.systemd_unit.as_deref(), event.realtime_timestamp_us)
-        {
+        if self.state.is_muted(
+            matched.id.0,
+            event.systemd_unit.as_deref(),
+            event.realtime_timestamp_us,
+        ) {
             self.muted += 1;
             return;
         }
@@ -388,14 +389,15 @@ mod tests {
     #[test]
     fn selbstgefilterte_unit_wird_gezaehlt_aber_nicht_analysiert() {
         let mut pipeline = test_pipeline();
-        pipeline
-            .state
-            .suppress_unit("sshd.service", u64::MAX);
+        pipeline.state.suppress_unit("sshd.service", u64::MAX);
 
         pipeline.handle(&event("sshd.service", 100, "Failed password for root", 1));
 
         assert_eq!(pipeline.self_filtered, 1);
-        assert_eq!(pipeline.events, 1, "Ereignis zählt trotzdem als verarbeitet");
+        assert_eq!(
+            pipeline.events, 1,
+            "Ereignis zählt trotzdem als verarbeitet"
+        );
         assert_eq!(
             pipeline.engine.stats().processed,
             0,

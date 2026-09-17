@@ -75,7 +75,9 @@ fn ipv4_re() -> &'static Regex {
 
 fn hex_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^0[xX][0-9a-fA-F]+$").expect("statischer Hex-Regex muss kompilieren"))
+    RE.get_or_init(|| {
+        Regex::new(r"^0[xX][0-9a-fA-F]+$").expect("statischer Hex-Regex muss kompilieren")
+    })
 }
 
 fn path_re() -> &'static Regex {
@@ -191,10 +193,7 @@ mod tests {
 
     #[test]
     fn maskiert_uuid() {
-        assert_eq!(
-            mask_token("550e8400-e29b-41d4-a716-446655440000"),
-            "<UUID>"
-        );
+        assert_eq!(mask_token("550e8400-e29b-41d4-a716-446655440000"), "<UUID>");
     }
 
     #[test]

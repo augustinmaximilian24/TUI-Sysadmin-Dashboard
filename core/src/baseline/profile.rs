@@ -95,12 +95,16 @@ impl UnitProfile {
     }
 
     fn prune_negligible(&mut self) {
-        self.counts.retain(|(_, weight)| *weight >= NEGLIGIBLE_WEIGHT);
+        self.counts
+            .retain(|(_, weight)| *weight >= NEGLIGIBLE_WEIGHT);
     }
 
     /// Summe aller Template-Gewichte.
     pub fn total_weight(&self) -> f64 {
-        self.counts.iter().map(|(_, weight)| f64::from(*weight)).sum()
+        self.counts
+            .iter()
+            .map(|(_, weight)| f64::from(*weight))
+            .sum()
     }
 
     /// Gewicht eines einzelnen Templates (0.0, falls unbekannt).
@@ -212,7 +216,10 @@ mod tests {
         profile.observe(tid(4), 0, &cfg);
 
         assert!(profile.distinct_templates() <= 3, "Obergrenze verletzt");
-        assert!(profile.weight_of(tid(1)) > 0.0, "das schwerste Template darf nicht verworfen werden");
+        assert!(
+            profile.weight_of(tid(1)) > 0.0,
+            "das schwerste Template darf nicht verworfen werden"
+        );
     }
 
     #[test]
@@ -236,7 +243,10 @@ mod tests {
         let s = profile
             .surprisal(tid(1), 0.5, 200.0)
             .expect("Profil sollte vertrauenswürdig sein");
-        assert!(s < 1.0, "häufiges Template sollte niedriges Surprisal haben, war {s}");
+        assert!(
+            s < 1.0,
+            "häufiges Template sollte niedriges Surprisal haben, war {s}"
+        );
     }
 
     #[test]
@@ -249,7 +259,9 @@ mod tests {
         for _ in 0..900 {
             profile.observe(tid(2), 0, &cfg);
         }
-        let aus_profil = profile.surprisal(tid(1), 0.5, 10.0).expect("vertrauenswürdig");
+        let aus_profil = profile
+            .surprisal(tid(1), 0.5, 10.0)
+            .expect("vertrauenswürdig");
         let erwartet = crate::analysis::stats::surprisal(100, 1000, 2, 0.5);
         assert!(
             (aus_profil - erwartet).abs() < 1e-6,
@@ -267,6 +279,9 @@ mod tests {
         let s = profile
             .surprisal(tid(999), 0.5, 200.0)
             .expect("Profil sollte vertrauenswürdig sein");
-        assert!(s > 5.0, "unbekanntes Template sollte hohes Surprisal haben, war {s}");
+        assert!(
+            s > 5.0,
+            "unbekanntes Template sollte hohes Surprisal haben, war {s}"
+        );
     }
 }
