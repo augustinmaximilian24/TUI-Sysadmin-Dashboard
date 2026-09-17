@@ -1,0 +1,37 @@
+[Unit]
+Description=logsentry Collector – Log-Anomalie-Erkennung
+Documentation=https://github.com/augustinmaximilian24/TUI-Sysadmin-Dashboard
+After=network.target systemd-journald.service dbus.service
+Wants=systemd-journald.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/logsentry-daemon --config /etc/logsentry/logsentry.toml
+Restart=on-failure
+RestartSec=5
+
+# Ressourcenbeschränkung (Regel 27: Zielwert < 1 % CPU im Leerlauf; diese
+# Direktiven begrenzen den Worst Case, nicht den Normalbetrieb).
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+
+# /run/logsentry (Socket) und /var/lib/logsentry (Baselines, Audit-Log)
+# werden von systemd mit den richtigen Rechten angelegt/entfernt --
+# beide sind automatisch von ProtectSystem=strict ausgenommen.
+RuntimeDirectory=logsentry
+StateDirectory=logsentry
+StateDirectoryMode=0750
+
+# Härtung. Läuft bewusst als root: RestartUnit/StopUnit über D-Bus
+# verlangen ohne zusätzliche polkit-Regel für einen unprivilegierten
+# Systembenutzer die Autorisierung des System-Bus, die root automatisch
+# hat, und BlockIp braucht CAP_NET_ADMIN für nft. ProtectSystem/
+# ProtectHome/NoNewPrivileges schränken trotzdem ein, was der Prozess
+# anfassen bzw. an zusätzlichen Rechten hinzugewinnen kann.
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+# Beispiel-Konfiguration für logsentry. Jedes Feld hat einen Default
+# (siehe core/src/config.rs); diese Datei muss nur die Werte enthalten,
+# die vom Default abweichen sollen. Wird sie nicht gefunden, startet der
+# Daemon trotzdem -- mit sicheren Vorgaben (u. a. [actions] komplett
+# deaktiviert).
+
+[socket]
+# Default passt für die meisten Installationen (RuntimeDirectory=logsentry
+# aus der systemd-Unit legt /run/logsentry an).
+path = "/run/logsentry/collector.sock"
+group = "logsentry"
+
+[system]
+# Units, deren Status im Systemzustands-Panel erscheint.
+watched_units = ["sshd.service", "cron.service", "logsentry.service"]
+
+[actions]
+# Nichts davon greift, solange dry_run = true bleibt: der Daemon prüft
+# Allow-List und Rate-Limit ganz normal, protokolliert das Ergebnis im
+# Audit-Log, führt aber nie eine echte Aktion aus (Regel 26). Erst nach
+# bewusster Prüfung auf false setzen.
+dry_run = true
+
+# Was grundsätzlich erlaubt ist. Leer = alles wird mit Denied(NotAllowed)
+# abgelehnt (Regel 9). Werte: "restart_unit", "stop_unit",
+# "terminate_process", "block_ip", "mute_anomaly".
+allowed_kinds = []
+
+# Nur für restart_unit/stop_unit: welche Units angefasst werden dürfen.
+# Exakter Namensvergleich, keine Muster.
+allowed_units = []
+
+# Rate-Limit (Regel 14): z. B. maximal 3 Versuche je Aktionsart und Ziel
+# innerhalb von 10 Minuten, danach Denied(RateLimited).
+rate_limit_max_actions = 3
+rate_limit_window_minutes = 10

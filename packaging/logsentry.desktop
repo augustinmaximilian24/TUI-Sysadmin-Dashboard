@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=logsentry
+Comment=Sysadmin-Dashboard mit Log-Anomalie-Erkennung
+Exec=/usr/local/bin/logsentry-gui
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=true
