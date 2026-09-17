@@ -34,9 +34,20 @@ type RawUnitEntry = (
     default_path = "/org/freedesktop/systemd1",
     interface = "org.freedesktop.systemd1.Manager"
 )]
-trait SystemdManager {
+pub(crate) trait SystemdManager {
     #[zbus(name = "ListUnits")]
     fn list_units(&self) -> zbus::Result<Vec<RawUnitEntry>>;
+
+    /// Startet eine Unit neu (`mode = "replace"`, wie `systemctl restart`).
+    /// Genutzt von `daemon::actions` (Phase 8) statt `Command::new("systemctl")`
+    /// (Regel 10); die Autorisierung läuft über die D-Bus/polkit-Policy des
+    /// System-Bus.
+    #[zbus(name = "RestartUnit")]
+    fn restart_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// Stoppt eine Unit (`mode = "replace"`, wie `systemctl stop`).
+    #[zbus(name = "StopUnit")]
+    fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
 /// Fehler der Unit-Statusabfrage.

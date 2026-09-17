@@ -18,9 +18,13 @@ use std::io::Write;
 use std::sync::Mutex;
 
 use serde::Serialize;
+use zbus::Connection;
 
 use logsentry_core::config::ActionsConfig;
 use logsentry_proto::{ActionOutcome, ActionRequest, DenyReason};
+
+use crate::state::SharedState;
+use crate::units::SystemdManagerProxy;
 
 /// Führt Aktionsanfragen aus: Allow-List, Rate-Limit, Audit-Log, Dispatch.
 ///
@@ -80,6 +84,7 @@ impl ActionExecutor {
         request_id: u64,
         session_id: u64,
         now_us: u64,
+        state: &SharedState,
     ) -> ActionOutcome {
         let kind = action_kind_str(action);
         let target = action_target(action);
@@ -118,19 +123,60 @@ impl ActionExecutor {
             return outcome;
         }
 
-        // Schritt 3: Allow-List und Rate-Limit sind scharf, die
-        // tatsächliche Ausführung (D-Bus/Signal/nft/Mute-Speicher) folgt
-        // in den Schritten 4-7. `self.config.dry_run` wird dann hier
-        // ausgewertet; bis dahin ist jede erlaubte Anfrage faktisch
-        // Dry-Run.
-        let outcome = ActionOutcome::Completed {
-            message: format!(
-                "{kind} für {target}: Allow-List und Rate-Limit bestanden, echte Ausführung folgt in einem späteren Umsetzungsschritt"
-            ),
-            dry_run: true,
+        let outcome = match action {
+            ActionRequest::RestartUnit { unit } => {
+                self.dispatch_unit_action(unit.as_str(), false, now_us, state).await
+            }
+            ActionRequest::StopUnit { unit } => {
+                self.dispatch_unit_action(unit.as_str(), true, now_us, state).await
+            }
+            // Schritt 5-7 implementieren TerminateProcess/BlockIp/MuteAnomaly.
+            // Bis dahin bestätigt eine erlaubte, nicht rate-limitierte
+            // Anfrage nur, dass sie prinzipiell ausführbar wäre.
+            _ => ActionOutcome::Completed {
+                message: format!(
+                    "{kind} für {target}: Allow-List und Rate-Limit bestanden, echte Ausführung folgt in einem späteren Umsetzungsschritt"
+                ),
+                dry_run: true,
+            },
         };
         self.audit(ctx, &outcome, now_us);
         outcome
+    }
+
+    /// Führt `RestartUnit`/`StopUnit` aus (Schritt 4): im globalen Dry-Run
+    /// nur eine Bestätigung ohne D-Bus-Aufruf, sonst echter Aufruf über
+    /// `org.freedesktop.systemd1.Manager` mit anschließendem
+    /// Selbstfilter-Eintrag für die Ziel-Unit (Regel 13).
+    async fn dispatch_unit_action(
+        &self,
+        unit: &str,
+        stop: bool,
+        now_us: u64,
+        state: &SharedState,
+    ) -> ActionOutcome {
+        let kind = if stop { "stop_unit" } else { "restart_unit" };
+
+        if self.config.dry_run {
+            return ActionOutcome::Completed {
+                message: format!("Dry-Run: {kind} für {unit} würde jetzt ausgeführt"),
+                dry_run: true,
+            };
+        }
+
+        match restart_or_stop_unit_via_dbus(unit, stop).await {
+            Ok(()) => {
+                let until_us = now_us.saturating_add(
+                    self.config.self_filter_window_secs.saturating_mul(1_000_000),
+                );
+                state.suppress_unit(unit, until_us);
+                ActionOutcome::Completed {
+                    message: format!("{kind} für {unit} ausgeführt"),
+                    dry_run: false,
+                }
+            }
+            Err(message) => ActionOutcome::Failed { message },
+        }
     }
 
     /// Prüft und aktualisiert das Rate-Limit für `key`. `Some(retry_after)`
@@ -235,6 +281,24 @@ fn action_target(action: &ActionRequest) -> String {
     }
 }
 
+/// Ruft `RestartUnit`/`StopUnit` über den System-D-Bus auf (Regel 10:
+/// nicht `Command::new("systemctl")`). Verbindungsaufbau je Aufruf statt
+/// einer gehaltenen Verbindung -- Aktionen sind selten genug, dass das
+/// nicht ins Gewicht fällt, und ein Fehlschlag hier betrifft nicht den
+/// unabhängigen `UnitMonitor` aus Phase 5.
+async fn restart_or_stop_unit_via_dbus(unit: &str, stop: bool) -> Result<(), String> {
+    let connection = Connection::system().await.map_err(|err| err.to_string())?;
+    let manager = SystemdManagerProxy::new(&connection)
+        .await
+        .map_err(|err| err.to_string())?;
+    let result = if stop {
+        manager.stop_unit(unit, "replace").await
+    } else {
+        manager.restart_unit(unit, "replace").await
+    };
+    result.map(|_job_path| ()).map_err(|err| err.to_string())
+}
+
 /// Der Unit-Name, falls `action` eine `RestartUnit`/`StopUnit`-Anfrage ist
 /// -- für den zusätzlichen Abgleich gegen `allowed_units`.
 fn restart_or_stop_unit_name(action: &ActionRequest) -> Option<&str> {
@@ -260,6 +324,41 @@ mod tests {
         }
     }
 
+    fn test_state() -> SharedState {
+        SharedState::new(
+            logsentry_proto::Snapshot {
+                timestamp_us: 0,
+                daemon_uptime_secs: 0,
+                learning: logsentry_proto::LearningState {
+                    active: false,
+                    remaining_secs: None,
+                },
+                stats: logsentry_proto::PipelineStats {
+                    events: 0,
+                    parse_errors: 0,
+                    dropped_overflow: 0,
+                    templates: 0,
+                    anomalies_emitted: 0,
+                    suppressed: 0,
+                    suppressed_learning: 0,
+                    events_per_sec: 0.0,
+                    clients: 0,
+                },
+                window: logsentry_proto::WindowStats {
+                    window_secs: 60,
+                    entropy_bits: 0.0,
+                    entropy_z: 0.0,
+                    events_in_window: 0,
+                    distinct_templates: 0,
+                },
+                system: None,
+                replay: false,
+            },
+            10,
+            10,
+        )
+    }
+
     fn restart(unit: &str) -> ActionRequest {
         ActionRequest::RestartUnit {
             unit: UnitName::parse(unit).unwrap(),
@@ -268,9 +367,10 @@ mod tests {
 
     #[tokio::test]
     async fn unbekannte_aktionsart_wird_abgelehnt() {
+        let state = test_state();
         let executor = ActionExecutor::new(config(&[], &[]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0)
+            .execute(&restart("sshd.service"), 1, 1, 0, &state)
             .await;
         assert_eq!(
             outcome,
@@ -282,9 +382,10 @@ mod tests {
 
     #[tokio::test]
     async fn erlaubte_aktionsart_aber_unit_nicht_in_allow_list_wird_abgelehnt() {
+        let state = test_state();
         let executor = ActionExecutor::new(config(&["restart_unit"], &["cron.service"]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0)
+            .execute(&restart("sshd.service"), 1, 1, 0, &state)
             .await;
         assert_eq!(
             outcome,
@@ -296,9 +397,13 @@ mod tests {
 
     #[tokio::test]
     async fn erlaubte_aktion_mit_erlaubter_unit_wird_als_dry_run_bestaetigt() {
+        // Default-Konfiguration ist bewusst dry_run=true (Regel 26: Tests
+        // laufen nur im Dry-Run) -- dieser Test ruft also nie den echten
+        // D-Bus auf.
+        let state = test_state();
         let executor = ActionExecutor::new(config(&["restart_unit"], &["sshd.service"]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0)
+            .execute(&restart("sshd.service"), 1, 1, 0, &state)
             .await;
         match outcome {
             ActionOutcome::Completed { dry_run, .. } => assert!(dry_run),
@@ -308,6 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn vierter_versuch_innerhalb_des_fensters_wird_rate_limitiert() {
+        let state = test_state();
         let mut cfg = config(&["restart_unit"], &["sshd.service"]);
         cfg.rate_limit_max_actions = 3;
         cfg.rate_limit_window_minutes = 10;
@@ -316,13 +422,13 @@ mod tests {
 
         for i in 0..3 {
             let outcome = executor
-                .execute(&restart("sshd.service"), i, 1, i * one_minute_us)
+                .execute(&restart("sshd.service"), i, 1, i * one_minute_us, &state)
                 .await;
             assert!(matches!(outcome, ActionOutcome::Completed { .. }));
         }
 
         let outcome = executor
-            .execute(&restart("sshd.service"), 3, 1, 3 * one_minute_us)
+            .execute(&restart("sshd.service"), 3, 1, 3 * one_minute_us, &state)
             .await;
         assert!(matches!(
             outcome,
@@ -334,12 +440,17 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limit_gilt_pro_ziel_nicht_global() {
+        let state = test_state();
         let mut cfg = config(&["restart_unit"], &["sshd.service", "cron.service"]);
         cfg.rate_limit_max_actions = 1;
         let executor = ActionExecutor::new(cfg);
 
-        let first = executor.execute(&restart("sshd.service"), 1, 1, 0).await;
-        let second = executor.execute(&restart("cron.service"), 2, 1, 0).await;
+        let first = executor
+            .execute(&restart("sshd.service"), 1, 1, 0, &state)
+            .await;
+        let second = executor
+            .execute(&restart("cron.service"), 2, 1, 0, &state)
+            .await;
         assert!(matches!(first, ActionOutcome::Completed { .. }));
         assert!(matches!(second, ActionOutcome::Completed { .. }));
     }
@@ -352,6 +463,7 @@ mod tests {
         // erlaubt, nur eine andere, ebenfalls gezählte Aktionsart wird
         // zwischengeschoben, um zu zeigen, dass derselbe Schlüssel über
         // mehrere `execute`-Aufrufe hinweg konsistent zählt.
+        let state = test_state();
         let mut cfg = config(&["mute_anomaly"], &[]);
         cfg.rate_limit_max_actions = 1;
         let executor = ActionExecutor::new(cfg);
@@ -361,8 +473,8 @@ mod tests {
             unit: None,
             scope: MuteScope::OneHour,
         };
-        let first = executor.execute(&mute, 1, 1, 0).await;
-        let second = executor.execute(&mute, 2, 1, 0).await;
+        let first = executor.execute(&mute, 1, 1, 0, &state).await;
+        let second = executor.execute(&mute, 2, 1, 0, &state).await;
         assert!(matches!(first, ActionOutcome::Completed { .. }));
         assert!(matches!(
             second,
