@@ -727,26 +727,43 @@ fn restart_or_stop_unit_name(action: &ActionRequest) -> Option<&str> {
 /// SIGTERM/SIGKILL dorthin nimmt die ganze Maschine mit. Die eigene PID des
 /// Daemons ist ebenfalls ausgeschlossen, damit eine Aktion den Daemon nicht
 /// mitten im Dispatch beendet, bevor das Ergebnis auditiert werden kann.
+///
+/// Zusätzlich: `MuteAnomaly::unit` ist -- anders als `RestartUnit`/
+/// `StopUnit`, die `UnitName::parse` (Obergrenze 255 Zeichen) durchlaufen
+/// -- ein ungeprüfter `String`. Ohne eigene Längengrenze würde die
+/// Obergrenze von `MAX_MUTE_ENTRIES`/`MAX_RATE_LIMIT_KEYS` (Anzahl
+/// Einträge) den Speicherverbrauch nicht deckeln: ein Client könnte pro
+/// Eintrag bis zu `MAX_CLIENT_LINE_BYTES` (256 KiB) an Unit-String
+/// eintragen und mit 10.000 Einträgen mehrere Gigabyte belegen.
+const MAX_MUTE_UNIT_LEN: usize = 255;
+
 fn invalid_action_parameter(action: &ActionRequest) -> Option<String> {
-    let ActionRequest::TerminateProcess { pid, .. } = action else {
-        return None;
-    };
-    if *pid == 0 {
-        return Some("PID 0 bezeichnet keinen einzelnen Prozess".to_string());
+    match action {
+        ActionRequest::TerminateProcess { pid, .. } => {
+            if *pid == 0 {
+                return Some("PID 0 bezeichnet keinen einzelnen Prozess".to_string());
+            }
+            if *pid == 1 {
+                return Some("PID 1 (init/systemd) darf nicht beendet werden".to_string());
+            }
+            if *pid > i32::MAX as u32 {
+                return Some(format!(
+                    "PID {pid} wäre nach der Umwandlung eine negative Prozess-ID \
+                     (POSIX kill() interpretiert das als Prozessgruppe)"
+                ));
+            }
+            if *pid == std::process::id() {
+                return Some("der Daemon terminiert sich nicht selbst".to_string());
+            }
+            None
+        }
+        ActionRequest::MuteAnomaly {
+            unit: Some(unit), ..
+        } if unit.len() > MAX_MUTE_UNIT_LEN => Some(format!(
+            "Unit-Name ist länger als {MAX_MUTE_UNIT_LEN} Zeichen"
+        )),
+        _ => None,
     }
-    if *pid == 1 {
-        return Some("PID 1 (init/systemd) darf nicht beendet werden".to_string());
-    }
-    if *pid > i32::MAX as u32 {
-        return Some(format!(
-            "PID {pid} wäre nach der Umwandlung eine negative Prozess-ID \
-             (POSIX kill() interpretiert das als Prozessgruppe)"
-        ));
-    }
-    if *pid == std::process::id() {
-        return Some("der Daemon terminiert sich nicht selbst".to_string());
-    }
-    None
 }
 
 #[cfg(test)]
@@ -988,6 +1005,32 @@ mod tests {
                 "PID {pid} hätte abgelehnt werden müssen, war {outcome:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn mute_anomaly_lehnt_ueberlange_unit_namen_ab() {
+        // Regression: MuteAnomaly::unit ist -- anders als RestartUnit/
+        // StopUnit -- ein ungeprüfter String. Ohne eigene Längengrenze
+        // deckelt MAX_MUTE_ENTRIES nur die Anzahl der Einträge, nicht den
+        // Speicherverbrauch: ein Client könnte pro Eintrag bis zu
+        // MAX_CLIENT_LINE_BYTES an Unit-String eintragen.
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&["mute_anomaly"], &[]));
+        let action = ActionRequest::MuteAnomaly {
+            template_id: 1,
+            unit: Some("x".repeat(MAX_MUTE_UNIT_LEN + 1)),
+            scope: MuteScope::OneHour,
+        };
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
+        assert!(
+            matches!(
+                outcome,
+                ActionOutcome::Denied {
+                    reason: DenyReason::InvalidParameter { .. }
+                }
+            ),
+            "war {outcome:?}"
+        );
     }
 
     #[tokio::test]
