@@ -150,6 +150,14 @@ impl ActionExecutor {
             }
         }
 
+        if let Some(message) = invalid_action_parameter(action) {
+            let outcome = ActionOutcome::Denied {
+                reason: DenyReason::InvalidParameter { message },
+            };
+            self.audit(ctx, &outcome, now_us);
+            return outcome;
+        }
+
         let rate_key = format!("{kind}:{target}");
         if let Some(retry_after_secs) = self.check_rate_limit(&rate_key, now_us) {
             let outcome = ActionOutcome::Denied {
@@ -657,6 +665,42 @@ fn restart_or_stop_unit_name(action: &ActionRequest) -> Option<&str> {
     }
 }
 
+/// Prüft Aktionsparameter, die die Allow-List nicht abdecken kann, weil sie
+/// nicht um ein festes Ziel geht, sondern um die Gültigkeit des Werts
+/// selbst. `Some(message)` bei Ablehnung.
+///
+/// `TerminateProcess::pid` ist `u32`, wird aber über `Pid::from_raw(pid as
+/// i32)` an `kill()` gereicht: Werte ab `2^31` werden dabei zu einer
+/// **negativen** `i32`-PID, und POSIX `kill()` interpretiert eine negative
+/// PID als Prozessgruppe -- `pid: u32::MAX` (`-1` nach dem Cast) signalisiert
+/// als root *jeden Prozess auf dem System*, den der Aufrufer signalisieren
+/// darf, nicht einen einzelnen. `pid: 0` signalisiert die eigene
+/// Prozessgruppe des Daemons. `pid: 1` ist `init`/systemd selbst -- ein
+/// SIGTERM/SIGKILL dorthin nimmt die ganze Maschine mit. Die eigene PID des
+/// Daemons ist ebenfalls ausgeschlossen, damit eine Aktion den Daemon nicht
+/// mitten im Dispatch beendet, bevor das Ergebnis auditiert werden kann.
+fn invalid_action_parameter(action: &ActionRequest) -> Option<String> {
+    let ActionRequest::TerminateProcess { pid, .. } = action else {
+        return None;
+    };
+    if *pid == 0 {
+        return Some("PID 0 bezeichnet keinen einzelnen Prozess".to_string());
+    }
+    if *pid == 1 {
+        return Some("PID 1 (init/systemd) darf nicht beendet werden".to_string());
+    }
+    if *pid > i32::MAX as u32 {
+        return Some(format!(
+            "PID {pid} wäre nach der Umwandlung eine negative Prozess-ID \
+             (POSIX kill() interpretiert das als Prozessgruppe)"
+        ));
+    }
+    if *pid == std::process::id() {
+        return Some("der Daemon terminiert sich nicht selbst".to_string());
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,14 +839,14 @@ mod tests {
     #[tokio::test]
     async fn terminate_process_bleibt_im_dry_run_ohne_echtes_signal() {
         // Regel 26: automatisierte Tests senden nie ein echtes Signal.
-        // Default-Konfiguration ist dry_run=true, PID 1 (init/systemd)
-        // würde bei einem echten SIGTERM ohnehin sofort mit
-        // "Operation not permitted" scheitern -- hier zeigt gerade das
-        // Ausbleiben eines solchen Fehlers, dass kein Signal gesendet wurde.
+        // Default-Konfiguration ist dry_run=true. PID 1 (init/systemd) wird
+        // jetzt schon vor dem Dispatch als ungültiger Parameter abgelehnt
+        // (siehe invalid_action_parameter), deshalb hier eine klar
+        // harmlose, garantiert nicht reservierte PID.
         let state = test_state();
         let executor = ActionExecutor::new(config(&["terminate_process"], &[]));
         let action = ActionRequest::TerminateProcess {
-            pid: 1,
+            pid: 999_999,
             grace_secs: 5,
         };
         let outcome = executor.execute(&action, origin(1), 0, &state).await;
@@ -822,7 +866,7 @@ mod tests {
         cfg.terminate_max_grace_secs = 10;
         let executor = ActionExecutor::new(cfg);
         let action = ActionRequest::TerminateProcess {
-            pid: 1,
+            pid: 999_999,
             grace_secs: 999,
         };
         let outcome = executor.execute(&action, origin(1), 0, &state).await;
@@ -849,6 +893,35 @@ mod tests {
                 reason: DenyReason::NotAllowed
             }
         );
+    }
+
+    #[tokio::test]
+    async fn terminate_process_lehnt_gefaehrliche_pids_ab() {
+        // Regression: TerminateProcess::pid ist u32, wird aber über
+        // Pid::from_raw(pid as i32) an kill() gereicht. Werte ab 2^31
+        // werden dabei zu einer negativen i32-PID, und POSIX kill()
+        // interpretiert eine negative PID als Prozessgruppe --
+        // pid: u32::MAX (-1 nach dem Cast) hätte als root JEDEN Prozess auf
+        // dem System signalisiert, den der Aufrufer signalisieren darf.
+        let state = test_state();
+        let executor = ActionExecutor::new(config(&["terminate_process"], &[]));
+
+        for pid in [0u32, 1, u32::MAX, (i32::MAX as u32) + 1, std::process::id()] {
+            let action = ActionRequest::TerminateProcess {
+                pid,
+                grace_secs: 5,
+            };
+            let outcome = executor.execute(&action, origin(1), 0, &state).await;
+            assert!(
+                matches!(
+                    outcome,
+                    ActionOutcome::Denied {
+                        reason: DenyReason::InvalidParameter { .. }
+                    }
+                ),
+                "PID {pid} hätte abgelehnt werden müssen, war {outcome:?}"
+            );
+        }
     }
 
     #[tokio::test]
