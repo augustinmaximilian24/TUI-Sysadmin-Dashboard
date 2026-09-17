@@ -24,3 +24,8 @@ required-features = ["client"]
 
 [dev-dependencies]
 tempfile = "3"
+# tokio-test: nur für den FrameReader-Regressionstest, der einen Reader
+# braucht, dessen Blöcke sich zeitversetzt liefern lassen (`io::Builder`),
+# um einen Future-Abbruch mitten in einer mehrteiligen Zeile
+# nachzustellen -- mit `tempfile::Cursor` allein nicht simulierbar.
+tokio-test = "0.4.5"

@@ -261,7 +261,7 @@ fn make_snapshot_interval(
 /// Abo-Intervall, Anomalie-Push per Broadcast, eingehende
 /// Client-Nachrichten, Shutdown.
 async fn run_session<R, W>(
-    mut reader: R,
+    reader: R,
     mut writer: W,
     conn: ConnectionContext,
     mut shutdown: watch::Receiver<bool>,
@@ -272,6 +272,12 @@ async fn run_session<R, W>(
     W: AsyncWrite + Unpin,
 {
     let state = &conn.state;
+    // FrameReader statt der freien `read_frame`-Funktion: dieser Zweig
+    // steht in einem `select!` neben Shutdown/Snapshot-Intervall/
+    // Anomalie-Broadcast, ein Sieg eines anderen Zweigs mitten in einer
+    // mehrteiligen Nachricht darf keine bereits gelesenen Bytes verlieren
+    // (siehe Doc-Kommentar von `FrameReader`).
+    let mut reader = logsentry_proto::FrameReader::new(reader);
     let mut anomaly_rx = state.subscribe_anomalies();
     let mut snapshot_interval = make_snapshot_interval(&subscription, config);
 
@@ -306,7 +312,7 @@ async fn run_session<R, W>(
                     Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
-            frame = read_frame(&mut reader, MAX_CLIENT_LINE_BYTES) => {
+            frame = reader.read_frame(MAX_CLIENT_LINE_BYTES) => {
                 match frame {
                     Ok(Some(line)) => match parse_client_message(&line) {
                         ParsedLine::Message(msg) => {

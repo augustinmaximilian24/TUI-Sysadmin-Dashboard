@@ -222,8 +222,14 @@ pub fn connection_label(state: Option<&ConnectionState>) -> String {
             format!("verbunden (Sitzung {session_id})")
         }
         Some(ConnectionState::Denied(err)) => format!("verweigert: {err}"),
-        Some(ConnectionState::Disconnected { retry_in }) => {
-            format!("getrennt, neuer Versuch in {:.0}s", retry_in.as_secs_f64())
+        Some(ConnectionState::Disconnected {
+            retry_in,
+            last_error,
+        }) => {
+            format!(
+                "getrennt ({last_error}), neuer Versuch in {:.0}s",
+                retry_in.as_secs_f64()
+            )
         }
     }
 }

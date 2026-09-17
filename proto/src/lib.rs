@@ -14,5 +14,5 @@ mod wire;
 #[cfg(feature = "client")]
 pub use client::{spawn, ClientConfig, ClientError, ConnectionState};
 pub use error::{FrameError, ProtoError};
-pub use framing::{read_frame, write_frame};
+pub use framing::{read_frame, write_frame, FrameReader};
 pub use wire::*;

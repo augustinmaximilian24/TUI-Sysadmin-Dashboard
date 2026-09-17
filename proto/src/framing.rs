@@ -84,6 +84,76 @@ where
     }
 }
 
+/// Cancellation-sicherer Zeilen-Reader für den Einsatz in `tokio::select!`.
+///
+/// [`read_frame`] puffert eine unvollständige Zeile in einer lokalen
+/// Variable der eigenen Future. Steht dieser Aufruf als Zweig in einem
+/// `select!` und ein anderer Zweig gewinnt, wird die `read_frame`-Future
+/// fallengelassen -- bereits per `consume()` aus dem darunterliegenden
+/// `AsyncBufRead` entnommene, aber noch nicht zu einer vollständigen Zeile
+/// zusammengesetzte Bytes gehen dabei unwiederbringlich verloren: Beim
+/// nächsten Aufruf beginnt eine neue, leere Future mitten in der
+/// ursprünglichen Zeile. Das betrifft insbesondere mehrere `fill_buf`-Blöcke
+/// umfassende Nachrichten (z. B. `RecentAnomalies`/`Snapshot`), während
+/// gleichzeitig ausgehende Nachrichten gesendet werden.
+///
+/// `FrameReader` hält den Teilzeilen-Puffer stattdessen in sich selbst, statt
+/// in der pro Aufruf neu entstehenden Future -- ein Abbruch verwirft nur die
+/// Future, nicht `self`, der Puffer bleibt für den nächsten Aufruf erhalten.
+pub struct FrameReader<R> {
+    reader: R,
+    buf: Vec<u8>,
+}
+
+impl<R> FrameReader<R>
+where
+    R: AsyncBufRead + Unpin,
+{
+    pub fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buf: Vec::new(),
+        }
+    }
+
+    /// Entspricht [`read_frame`], hält eine unvollständige Zeile aber über
+    /// abgebrochene Aufrufe hinweg in `self` statt in der Future.
+    pub async fn read_frame(&mut self, max_bytes: usize) -> Result<Option<String>, FrameError> {
+        loop {
+            let available = self.reader.fill_buf().await?;
+            if available.is_empty() {
+                return if self.buf.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(String::from_utf8(std::mem::take(&mut self.buf))?))
+                };
+            }
+
+            if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                if self.buf.len() + pos > max_bytes {
+                    self.reader.consume(pos + 1);
+                    self.buf.clear();
+                    return Err(FrameError::TooLong { max_bytes });
+                }
+                self.buf.extend_from_slice(&available[..pos]);
+                self.reader.consume(pos + 1);
+                return Ok(Some(String::from_utf8(std::mem::take(&mut self.buf))?));
+            }
+
+            if self.buf.len() + available.len() > max_bytes {
+                let consumed = available.len();
+                self.reader.consume(consumed);
+                self.buf.clear();
+                return Err(FrameError::TooLong { max_bytes });
+            }
+
+            let n = available.len();
+            self.buf.extend_from_slice(available);
+            self.reader.consume(n);
+        }
+    }
+}
+
 /// Schreibt `line` gefolgt von `\n` und flusht. `line` darf selbst kein
 /// `\n` enthalten (das serialisierte JSON tut das nie); das wird hier
 /// nicht geprüft, da es ausschließlich intern aus `serde_json::to_string`
@@ -101,6 +171,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::io::BufReader;
 
     fn reader_for(data: &[u8]) -> BufReader<std::io::Cursor<Vec<u8>>> {
@@ -232,6 +303,39 @@ mod tests {
         assert_eq!(
             read_frame(&mut r, 1024).await.unwrap(),
             Some("zweite".to_string())
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frame_reader_verliert_bei_abbruch_keine_bereits_gelesenen_bytes() {
+        // Regression: `read_frame()` puffert eine unvollständige Zeile nur
+        // in seiner eigenen Future. Steht der Aufruf als Zweig in einem
+        // `select!` und ein anderer Zweig gewinnt, geht der bereits
+        // gelesene Teil verloren. Der Mock liefert die Zeile absichtlich in
+        // zwei Blöcken mit einer Wartezeit dazwischen, um genau dieses
+        // Fenster nachzustellen.
+        let mock = tokio_test::io::Builder::new()
+            .read(b"erste-haelfte")
+            .wait(Duration::from_millis(50))
+            .read(b" der zeile\n")
+            .build();
+        let mut framed = FrameReader::new(BufReader::new(mock));
+
+        // Simuliert einen konkurrierenden `select!`-Zweig (z. B. eine
+        // ausgehende Nachricht), der gewinnt, während `read_frame()` noch
+        // auf den zweiten Block der Zeile wartet.
+        tokio::select! {
+            biased;
+            () = tokio::time::sleep(Duration::from_millis(5)) => {}
+            _ = framed.read_frame(1024) => panic!("read_frame() sollte hier nicht fertig werden"),
+        }
+
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let line = framed.read_frame(1024).await.unwrap();
+        assert_eq!(
+            line,
+            Some("erste-haelfte der zeile".to_string()),
+            "die vor dem Abbruch bereits gelesene erste Hälfte darf nicht verloren gehen"
         );
     }
 }

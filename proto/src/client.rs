@@ -8,7 +8,7 @@
 
 use std::io;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tokio::io::BufReader;
@@ -44,6 +44,12 @@ pub enum ConnectionState {
     Denied(ClientError),
     Disconnected {
         retry_in: Duration,
+        /// Grund des letzten Verbindungsabbruchs bzw. -fehlversuchs. Ohne
+        /// dieses Feld verschwand insbesondere `VersionMismatch`/
+        /// `NotRunning`/`Orphaned` spurlos hinter einem generischen
+        /// "getrennt, neuer Versuch in Ns" -- obwohl diese Fehlertexte die
+        /// passende Abhilfe (z. B. den Upgrade-Hinweis) bereits enthalten.
+        last_error: ClientError,
     },
 }
 
@@ -82,6 +88,14 @@ const BACKOFF_CAP: Duration = Duration::from_secs(30);
 /// Fester Neuversuchsabstand bei `EACCES`, um keinen Reconnect-Sturm gegen
 /// einen absichtlich verweigerten Zugriff zu erzeugen.
 const DENIED_RETRY: Duration = Duration::from_secs(30);
+/// Mindestdauer, die eine Session gestanden haben muss, damit der Backoff
+/// nach ihrem Ende auf 0 zurückgesetzt wird. Ohne diese Schwelle setzte ein
+/// erfolgreicher Handshake `attempt` sofort zurück, bevor die Session
+/// überhaupt lief -- ein Daemon, der den Handshake abschließt und danach
+/// sofort wieder abbricht (Crash-Loop), erzeugte damit einen dauerhaften
+/// Reconnect-Sturm von mehreren Versuchen pro Sekunde statt einer
+/// eskalierenden Backoff-Zeit.
+const STABLE_CONNECTION: Duration = Duration::from_secs(10);
 /// Größe der Receiver-Queue Richtung Anwendung (Abschnitt 6: bounded 128).
 const INBOUND_CAPACITY: usize = 128;
 /// Größe der Sender-Queue Richtung Daemon.
@@ -150,15 +164,21 @@ async fn connection_loop(
 
         match connect_and_handshake(&cfg).await {
             Ok((session_id, stream)) => {
-                attempt = 0;
                 let _ = state_tx.send(ConnectionState::Connected { session_id });
+                let connected_at = Instant::now();
                 match run_session(stream, &mut outbound_rx, &inbound_tx).await {
                     SessionEnd::OutboundClosed => {
                         inbound_tx.close().await;
                         return;
                     }
                     SessionEnd::Lost => {
-                        // Unten mit Backoff neu verbinden.
+                        // Nur nach einer ausreichend lange stehenden Session
+                        // zurücksetzen (siehe Begründung bei
+                        // `STABLE_CONNECTION`); unten wird `attempt` in
+                        // jedem Fall noch einmal erhöht.
+                        if connected_at.elapsed() >= STABLE_CONNECTION {
+                            attempt = 0;
+                        }
                     }
                 }
             }
@@ -167,9 +187,12 @@ async fn connection_loop(
                 tokio::time::sleep(DENIED_RETRY).await;
                 continue;
             }
-            Err(_err) => {
+            Err(err) => {
                 let delay = backoff_delay(attempt);
-                let _ = state_tx.send(ConnectionState::Disconnected { retry_in: delay });
+                let _ = state_tx.send(ConnectionState::Disconnected {
+                    retry_in: delay,
+                    last_error: err,
+                });
                 attempt = attempt.saturating_add(1);
                 tokio::time::sleep(delay).await;
                 continue;
@@ -177,7 +200,10 @@ async fn connection_loop(
         }
 
         let delay = backoff_delay(attempt);
-        let _ = state_tx.send(ConnectionState::Disconnected { retry_in: delay });
+        let _ = state_tx.send(ConnectionState::Disconnected {
+            retry_in: delay,
+            last_error: ClientError::Other("Sitzung beendet".to_string()),
+        });
         attempt = attempt.saturating_add(1);
         tokio::time::sleep(delay).await;
     }
@@ -259,7 +285,12 @@ async fn run_session(
     inbound_tx: &InboundSender,
 ) -> SessionEnd {
     let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
+    // FrameReader statt der freien `read_frame`-Funktion: dieser Zweig
+    // steht in einem `select!` neben dem ausgehenden Zweig, ein Sieg des
+    // anderen Zweigs mitten in einer mehrteiligen Nachricht (z. B.
+    // `RecentAnomalies`/`Snapshot`) darf keine bereits gelesenen Bytes
+    // verlieren (siehe Doc-Kommentar von `FrameReader`).
+    let mut reader = crate::framing::FrameReader::new(BufReader::new(read_half));
 
     loop {
         tokio::select! {
@@ -274,7 +305,7 @@ async fn run_session(
                     return SessionEnd::Lost;
                 }
             }
-            frame = read_frame(&mut reader, MAX_SERVER_LINE_BYTES) => {
+            frame = reader.read_frame(MAX_SERVER_LINE_BYTES) => {
                 match frame {
                     Ok(Some(raw)) => {
                         let Ok(msg) = serde_json::from_str::<ServerMessage>(&raw) else {
