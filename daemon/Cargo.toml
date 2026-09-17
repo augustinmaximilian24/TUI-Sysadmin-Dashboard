@@ -24,6 +24,7 @@ zbus.workspace = true
 # das nix bereitstellt. Einzige neue Abhängigkeit in Phase 6 (siehe
 # docs/phase6-protokoll.md Abschnitt 2).
 nix = { version = "0.29", default-features = false, features = ["user", "fs"] }
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

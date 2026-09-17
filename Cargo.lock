@@ -1822,6 +1822,7 @@ dependencies = [
  "logsentry-core",
  "logsentry-proto",
  "nix",
+ "serde",
  "serde_json",
  "sysinfo",
  "tempfile",

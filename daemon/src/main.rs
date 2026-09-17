@@ -14,6 +14,7 @@
 //! - `--reset-baselines`: Baseline-Datei sichern und leer neu beginnen
 //! - `--config <pfad>`: abweichender Konfigurationspfad
 
+mod actions;
 mod client_task;
 mod ingestion;
 mod pipeline;
