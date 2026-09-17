@@ -11,6 +11,7 @@
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
@@ -32,6 +33,15 @@ const HISTORY_CAP: usize = 1800;
 
 /// Obergrenze für angezeigte Protokoll-/Verbindungsfehler.
 const LOG_CAP: usize = 100;
+
+/// Mindestabstand zwischen zwei angeforderten Repaints, wenn eingehende
+/// Nachrichten den nächsten Redraw auslösen (Regel 20: reaktiver Modus mit
+/// 4-10 Aktualisierungen pro Sekunde, kein Continuous-Repaint). Ein
+/// direkter `ctx.request_repaint()` pro Nachricht würde bei einem Burst
+/// gestreamter Anomalien die Repaint-Rate weit über dieses Ziel treiben;
+/// `request_repaint_after` bündelt stattdessen mehrere Anforderungen
+/// innerhalb dieses Fensters zu einem Redraw.
+const REPAINT_COALESCE: Duration = Duration::from_millis(150);
 
 /// Obergrenze für die im Speicher gehaltene Aktions-Historie dieser
 /// Sitzung (Regel 18). Das ist keine vollständige Audit-Ansicht der
@@ -134,7 +144,7 @@ pub fn spawn_bridge(
                     }
                     guard.connection = Some(current);
                     drop(guard);
-                    ctx.request_repaint();
+                    ctx.request_repaint_after(REPAINT_COALESCE);
                 }
                 message = inbound.recv() => {
                     let Some(message) = message else {
@@ -143,7 +153,7 @@ pub fn spawn_bridge(
                     let mut guard = bridge_state.lock().unwrap_or_else(PoisonError::into_inner);
                     apply_message(&mut guard, message, started_at);
                     drop(guard);
-                    ctx.request_repaint();
+                    ctx.request_repaint_after(REPAINT_COALESCE);
                 }
             }
         }
