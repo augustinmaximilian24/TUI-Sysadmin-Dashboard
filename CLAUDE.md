@@ -219,10 +219,10 @@ dem Benutzerkonto. Diese Trennung ist verpflichtend.
 - [x] Audit-Ansicht im UI: was wurde wann von wem ausgelöst
 
 **Phase 9 – Auslieferung**
-- [ ] systemd-Unit für den Daemon mit `Nice=10`, `IOSchedulingClass=idle`, `MemoryMax=`, `ProtectSystem=strict`, `NoNewPrivileges=yes`
-- [ ] `.desktop`-Datei für die GUI
-- [ ] Installationsskript, Gruppenanlage, README mit Screenshot
-- [ ] Idle-Last auf dem Heimserver gemessen und dokumentiert
+- [x] systemd-Unit für den Daemon mit `Nice=10`, `IOSchedulingClass=idle`, `MemoryMax=`, `ProtectSystem=strict`, `NoNewPrivileges=yes`
+- [x] `.desktop`-Datei für die GUI
+- [x] Installationsskript, Gruppenanlage, README mit Screenshot
+- [ ] Idle-Last auf dem Heimserver gemessen und dokumentiert -- von dieser Maschine (Desktop) aus nicht möglich, steht noch aus
 
 **Phase 10 – Optional**
 - [ ] TUI-Client als zweiter Konsument desselben Protokolls (für headless/SSH)
