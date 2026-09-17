@@ -318,19 +318,42 @@ impl TemplateEngine {
     }
 }
 
-/// Anteil der Positionen, an denen `template` entweder bereits ein Wildcard
-/// ist oder exakt mit `tokens` übereinstimmt. Erwartet gleiche Länge.
+/// Anteil der noch konkreten (nicht bereits zu `<*>` verallgemeinerten)
+/// Positionen von `template`, an denen `tokens` exakt übereinstimmt.
+/// Erwartet gleiche Länge.
+///
+/// Bereits generalisierte Positionen tragen bewusst weder zum Zähler noch
+/// zum Nenner bei: Würden sie (wie in einer früheren Version) automatisch
+/// als Treffer gezählt, zöge ein Cluster, das erst einmal an mehreren
+/// Positionen zu `<*>` verallgemeinert wurde, praktisch jede weitere Zeile
+/// gleicher Tokenlänge an -- mit jeder weiteren Verallgemeinerung würde das
+/// noch wahrscheinlicher, bis das Cluster irreversibel zu einem
+/// Alles-Wildcard-Template kollabiert und für diese Zeilenlänge nie wieder
+/// ein neues Template (und damit nie wieder Surprisal) entstehen kann. Mit
+/// nur noch konkreten Positionen im Nenner sinkt die verbleibende
+/// Toleranz dagegen mit jeder Verallgemeinerung, und ein bereits
+/// vollständig generalisiertes Template (keine konkreten Positionen mehr)
+/// gilt als nicht mehr ähnlich zu irgendetwas.
 fn token_similarity(template: &[String], tokens: &[String]) -> f64 {
     debug_assert_eq!(template.len(), tokens.len());
     if template.is_empty() {
         return 1.0;
     }
-    let matching = template
-        .iter()
-        .zip(tokens.iter())
-        .filter(|(t, tok)| t.as_str() == WILDCARD || t == tok)
-        .count();
-    matching as f64 / template.len() as f64
+    let mut concrete = 0usize;
+    let mut concrete_matches = 0usize;
+    for (t, tok) in template.iter().zip(tokens.iter()) {
+        if t.as_str() == WILDCARD {
+            continue;
+        }
+        concrete += 1;
+        if t == tok {
+            concrete_matches += 1;
+        }
+    }
+    if concrete == 0 {
+        return 0.0;
+    }
+    concrete_matches as f64 / concrete as f64
 }
 
 /// Verallgemeinert `template` an allen Positionen, an denen es von `tokens`
@@ -553,6 +576,37 @@ mod tests {
         };
         let restored = TemplateEngine::restore(snapshot, 0.7, 100);
         assert_eq!(restored.template_count(), 1);
+    }
+
+    #[test]
+    fn kollabierendes_cluster_wird_durch_sinkende_konkrete_basis_gestoppt() {
+        // Regression: token_similarity zählte bereits generalisierte
+        // Wildcard-Positionen automatisch als Treffer. Dadurch zog ein
+        // Cluster, das schon an mehreren Positionen verallgemeinert war,
+        // praktisch jede weitere Zeile gleicher Tokenlänge an und
+        // kollabierte irreversibel zu einem Alles-Wildcard-Template --
+        // Surprisal für diese Zeilenlänge starb damit dauerhaft.
+        let mut engine = TemplateEngine::new(0.7, 100);
+        let basis = engine.process("alpha beta gamma delta epsilon", 0);
+        engine.process("zulu beta gamma delta epsilon", 1);
+        engine.process("zulu yankee gamma delta epsilon", 2);
+        // Die dritte Abweichung liegt jetzt unter der Schwelle (die
+        // verbleibende konkrete Basis ist zu klein geworden) -- es entsteht
+        // ein neues Cluster statt weiterer Verallgemeinerung.
+        let dritte = engine.process("zulu yankee xray delta epsilon", 3);
+        assert_ne!(
+            dritte.id, basis.id,
+            "die Verallgemeinerung darf nicht bis zur dritten Abweichung fortschreiten"
+        );
+        assert_eq!(engine.template_count(), 2);
+
+        // Eine völlig unbeteiligte Zeile gleicher Länge darf das inzwischen
+        // teilweise generalisierte Ursprungscluster nicht treffen.
+        let unbeteiligt = engine.process("kernel oom killed process foo", 4);
+        assert!(
+            unbeteiligt.is_new,
+            "ein degeneriertes Cluster darf nicht jede Zeile gleicher Länge anziehen"
+        );
     }
 
     #[test]
