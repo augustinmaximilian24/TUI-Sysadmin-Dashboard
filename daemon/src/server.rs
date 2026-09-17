@@ -174,11 +174,20 @@ pub async fn run(
                             tokio::spawn(client_task::reject_too_many(stream, max_clients));
                             continue;
                         }
+                        // SO_PEERCRED der Verbindung (Regel 13: das
+                        // Audit-Log muss den Benutzer erfassen, nicht nur
+                        // eine pro-Prozess-`session_id`, die für alle
+                        // gleichzeitig verbundenen Clients gleich ist).
+                        // `Err` ist auf Linux für einen echten
+                        // Unix-Socket praktisch ausgeschlossen; `None`
+                        // degradiert dann nur zu einem unbekannten Benutzer
+                        // im Audit-Log statt die Verbindung abzulehnen.
+                        let peer_uid = stream.peer_cred().map(|cred| cred.uid()).ok();
                         let state = Arc::clone(&state);
                         let task_config = Arc::clone(&task_config);
                         let client_shutdown = shutdown.clone();
                         tokio::spawn(async move {
-                            client_task::run(stream, Arc::clone(&state), client_shutdown, task_config).await;
+                            client_task::run(stream, Arc::clone(&state), client_shutdown, task_config, peer_uid).await;
                             state.client_disconnected();
                         });
                     }

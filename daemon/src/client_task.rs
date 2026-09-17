@@ -17,9 +17,20 @@ use logsentry_proto::{
     GoodbyeReason, ServerMessage, Subscription, MAX_CLIENT_LINE_BYTES, PROTOCOL_VERSION,
 };
 
-use crate::actions::ActionExecutor;
+use crate::actions::{ActionExecutor, ActionRequestOrigin};
 use crate::now_us;
 use crate::state::SharedState;
+
+/// Bündelt den geteilten Zustand und die Peer-Identität einer Verbindung,
+/// damit `run_session` unter der in `clippy.toml` konfigurierten
+/// Argumentzahl-Obergrenze bleibt -- beide gehören ohnehin zur selben
+/// Verbindung und werden stets zusammen weitergereicht.
+struct ConnectionContext {
+    state: Arc<SharedState>,
+    /// UID des verbundenen Client-Prozesses (`SO_PEERCRED`, ermittelt in
+    /// `server.rs`), fürs Audit-Log (Regel 13).
+    peer_uid: Option<u32>,
+}
 
 /// Obergrenze für das clientseitig gewünschte Snapshot-Intervall
 /// (Abschnitt 4, Regel 4: `[min_snapshot_interval_ms, 60_000]`).
@@ -90,6 +101,7 @@ pub async fn run(
     state: Arc<SharedState>,
     shutdown: watch::Receiver<bool>,
     config: Arc<ClientTaskConfig>,
+    peer_uid: Option<u32>,
 ) {
     let (read_half, write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
@@ -130,7 +142,8 @@ pub async fn run(
         send_message(&mut writer, &ServerMessage::Snapshot((*snapshot).clone())).await;
     }
 
-    run_session(reader, writer, state, shutdown, &config, subscription).await;
+    let conn = ConnectionContext { state, peer_uid };
+    run_session(reader, writer, conn, shutdown, &config, subscription).await;
 }
 
 /// Wartet auf ein gültiges `Hello` innerhalb von `config.hello_timeout`.
@@ -250,7 +263,7 @@ fn make_snapshot_interval(
 async fn run_session<R, W>(
     mut reader: R,
     mut writer: W,
-    state: Arc<SharedState>,
+    conn: ConnectionContext,
     mut shutdown: watch::Receiver<bool>,
     config: &ClientTaskConfig,
     mut subscription: Subscription,
@@ -258,6 +271,7 @@ async fn run_session<R, W>(
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let state = &conn.state;
     let mut anomaly_rx = state.subscribe_anomalies();
     let mut snapshot_interval = make_snapshot_interval(&subscription, config);
 
@@ -296,7 +310,7 @@ async fn run_session<R, W>(
                 match frame {
                     Ok(Some(line)) => match parse_client_message(&line) {
                         ParsedLine::Message(msg) => {
-                            handle_client_message(msg, &mut writer, &state, config, &mut subscription).await;
+                            handle_client_message(msg, &mut writer, state, config, &mut subscription, conn.peer_uid).await;
                             snapshot_interval = make_snapshot_interval(&subscription, config);
                         }
                         ParsedLine::UnknownMessage => {
@@ -327,6 +341,7 @@ async fn handle_client_message<W>(
     state: &Arc<SharedState>,
     config: &ClientTaskConfig,
     subscription: &mut Subscription,
+    peer_uid: Option<u32>,
 ) where
     W: AsyncWrite + Unpin,
 {
@@ -366,7 +381,16 @@ async fn handle_client_message<W>(
         ClientMessage::Action { request_id, action } => {
             let outcome = config
                 .actions
-                .execute(&action, request_id, state.session_id, now_us(), state)
+                .execute(
+                    &action,
+                    ActionRequestOrigin {
+                        request_id,
+                        session_id: state.session_id,
+                        peer_uid,
+                    },
+                    now_us(),
+                    state,
+                )
                 .await;
             send_message(
                 writer,

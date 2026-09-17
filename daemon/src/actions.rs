@@ -38,10 +38,27 @@ pub struct ActionExecutor {
 struct AuditEntry<'a> {
     timestamp_us: u64,
     session_id: u64,
+    /// UID des verbundenen Client-Prozesses (`SO_PEERCRED` über
+    /// `UnixStream::peer_cred`, siehe `server.rs`/`client_task.rs`).
+    /// `None` nur, wenn der Kernel die Abfrage ausnahmsweise verweigert --
+    /// Regel 13 verlangt den Benutzer im Audit-Log, deshalb wird das Feld
+    /// immer mitgeschrieben statt es bei `None` wegzulassen.
+    peer_uid: Option<u32>,
     request_id: u64,
     kind: &'static str,
     target: &'a str,
     outcome: &'a ActionOutcome,
+}
+
+/// Herkunft eines Aktionsversuchs, wie sie `client_task.rs` aus der
+/// laufenden Verbindung kennt -- gebündelt, damit [`ActionExecutor::execute`]
+/// unter der in `clippy.toml` konfigurierten Argumentzahl-Obergrenze bleibt.
+pub struct ActionRequestOrigin {
+    pub request_id: u64,
+    pub session_id: u64,
+    /// UID des verbundenen Client-Prozesses (`SO_PEERCRED`), siehe
+    /// `AuditEntry::peer_uid`.
+    pub peer_uid: Option<u32>,
 }
 
 /// Bündelt die Herkunft eines Aktionsversuchs für [`ActionExecutor::audit`]
@@ -49,6 +66,7 @@ struct AuditEntry<'a> {
 struct AuditContext<'a> {
     request_id: u64,
     session_id: u64,
+    peer_uid: Option<u32>,
     kind: &'static str,
     target: &'a str,
 }
@@ -87,13 +105,15 @@ impl ActionExecutor {
     }
 
     /// Prüft Allow-List und Rate-Limit und führt die Aktion aus (Schritt 3:
-    /// noch als Dry-Run-Platzhalter). `request_id`/`session_id` dienen nur
-    /// dem Audit-Log, nicht der fachlichen Prüfung.
+    /// noch als Dry-Run-Platzhalter). `origin` dient nur dem Audit-Log,
+    /// nicht der fachlichen Prüfung; `peer_uid` darin kommt aus
+    /// `SO_PEERCRED` der Client-Verbindung (Regel 13: das Audit-Log muss
+    /// den Benutzer erfassen, nicht nur die pro-Prozess-`session_id`, die
+    /// für alle gleichzeitig verbundenen Clients identisch ist).
     pub async fn execute(
         &self,
         action: &ActionRequest,
-        request_id: u64,
-        session_id: u64,
+        origin: ActionRequestOrigin,
         now_us: u64,
         state: &SharedState,
     ) -> ActionOutcome {
@@ -101,8 +121,9 @@ impl ActionExecutor {
         let target = action_target(action);
 
         let ctx = AuditContext {
-            request_id,
-            session_id,
+            request_id: origin.request_id,
+            session_id: origin.session_id,
+            peer_uid: origin.peer_uid,
             kind,
             target: &target,
         };
@@ -336,6 +357,7 @@ impl ActionExecutor {
         let entry = AuditEntry {
             timestamp_us,
             session_id: ctx.session_id,
+            peer_uid: ctx.peer_uid,
             request_id: ctx.request_id,
             kind: ctx.kind,
             target: ctx.target,
@@ -352,9 +374,25 @@ impl ActionExecutor {
         line.push('\n');
 
         let mut guard = self.audit_log.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(file) = guard.as_mut() {
-            if let Err(err) = file.write_all(line.as_bytes()) {
-                tracing::warn!(fehler = %err, "Audit-Log-Schreibvorgang fehlgeschlagen");
+        match guard.as_mut() {
+            Some(file) => {
+                if let Err(err) = file.write_all(line.as_bytes()) {
+                    // Regel 13 verlangt lückenlose Protokollierung. Schreiben
+                    // ins offene Audit-Log kann trotzdem scheitern (volle
+                    // Platte, entfernter Datenträger) -- ein solcher Fehler
+                    // darf nicht wortlos verschwinden, deshalb landet der
+                    // Eintrag zusätzlich im normalen Prozess-Log.
+                    tracing::warn!(fehler = %err, eintrag = %line.trim_end(), "Audit-Log-Schreibvorgang fehlgeschlagen, Eintrag stattdessen im Prozess-Log");
+                }
+            }
+            None => {
+                // Kein Audit-Log verfügbar (z. B. Verzeichnis beim Start
+                // nicht anlegbar, siehe `open_audit_log`) -- ohne diesen
+                // Zweig liefe der Daemon nach der einmaligen Startwarnung
+                // dauerhaft ohne jeden Audit-Trail weiter. `tracing::warn!`
+                // statt `info!`, damit ein fehlendes Audit-Log auf Dauer
+                // sichtbar bleibt, nicht nur beim Start.
+                tracing::warn!(eintrag = %line.trim_end(), "kein Audit-Log geöffnet, Eintrag stattdessen im Prozess-Log");
             }
         }
     }
@@ -623,6 +661,16 @@ mod tests {
         }
     }
 
+    /// Test-Standardherkunft: feste `session_id`/`peer_uid`, nur die
+    /// `request_id` variiert zwischen den Aufrufen eines Tests.
+    fn origin(request_id: u64) -> ActionRequestOrigin {
+        ActionRequestOrigin {
+            request_id,
+            session_id: 1,
+            peer_uid: Some(1000),
+        }
+    }
+
     #[tokio::test]
     async fn block_ip_bleibt_im_dry_run_ohne_echten_nft_aufruf() {
         // Regel 26: kein automatisierter Test verändert die echte
@@ -633,7 +681,7 @@ mod tests {
             ip: "203.0.113.5".parse().unwrap(),
             duration_secs: 300,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         match outcome {
             ActionOutcome::Completed { dry_run, message } => {
                 assert!(dry_run);
@@ -652,7 +700,7 @@ mod tests {
             ip: "203.0.113.5".parse().unwrap(),
             duration_secs: 300,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         assert_eq!(
             outcome,
             ActionOutcome::Denied {
@@ -672,7 +720,7 @@ mod tests {
             ip: "203.0.113.5".parse().unwrap(),
             duration_secs: 999_999,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         match outcome {
             ActionOutcome::Completed { message, .. } => {
                 assert!(message.contains("120s"), "Nachricht: {message}");
@@ -694,7 +742,7 @@ mod tests {
             pid: 1,
             grace_secs: 5,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         match outcome {
             ActionOutcome::Completed { dry_run, message } => {
                 assert!(dry_run);
@@ -714,7 +762,7 @@ mod tests {
             pid: 1,
             grace_secs: 999,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         match outcome {
             ActionOutcome::Completed { message, .. } => {
                 assert!(message.contains("Grace 10s"), "Nachricht: {message}");
@@ -731,7 +779,7 @@ mod tests {
             pid: 1,
             grace_secs: 5,
         };
-        let outcome = executor.execute(&action, 1, 1, 0, &state).await;
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
         assert_eq!(
             outcome,
             ActionOutcome::Denied {
@@ -745,7 +793,7 @@ mod tests {
         let state = test_state();
         let executor = ActionExecutor::new(config(&[], &[]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0, &state)
+            .execute(&restart("sshd.service"), origin(1), 0, &state)
             .await;
         assert_eq!(
             outcome,
@@ -760,7 +808,7 @@ mod tests {
         let state = test_state();
         let executor = ActionExecutor::new(config(&["restart_unit"], &["cron.service"]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0, &state)
+            .execute(&restart("sshd.service"), origin(1), 0, &state)
             .await;
         assert_eq!(
             outcome,
@@ -778,7 +826,7 @@ mod tests {
         let state = test_state();
         let executor = ActionExecutor::new(config(&["restart_unit"], &["sshd.service"]));
         let outcome = executor
-            .execute(&restart("sshd.service"), 1, 1, 0, &state)
+            .execute(&restart("sshd.service"), origin(1), 0, &state)
             .await;
         match outcome {
             ActionOutcome::Completed { dry_run, .. } => assert!(dry_run),
@@ -797,13 +845,13 @@ mod tests {
 
         for i in 0..3 {
             let outcome = executor
-                .execute(&restart("sshd.service"), i, 1, i * one_minute_us, &state)
+                .execute(&restart("sshd.service"), origin(i), i * one_minute_us, &state)
                 .await;
             assert!(matches!(outcome, ActionOutcome::Completed { .. }));
         }
 
         let outcome = executor
-            .execute(&restart("sshd.service"), 3, 1, 3 * one_minute_us, &state)
+            .execute(&restart("sshd.service"), origin(3), 3 * one_minute_us, &state)
             .await;
         assert!(matches!(
             outcome,
@@ -821,13 +869,49 @@ mod tests {
         let executor = ActionExecutor::new(cfg);
 
         let first = executor
-            .execute(&restart("sshd.service"), 1, 1, 0, &state)
+            .execute(&restart("sshd.service"), origin(1), 0, &state)
             .await;
         let second = executor
-            .execute(&restart("cron.service"), 2, 1, 0, &state)
+            .execute(&restart("cron.service"), origin(2), 0, &state)
             .await;
         assert!(matches!(first, ActionOutcome::Completed { .. }));
         assert!(matches!(second, ActionOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn audit_log_erfasst_die_peer_uid() {
+        // Regression: session_id ist pro Daemon-Prozess identisch für alle
+        // gleichzeitig verbundenen Clients und konnte eine Aktion nie einem
+        // Benutzer zuordnen. peer_uid kommt aus SO_PEERCRED der
+        // Client-Verbindung und muss im Audit-Eintrag landen.
+        let dir = tempfile::tempdir().unwrap();
+        let audit_path = dir.path().join("audit.jsonl");
+        let state = test_state();
+        let mut cfg = config(&["mute_anomaly"], &[]);
+        cfg.audit_log_path = audit_path.to_string_lossy().to_string();
+        let executor = ActionExecutor::new(cfg);
+
+        let mute = ActionRequest::MuteAnomaly {
+            template_id: 7,
+            unit: None,
+            scope: MuteScope::OneHour,
+        };
+        executor
+            .execute(
+                &mute,
+                ActionRequestOrigin {
+                    request_id: 1,
+                    session_id: 1,
+                    peer_uid: Some(4242),
+                },
+                0,
+                &state,
+            )
+            .await;
+
+        let content = std::fs::read_to_string(&audit_path).unwrap();
+        let entry: serde_json::Value = serde_json::from_str(content.trim_end()).unwrap();
+        assert_eq!(entry["peer_uid"], serde_json::json!(4242));
     }
 
     #[tokio::test]
@@ -848,8 +932,8 @@ mod tests {
             unit: None,
             scope: MuteScope::OneHour,
         };
-        let first = executor.execute(&mute, 1, 1, 0, &state).await;
-        let second = executor.execute(&mute, 2, 1, 0, &state).await;
+        let first = executor.execute(&mute, origin(1), 0, &state).await;
+        let second = executor.execute(&mute, origin(2), 0, &state).await;
         assert!(matches!(first, ActionOutcome::Completed { .. }));
         assert!(matches!(
             second,
