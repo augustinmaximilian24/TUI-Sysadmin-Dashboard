@@ -20,6 +20,13 @@ use tokio::process::Command;
 /// Obergrenze für den exponentiellen Backoff beim Neustart von `journalctl`.
 const MAX_BACKOFF_MS: u64 = 30_000;
 
+/// Mindestlaufzeit eines Durchlaufs, ab der der Backoff nach seinem Ende
+/// wieder auf den Basiswert zurückgesetzt wird, statt weiter zu wachsen.
+/// Ohne diese Schwelle blieb `backoff_ms` nach einer einzigen Störung für
+/// die gesamte Prozesslaufzeit auf dem zuletzt erreichten Wert stehen, auch
+/// wenn `journalctl` danach stunden- oder tagelang störungsfrei lief.
+const MIN_STABLE_RUN: Duration = Duration::from_secs(60);
+
 /// Betriebsmodus der Ingestion.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IngestionMode {
@@ -189,25 +196,46 @@ pub async fn run_ingestion(
 ) -> Result<(), IngestionError> {
     check_journal_permissions().await?;
 
-    let mut backoff_ms = config.restart_backoff_ms.max(1);
-    loop {
+    if let IngestionMode::Replay { .. } = &mode {
         let status = read_one_pass(&mode, &sender, &parse_error_counter).await?;
+        tracing::info!(status = ?status, "Replay-Durchlauf abgeschlossen");
+        return Ok(());
+    }
 
-        match &mode {
-            IngestionMode::Replay { .. } => {
-                tracing::info!(status = ?status, "Replay-Durchlauf abgeschlossen");
-                return Ok(());
-            }
-            IngestionMode::Live => {
+    let base_backoff_ms = config.restart_backoff_ms.max(1);
+    let mut backoff_ms = base_backoff_ms;
+    loop {
+        // Sowohl ein sauber beendeter Durchlauf (Ok) als auch ein
+        // Fehlschlag beim Starten/Lesen (Err, z. B. ein transienter
+        // fork()-Fehler unter MemoryMax oder ein EIO auf der Pipe) führen
+        // im Live-Modus zum selben Backoff-und-Neustart -- vorher ließ der
+        // `?`-Operator jeden Err-Fall direkt aus der Ingestion und damit den
+        // ganzen Daemon-Prozess enden, statt es erneut zu versuchen.
+        let started_at = tokio::time::Instant::now();
+        let outcome = read_one_pass(&mode, &sender, &parse_error_counter).await;
+
+        if started_at.elapsed() >= MIN_STABLE_RUN {
+            backoff_ms = base_backoff_ms;
+        }
+
+        match outcome {
+            Ok(status) => {
                 tracing::warn!(
                     status = ?status,
                     backoff_ms,
                     "journalctl-Prozess unerwartet beendet, starte nach Backoff neu"
                 );
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                backoff_ms = (backoff_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
+            }
+            Err(err) => {
+                tracing::warn!(
+                    fehler = %err,
+                    backoff_ms,
+                    "Ingestion-Durchlauf fehlgeschlagen, starte nach Backoff neu"
+                );
             }
         }
+        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        backoff_ms = (backoff_ms.saturating_mul(2)).min(MAX_BACKOFF_MS);
     }
 }
 
