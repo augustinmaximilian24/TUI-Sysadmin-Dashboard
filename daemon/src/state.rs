@@ -27,6 +27,10 @@ use crate::wire::ContextEntry;
 /// gleichzeitigen Clients.
 const ANOMALY_BROADCAST_CAPACITY: usize = 256;
 
+/// Obergrenze gleichzeitig gespeicherter Stummschaltungen
+/// (`ActionRequest::MuteAnomaly`, siehe [`SharedState::mute`]).
+const MAX_MUTE_ENTRIES: usize = 10_000;
+
 /// Geteilter Zustand des Daemons für einen Collector-Lauf (eine
 /// Prozess-Lebensdauer). `session_id` ändert sich bei jedem Neustart, damit
 /// Clients erkennen, dass zuvor gesehene Anomalie-`id`s neu vergeben sein
@@ -144,10 +148,25 @@ impl SharedState {
     /// Trägt eine manuelle Stummschaltung ein (`ActionRequest::MuteAnomaly`).
     /// `until_us = u64::MAX` bedeutet dauerhaft (`MuteScope::Permanent`).
     pub fn mute(&self, template_id: u64, unit: Option<String>, until_us: u64) {
-        self.mute_store
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert((template_id, unit), until_us);
+        let mut store = self.mute_store.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (template_id, unit);
+
+        // Nur beim Anlegen eines wirklich neuen Eintrags nach Platz sehen
+        // (dieselbe Strategie wie beim Rate-Limit in `actions.rs`): `unit`
+        // ist clientseitig frei wählbar, ohne diese Grenze könnte ein
+        // Client durch ständig neue (template_id, unit)-Kombinationen
+        // beliebig viele Einträge erzeugen (Regel 18).
+        if !store.contains_key(&key) && store.len() >= MAX_MUTE_ENTRIES {
+            if let Some(oldest) = store
+                .iter()
+                .min_by_key(|(_, &expiry)| expiry)
+                .map(|(k, _)| k.clone())
+            {
+                store.remove(&oldest);
+            }
+        }
+
+        store.insert(key, until_us);
     }
 
     /// Ob `(template_id, unit)` aktuell stummgeschaltet ist -- entweder
@@ -648,5 +667,23 @@ mod tests {
         assert!(state.is_muted(9, Some("beliebige.service"), 500));
         assert!(state.is_muted(9, None, 500));
         assert!(!state.is_muted(1, Some("beliebige.service"), 500));
+    }
+
+    #[test]
+    fn mute_store_bleibt_trotz_staendig_neuer_kombinationen_beschraenkt() {
+        // Regression: `unit` ist bei ActionRequest::MuteAnomaly
+        // clientseitig frei wählbar. Ohne Obergrenze könnte ein Client
+        // durch ständig neue (template_id, unit)-Kombinationen beliebig
+        // viele Einträge erzeugen (Regel 18).
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        for i in 0..(MAX_MUTE_ENTRIES + 500) as u64 {
+            state.mute(i, Some(format!("unit-{i}")), u64::MAX);
+        }
+        let len = state
+            .mute_store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert!(len <= MAX_MUTE_ENTRIES, "Obergrenze verletzt: {len}");
     }
 }

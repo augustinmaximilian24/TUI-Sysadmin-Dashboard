@@ -30,6 +30,10 @@ pub struct ActionExecutor {
     audit_log: Mutex<Option<std::fs::File>>,
 }
 
+/// Obergrenze der gleichzeitig verfolgten Rate-Limit-Schlüssel
+/// (`Aktionsart:Ziel`, siehe [`ActionExecutor::check_rate_limit`]).
+const MAX_RATE_LIMIT_KEYS: usize = 10_000;
+
 /// Eine Zeile im Audit-Log (Regel 13): ein Eintrag pro *Versuch*, auch
 /// abgelehnte oder fehlgeschlagene, damit das Rate-Limit nicht durch
 /// absichtliches Scheitern umgangen werden kann und die Audit-Ansicht
@@ -350,6 +354,23 @@ impl ActionExecutor {
             .saturating_mul(60)
             .saturating_mul(1_000_000);
         let mut limits = self.rate_limits.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Nur beim Anlegen eines wirklich neuen Schlüssels nach Platz sehen
+        // (dieselbe Strategie wie RateTracker::ensure_capacity in
+        // core::analysis::rate): `target` ist bei block_ip/
+        // terminate_process/mute_anomaly clientseitig frei wählbar, ohne
+        // diese Grenze könnte ein Client durch ständig wechselnde Ziele
+        // beliebig viele, nie wieder besuchte Einträge erzeugen (Regel 18).
+        if !limits.contains_key(key) && limits.len() >= MAX_RATE_LIMIT_KEYS {
+            if let Some(oldest_key) = limits
+                .iter()
+                .min_by_key(|(_, deque)| deque.back().copied().unwrap_or(0))
+                .map(|(k, _)| k.clone())
+            {
+                limits.remove(&oldest_key);
+            }
+        }
+
         let attempts = limits.entry(key.to_string()).or_default();
         attempts.retain(|&t| now_us.saturating_sub(t) < window_us);
 
@@ -952,5 +973,23 @@ mod tests {
                 reason: DenyReason::RateLimited { .. }
             }
         ));
+    }
+
+    #[test]
+    fn rate_limit_map_bleibt_trotz_staendig_wechselnder_ziele_beschraenkt() {
+        // Regression: `target` ist bei block_ip/terminate_process/
+        // mute_anomaly clientseitig frei wählbar. Ohne Obergrenze würde ein
+        // Client durch ständig wechselnde Ziele beliebig viele, nie wieder
+        // besuchte Einträge erzeugen (Regel 18).
+        let executor = ActionExecutor::new(config(&["mute_anomaly"], &[]));
+        for i in 0..(MAX_RATE_LIMIT_KEYS + 500) {
+            executor.check_rate_limit(&format!("mute_anomaly:{i}"), i as u64);
+        }
+        let len = executor
+            .rate_limits
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len();
+        assert!(len <= MAX_RATE_LIMIT_KEYS, "Obergrenze verletzt: {len}");
     }
 }
