@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::mpsc;
 
 use logsentry_proto::{
-    spawn, AnomalyEvent, ClientConfig, ConnectionState, ContextReply, ErrorCode, GoodbyeReason,
-    ServerMessage, Snapshot, Subscription,
+    spawn, ActionKind, ActionOutcome, AnomalyEvent, ClientConfig, ConnectionState, ContextReply,
+    ErrorCode, GoodbyeReason, ServerMessage, Snapshot, Subscription,
 };
 
 /// Obergrenze der im Speicher gehaltenen Anomalien (Regel 18). Die
@@ -33,6 +33,13 @@ const HISTORY_CAP: usize = 1800;
 /// Obergrenze für angezeigte Protokoll-/Verbindungsfehler.
 const LOG_CAP: usize = 100;
 
+/// Obergrenze für die im Speicher gehaltene Aktions-Historie dieser
+/// Sitzung (Regel 18). Das ist keine vollständige Audit-Ansicht der
+/// serverseitigen Datei -- das Protokoll bietet keinen Abruf historischer
+/// Einträge, nur `ActionResult` für in dieser Sitzung selbst gestellte
+/// Anfragen (Phase 8, Schritt 9).
+const ACTION_LOG_CAP: usize = 200;
+
 /// Ein Punkt im Entropie-Verlauf: (Sekunden seit Programmstart, Bit).
 pub type HistoryPoint = [f64; 2];
 
@@ -42,11 +49,21 @@ pub type HistoryPoint = [f64; 2];
 pub struct GuiState {
     pub connection: Option<ConnectionState>,
     pub hostname: Option<String>,
+    /// Vom Daemon im `Hello` gemeldete erlaubte Aktionsarten (Phase 8) --
+    /// die GUI zeigt nur Buttons für Aktionen an, die hier auftauchen; die
+    /// endgültige Prüfung bleibt aber immer beim Daemon.
+    pub allowed_actions: Vec<ActionKind>,
+    /// Globaler Dry-Run-Schalter des Daemons, für einen Hinweis im
+    /// Bestätigungsdialog.
+    pub dry_run: bool,
     pub snapshot: Option<Snapshot>,
     pub entropy_history: VecDeque<HistoryPoint>,
     pub anomalies: VecDeque<AnomalyEvent>,
     pub context_reply: Option<ContextReply>,
     pub log: VecDeque<String>,
+    /// Ergebnisse selbst gestellter Aktionsanfragen dieser Sitzung
+    /// (`request_id`, Ergebnis), neueste zuletzt.
+    pub action_log: VecDeque<(u64, ActionOutcome)>,
 }
 
 impl GuiState {
@@ -55,6 +72,13 @@ impl GuiState {
             self.anomalies.pop_front();
         }
         self.anomalies.push_back(event);
+    }
+
+    fn push_action_result(&mut self, request_id: u64, outcome: ActionOutcome) {
+        if self.action_log.len() >= ACTION_LOG_CAP {
+            self.action_log.pop_front();
+        }
+        self.action_log.push_back((request_id, outcome));
     }
 
     fn push_log(&mut self, line: String) {
@@ -128,7 +152,16 @@ pub fn spawn_bridge(
 /// Sortiert eine eingehende Nachricht in den geteilten Zustand ein.
 fn apply_message(state: &mut GuiState, message: ServerMessage, started_at: std::time::Instant) {
     match message {
-        ServerMessage::Hello { hostname, .. } => state.hostname = Some(hostname),
+        ServerMessage::Hello {
+            hostname,
+            allowed_actions,
+            dry_run,
+            ..
+        } => {
+            state.hostname = Some(hostname);
+            state.allowed_actions = allowed_actions;
+            state.dry_run = dry_run;
+        }
         ServerMessage::RecentAnomalies { anomalies } => {
             for anomaly in anomalies {
                 state.push_anomaly(anomaly);
@@ -137,7 +170,9 @@ fn apply_message(state: &mut GuiState, message: ServerMessage, started_at: std::
         ServerMessage::Snapshot(snapshot) => state.apply_snapshot(snapshot, started_at),
         ServerMessage::Anomaly(event) => state.push_anomaly(event),
         ServerMessage::Context(reply) => state.context_reply = Some(reply),
-        ServerMessage::ActionResult { .. } => {}
+        ServerMessage::ActionResult { request_id, outcome } => {
+            state.push_action_result(request_id, outcome);
+        }
         ServerMessage::Pong { .. } => {}
         ServerMessage::Error { code, message, .. } => {
             state.push_log(format_error(&code, &message));
@@ -191,4 +226,83 @@ pub fn connection_label(state: Option<&ConnectionState>) -> String {
 /// die eine Anfrage an den Daemon schicken).
 pub fn is_connected(state: Option<&ConnectionState>) -> bool {
     matches!(state, Some(ConnectionState::Connected { .. }))
+}
+
+/// Menschlich lesbarer Name einer Aktionsart für Buttons und Audit-Ansicht.
+pub fn action_kind_label(kind: ActionKind) -> &'static str {
+    match kind {
+        ActionKind::RestartUnit => "Unit neu starten",
+        ActionKind::StopUnit => "Unit stoppen",
+        ActionKind::TerminateProcess => "Prozess beenden",
+        ActionKind::BlockIp => "IP sperren",
+        ActionKind::MuteAnomaly => "Anomalie stummschalten",
+    }
+}
+
+/// Menschlich lesbares Ergebnis einer Aktionsanfrage für die Audit-Ansicht.
+pub fn format_action_outcome(outcome: &ActionOutcome) -> String {
+    match outcome {
+        ActionOutcome::Accepted => "angenommen".to_string(),
+        ActionOutcome::Completed { message, dry_run } => {
+            if *dry_run {
+                format!("Dry-Run: {message}")
+            } else {
+                format!("ausgeführt: {message}")
+            }
+        }
+        ActionOutcome::Denied { reason } => format!("abgelehnt: {reason:?}"),
+        ActionOutcome::Failed { message } => format!("fehlgeschlagen: {message}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use logsentry_proto::DenyReason;
+
+    #[test]
+    fn format_action_outcome_markiert_dry_run_deutlich() {
+        let dry = ActionOutcome::Completed {
+            message: "sshd.service neu gestartet".to_string(),
+            dry_run: true,
+        };
+        let real = ActionOutcome::Completed {
+            message: "sshd.service neu gestartet".to_string(),
+            dry_run: false,
+        };
+        assert!(format_action_outcome(&dry).starts_with("Dry-Run:"));
+        assert!(format_action_outcome(&real).starts_with("ausgeführt:"));
+    }
+
+    #[test]
+    fn format_action_outcome_zeigt_ablehnungsgrund() {
+        let outcome = ActionOutcome::Denied {
+            reason: DenyReason::RateLimited {
+                retry_after_secs: 42,
+            },
+        };
+        let text = format_action_outcome(&outcome);
+        assert!(text.contains("abgelehnt"));
+        assert!(text.contains("42"));
+    }
+
+    #[test]
+    fn action_kind_label_deckt_alle_varianten_ab() {
+        for kind in [
+            ActionKind::RestartUnit,
+            ActionKind::StopUnit,
+            ActionKind::TerminateProcess,
+            ActionKind::BlockIp,
+            ActionKind::MuteAnomaly,
+        ] {
+            assert!(!action_kind_label(kind).is_empty());
+        }
+    }
+
+    #[test]
+    fn is_connected_erkennt_nur_den_connected_zustand() {
+        assert!(!is_connected(None));
+        assert!(!is_connected(Some(&ConnectionState::Connecting { attempt: 0 })));
+        assert!(is_connected(Some(&ConnectionState::Connected { session_id: 1 })));
+    }
 }

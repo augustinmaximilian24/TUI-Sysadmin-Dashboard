@@ -14,9 +14,24 @@ use std::time::Duration;
 use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 
-use logsentry_proto::{AnomalyEvent, AnomalyLevel, ClientMessage, ConnectionState, Snapshot};
+use logsentry_proto::{
+    ActionKind, ActionRequest, AnomalyEvent, AnomalyLevel, ClientMessage, ConnectionState,
+    MuteScope, Snapshot, UnitName,
+};
 
-use crate::client::{connection_label, is_connected, GuiState, HistoryPoint};
+use crate::client::{
+    action_kind_label, connection_label, format_action_outcome, is_connected, GuiState,
+    HistoryPoint,
+};
+
+/// Eine per Button ausgelöste, aber noch nicht bestätigte Aktion (Regel 12:
+/// kein Ein-Klick-Vollzug). Der Klick baut schon die fertige
+/// `ActionRequest` -- der Dialog zeigt nur noch die Vorschau und wartet auf
+/// Bestätigung oder Abbruch.
+struct PendingConfirmation {
+    description: String,
+    action: ActionRequest,
+}
 
 /// Wie viele Rohzeilen vor/nach dem Anomalie-Zeitpunkt beim Laden des
 /// Kontexts angefragt werden. Der Daemon klemmt bei Bedarf serverseitig
@@ -64,11 +79,14 @@ enum SortKey {
 struct RenderSnapshot {
     connection: Option<ConnectionState>,
     hostname: Option<String>,
+    allowed_actions: Vec<ActionKind>,
+    dry_run: bool,
     snapshot: Option<Snapshot>,
     history: Vec<HistoryPoint>,
     anomalies: Vec<AnomalyEvent>,
     context: Option<logsentry_proto::ContextReply>,
     log: Vec<String>,
+    action_log: Vec<(u64, logsentry_proto::ActionOutcome)>,
 }
 
 pub struct LogsentryApp {
@@ -83,6 +101,9 @@ pub struct LogsentryApp {
     selected_anomaly: Option<u64>,
     next_request_id: u64,
     pending_context_request: Option<u64>,
+    /// Per Button vorbereitete, aber noch nicht bestätigte Aktion
+    /// (Regel 12: Bestätigungsdialog mit Vorschau, kein Ein-Klick-Vollzug).
+    pending_confirmation: Option<PendingConfirmation>,
     render: RenderSnapshot,
 }
 
@@ -103,6 +124,7 @@ impl LogsentryApp {
             selected_anomaly: None,
             next_request_id: 1,
             pending_context_request: None,
+            pending_confirmation: None,
             render: RenderSnapshot::default(),
         }
     }
@@ -122,6 +144,25 @@ impl LogsentryApp {
         self.render.anomalies = guard.anomalies.iter().cloned().collect();
         self.render.context = guard.context_reply.clone();
         self.render.log = guard.log.iter().cloned().collect();
+        self.render.allowed_actions = guard.allowed_actions.clone();
+        self.render.dry_run = guard.dry_run;
+        self.render.action_log = guard.action_log.iter().cloned().collect();
+    }
+
+    /// Sendet die bestätigte Aktion und räumt den Dialog weg. `try_send`
+    /// statt `.await`: die Warteschlange ist bounded (Regel 17), läuft sie
+    /// voll, verliert der Client nur diese eine Anfrage statt die UI zu
+    /// blockieren (Regel 21).
+    fn confirm_pending_action(&mut self) {
+        let Some(pending) = self.pending_confirmation.take() else {
+            return;
+        };
+        let request_id = self.next_request_id;
+        self.next_request_id += 1;
+        let _ = self.outbound.try_send(ClientMessage::Action {
+            request_id,
+            action: pending.action,
+        });
     }
 
     fn request_context(&mut self, anomaly: &AnomalyEvent) {
@@ -202,6 +243,7 @@ impl eframe::App for LogsentryApp {
         self.draw_system_panel(ctx);
         self.draw_detail_panel(ctx);
         self.draw_central(ctx);
+        self.draw_confirmation_dialog(ctx);
     }
 }
 
@@ -315,6 +357,26 @@ impl LogsentryApp {
                             }
                         });
                 }
+
+                // Audit-Ansicht (Phase 8, Schritt 9): das Protokoll bietet
+                // keinen Abruf historischer Einträge aus der serverseitigen
+                // Audit-Datei -- diese Liste zeigt nur Ergebnisse von
+                // Aktionen, die diese GUI-Sitzung selbst ausgelöst hat.
+                if !self.render.action_log.is_empty() {
+                    ui.separator();
+                    ui.heading("Aktionen dieser Sitzung");
+                    egui::ScrollArea::vertical()
+                        .id_salt("action_log_scroll")
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            for (request_id, outcome) in self.render.action_log.iter().rev() {
+                                ui.label(format!(
+                                    "#{request_id}: {}",
+                                    format_action_outcome(outcome)
+                                ));
+                            }
+                        });
+                }
             });
     }
 
@@ -369,6 +431,10 @@ impl LogsentryApp {
                     self.request_context(&anomaly);
                 }
 
+                ui.separator();
+                ui.label("Aktionen:");
+                self.draw_action_buttons(ui, &anomaly, connected);
+
                 // Nur eine Antwort anzeigen, die tatsächlich zur zuletzt
                 // gestellten Anfrage dieser Auswahl gehört -- sonst könnte
                 // nach einem Auswahlwechsel kurzzeitig der Kontext der
@@ -399,6 +465,129 @@ impl LogsentryApp {
                     }
                 }
             });
+    }
+
+    /// Zeigt Buttons für die Aktionen, die für diese Anomalie inhaltlich
+    /// Sinn ergeben (Unit vorhanden -> Neustart/Stopp, PID vorhanden ->
+    /// Prozess beenden, immer -> Stummschalten) und laut `Hello` erlaubt
+    /// sind. Ein Klick öffnet nur den Bestätigungsdialog (Regel 12) --
+    /// gesendet wird erst nach Bestätigung dort.
+    fn draw_action_buttons(&mut self, ui: &mut egui::Ui, anomaly: &AnomalyEvent, connected: bool) {
+        let allowed = &self.render.allowed_actions;
+
+        if let Some(unit) = anomaly.unit.as_deref() {
+            if allowed.contains(&ActionKind::RestartUnit) {
+                if let Ok(unit_name) = UnitName::parse(unit) {
+                    if ui
+                        .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::RestartUnit)))
+                        .clicked()
+                    {
+                        self.pending_confirmation = Some(PendingConfirmation {
+                            description: format!("Unit „{unit}“ jetzt neu starten?"),
+                            action: ActionRequest::RestartUnit { unit: unit_name },
+                        });
+                    }
+                }
+            }
+            if allowed.contains(&ActionKind::StopUnit) {
+                if let Ok(unit_name) = UnitName::parse(unit) {
+                    if ui
+                        .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::StopUnit)))
+                        .clicked()
+                    {
+                        self.pending_confirmation = Some(PendingConfirmation {
+                            description: format!("Unit „{unit}“ jetzt stoppen?"),
+                            action: ActionRequest::StopUnit { unit: unit_name },
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(pid) = anomaly.pid {
+            if allowed.contains(&ActionKind::TerminateProcess)
+                && ui
+                    .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::TerminateProcess)))
+                    .clicked()
+            {
+                self.pending_confirmation = Some(PendingConfirmation {
+                    description: format!("Prozess PID {pid} jetzt beenden (SIGTERM, danach SIGKILL nach Ablauf der Gnadenfrist)?"),
+                    action: ActionRequest::TerminateProcess {
+                        pid,
+                        grace_secs: 5,
+                    },
+                });
+            }
+        }
+
+        if allowed.contains(&ActionKind::MuteAnomaly)
+            && ui
+                .add_enabled(connected, egui::Button::new(action_kind_label(ActionKind::MuteAnomaly)))
+                .clicked()
+        {
+            self.pending_confirmation = Some(PendingConfirmation {
+                description: format!(
+                    "Template „{}“{} dauerhaft stummschalten?",
+                    anomaly.template_text,
+                    anomaly
+                        .unit
+                        .as_deref()
+                        .map(|u| format!(" für Unit „{u}“"))
+                        .unwrap_or_default()
+                ),
+                action: ActionRequest::MuteAnomaly {
+                    template_id: anomaly.template_id,
+                    unit: anomaly.unit.clone(),
+                    scope: MuteScope::Permanent,
+                },
+            });
+        }
+
+        if allowed.is_empty() {
+            ui.label("(keine Aktionsart vom Daemon erlaubt)");
+        }
+    }
+
+    /// Bestätigungsdialog mit Vorschau (Regel 12). Modal genug für den
+    /// Zweck: `egui::Window` mit `collapsible(false)`, `resizable(false)`;
+    /// ein echtes Overlay, das Klicks dahinter blockiert, ist für ein
+    /// Single-Window-Tool wie dieses nicht nötig.
+    fn draw_confirmation_dialog(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending_confirmation else {
+            return;
+        };
+        let description = pending.description.clone();
+        let dry_run = self.render.dry_run;
+        let mut confirm = false;
+        let mut cancel = false;
+
+        egui::Window::new("Aktion bestätigen")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.label(&description);
+                if dry_run {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_BLUE,
+                        "Dry-Run aktiv: der Daemon protokolliert nur, führt aber nichts aus.",
+                    );
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Abbrechen").clicked() {
+                        cancel = true;
+                    }
+                    if ui.button("Bestätigen").clicked() {
+                        confirm = true;
+                    }
+                });
+            });
+
+        if confirm {
+            self.confirm_pending_action();
+        } else if cancel {
+            self.pending_confirmation = None;
+        }
     }
 
     fn draw_central(&mut self, ctx: &egui::Context) {
