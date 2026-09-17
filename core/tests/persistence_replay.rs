@@ -135,11 +135,11 @@ fn zweiter_lauf_aus_persistenz_ist_identisch_zum_in_memory_lauf_und_ohne_lernpha
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("baselines.redb");
     {
-        let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
         db.save(&erster.state).expect("sichern");
     }
     let geladen = {
-        let db = BaselineDb::open(&path, "testhost").expect("erneut öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("erneut öffnen");
         db.load().expect("laden").expect("Bestand vorhanden")
     };
 

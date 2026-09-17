@@ -88,8 +88,12 @@ fn read_hostname() -> String {
 /// Start (Datenverlust wäre die Alternative); alle anderen Fehler führen zum
 /// Betrieb ohne Persistenz, denn Baselines sind Beschleunigung, keine
 /// Voraussetzung.
-fn open_baseline_db(path: &Path, hostname: &str) -> anyhow::Result<Option<BaselineDb>> {
-    match BaselineDb::open(path, hostname) {
+fn open_baseline_db(
+    path: &Path,
+    hostname: &str,
+    bucket_seconds: u64,
+) -> anyhow::Result<Option<BaselineDb>> {
+    match BaselineDb::open(path, hostname, bucket_seconds) {
         Ok(db) => Ok(Some(db)),
         Err(err @ PersistError::NewerSchema { .. }) => Err(anyhow::Error::from(err)),
         Err(err) => {
@@ -243,7 +247,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(gesichert_nach = %moved.display(), "Baselines zurückgesetzt");
     }
 
-    let db = open_baseline_db(&baseline_path, &hostname)?;
+    let db = open_baseline_db(&baseline_path, &hostname, config.analysis.bucket_seconds)?;
 
     if cli.dump_baselines {
         let Some(db) = db else {

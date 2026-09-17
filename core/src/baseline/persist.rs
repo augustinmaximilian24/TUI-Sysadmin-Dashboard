@@ -41,6 +41,9 @@ const META_SCHEMA_VERSION: &str = "schema_version";
 const META_HOSTNAME: &str = "hostname";
 const META_CREATED_US: &str = "created_us";
 const META_LAST_SNAPSHOT_US: &str = "last_snapshot_us";
+/// Bucket-Länge in Sekunden, mit der die gespeicherten Histogramme/Profile
+/// gerechnet wurden (siehe [`BaselineDb::check_bucket_seconds`]).
+const META_BUCKET_SECONDS: &str = "bucket_seconds";
 
 /// Fehler der Persistenzschicht.
 #[derive(Debug, Error)]
@@ -125,7 +128,17 @@ impl BaselineDb {
     ///
     /// Weicht der gespeicherte Hostname von `expected_hostname` ab, wird
     /// gewarnt und weitergelernt (die Datei wurde vermutlich kopiert).
-    pub fn open(path: &Path, expected_hostname: &str) -> Result<Self, PersistError> {
+    ///
+    /// `bucket_seconds` ist die aktuell konfigurierte Bucket-Länge
+    /// (`AnalysisConfig::bucket_seconds`); weicht sie von der beim
+    /// Sichern verwendeten ab, wären die gespeicherten `last_touched_bucket`-
+    /// Indizes gegenüber neu berechneten Bucket-Nummern bedeutungslos (siehe
+    /// [`Self::check_bucket_seconds`]).
+    pub fn open(
+        path: &Path,
+        expected_hostname: &str,
+        bucket_seconds: u64,
+    ) -> Result<Self, PersistError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
@@ -166,6 +179,7 @@ impl BaselineDb {
         }
 
         this.check_hostname(expected_hostname)?;
+        this.check_bucket_seconds(bucket_seconds)?;
         Ok(this)
     }
 
@@ -218,6 +232,55 @@ impl BaselineDb {
         self.write_meta(META_SCHEMA_VERSION, &SCHEMA_VERSION.to_string())?;
         self.write_meta(META_HOSTNAME, hostname)?;
         self.write_meta(META_CREATED_US, &now_us().to_string())?;
+        Ok(())
+    }
+
+    /// Vergleicht die gespeicherte Bucket-Länge mit der aktuell
+    /// konfigurierten. `last_touched_bucket` in [`CountHistogram`]/
+    /// [`super::profile::UnitProfile`] ist ein *absoluter* Bucket-Index
+    /// (`Zeitstempel / bucket_us`), nur relativ zur Bucket-Länge sinnvoll,
+    /// mit der er berechnet wurde -- ändert sich die Länge zwischen zwei
+    /// Starts, sind gespeicherte und neu berechnete Indizes nicht mehr
+    /// vergleichbar. Je nach Richtung der Änderung würde das entweder den
+    /// Zerfall dauerhaft einfrieren (Länge wächst: `elapsed` bleibt 0) oder
+    /// beim nächsten Zugriff sofort alle Gewichte durch `prune_negligible`
+    /// auslöschen (Länge schrumpft: `elapsed` explodiert) -- in beiden
+    /// Fällen ohne jede Rückmeldung. Bei einer erkannten Abweichung werden
+    /// die Histogramme und Unit-Profile deshalb stattdessen mit einer
+    /// Warnung verworfen; die Template-Registry bleibt unberührt, da ihr
+    /// Clustering nicht von der Bucket-Länge abhängt.
+    fn check_bucket_seconds(&mut self, bucket_seconds: u64) -> Result<(), PersistError> {
+        match self.read_meta(META_BUCKET_SECONDS)? {
+            None => {
+                // Erster Start mit diesem Feld (oder frische Datei): nichts
+                // zu verwerfen, nur den aktuellen Wert für künftige
+                // Vergleiche festhalten.
+                self.write_meta(META_BUCKET_SECONDS, &bucket_seconds.to_string())?;
+            }
+            Some(raw) if raw.parse::<u64>() == Ok(bucket_seconds) => {}
+            Some(raw) => {
+                tracing::warn!(
+                    gespeichert = %raw,
+                    aktuell = bucket_seconds,
+                    "Bucket-Länge hat sich seit dem letzten Lauf geändert, \
+                     verwerfe gespeicherte Histogramme und Unit-Profile \
+                     (Template-Registry bleibt erhalten)"
+                );
+                let txn = self.db.begin_write().map_err(redb::Error::from)?;
+                {
+                    txn.open_table(BASELINES)
+                        .map_err(redb::Error::from)?
+                        .retain(|_, _| false)
+                        .map_err(redb::Error::from)?;
+                    txn.open_table(UNIT_PROFILES)
+                        .map_err(redb::Error::from)?
+                        .retain(|_, _| false)
+                        .map_err(redb::Error::from)?;
+                }
+                txn.commit().map_err(redb::Error::from)?;
+                self.write_meta(META_BUCKET_SECONDS, &bucket_seconds.to_string())?;
+            }
+        }
         Ok(())
     }
 
@@ -477,7 +540,7 @@ mod tests {
     fn frische_datei_hat_schema_version_und_keinen_bestand() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
-        let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
         assert_eq!(
             db.read_schema_version().expect("meta"),
             Some(SCHEMA_VERSION)
@@ -495,7 +558,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
-        let _db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let _db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
         let mode = std::fs::metadata(&path)
             .expect("metadata")
             .permissions()
@@ -513,11 +576,11 @@ mod tests {
         assert!(!zustand.templates.clusters.is_empty());
 
         {
-            let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+            let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
             db.save(&zustand).expect("sichern");
         }
 
-        let db = BaselineDb::open(&path, "testhost").expect("erneut öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("erneut öffnen");
         let geladen = db.load().expect("laden").expect("Bestand vorhanden");
 
         // Reihenfolge der Histogramme ist über redb-Schlüsselordnung
@@ -542,7 +605,7 @@ mod tests {
     fn save_ersetzt_alten_bestand_vollstaendig() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
-        let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
         db.save(&befuellter_zustand()).expect("sichern");
 
         // Zweiter Snapshot ist leer -> die Datei darf nichts mehr enthalten,
@@ -556,11 +619,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
         {
-            let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+            let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
             db.write_meta(META_SCHEMA_VERSION, &(SCHEMA_VERSION + 1).to_string())
                 .expect("meta");
         }
-        let err = BaselineDb::open(&path, "testhost").expect_err("muss verweigern");
+        let err = BaselineDb::open(&path, "testhost", 5).expect_err("muss verweigern");
         assert!(
             matches!(err, PersistError::NewerSchema { found, supported }
                 if found == SCHEMA_VERSION + 1 && supported == SCHEMA_VERSION),
@@ -573,10 +636,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
         {
-            let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+            let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
             db.write_meta(META_SCHEMA_VERSION, "0").expect("meta");
         }
-        let err = BaselineDb::open(&path, "testhost").expect_err("kein Migrationspfad");
+        let err = BaselineDb::open(&path, "testhost", 5).expect_err("kein Migrationspfad");
         assert!(
             matches!(err, PersistError::NoMigrationPath(0)),
             "war {err:?}"
@@ -593,7 +656,7 @@ mod tests {
         let path = dir.path().join("baselines.redb");
         std::fs::write(&path, b"das ist keine redb-datei, nur muell").expect("schreiben");
 
-        let db = BaselineDb::open(&path, "testhost").expect("muss trotzdem öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("muss trotzdem öffnen");
         assert!(db.load().expect("laden").is_none());
 
         let verschoben: Vec<_> = std::fs::read_dir(dir.path())
@@ -614,19 +677,63 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
         {
-            let db = BaselineDb::open(&path, "host-a").expect("öffnen");
+            let db = BaselineDb::open(&path, "host-a", 5).expect("öffnen");
             db.save(&befuellter_zustand()).expect("sichern");
         }
         // Anderer Host: warnt, lernt aber weiter -- der Bestand bleibt lesbar.
-        let db = BaselineDb::open(&path, "host-b").expect("öffnen");
+        let db = BaselineDb::open(&path, "host-b", 5).expect("öffnen");
         assert!(db.load().expect("laden").is_some());
+    }
+
+    #[test]
+    fn geaenderte_bucket_laenge_verwirft_baselines_aber_nicht_templates() {
+        // Regression: last_touched_bucket ist ein absoluter, nur relativ
+        // zur Bucket-Länge sinnvoller Index. Ohne diese Prüfung würde eine
+        // geänderte Länge den Zerfall stillschweigend einfrieren oder alle
+        // Gewichte beim nächsten Zugriff auslöschen.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("baselines.redb");
+        {
+            let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
+            db.save(&befuellter_zustand()).expect("sichern");
+        }
+
+        {
+            let db =
+                BaselineDb::open(&path, "testhost", 10).expect("mit anderer Bucket-Länge öffnen");
+            let zustand = db
+                .load()
+                .expect("laden")
+                .expect("Templates müssen erhalten bleiben");
+            assert!(
+                zustand.baselines.histograms.is_empty(),
+                "Histogramme müssen bei geänderter Bucket-Länge verworfen werden"
+            );
+            assert!(
+                !zustand.templates.clusters.is_empty(),
+                "Template-Registry hängt nicht von der Bucket-Länge ab und muss erhalten bleiben"
+            );
+            // Erneutes Öffnen mit derselben (neuen) Länge darf nichts mehr
+            // verwerfen.
+            db.save(&befuellter_zustand()).expect("erneut sichern");
+        }
+
+        let db = BaselineDb::open(&path, "testhost", 10).expect("wieder öffnen");
+        assert!(
+            !db.load()
+                .expect("laden")
+                .expect("Bestand vorhanden")
+                .baselines
+                .histograms
+                .is_empty()
+        );
     }
 
     #[test]
     fn dump_json_ist_gueltiges_json_mit_meta_und_bestand() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("baselines.redb");
-        let db = BaselineDb::open(&path, "testhost").expect("öffnen");
+        let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
         db.save(&befuellter_zustand()).expect("sichern");
 
         let dump = db.dump_json().expect("dump");
