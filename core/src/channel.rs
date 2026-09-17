@@ -110,6 +110,17 @@ impl<T> RingReceiver<T> {
     /// geschlossen wurde und keine gepufferten Elemente mehr vorliegen.
     pub async fn recv(&mut self) -> Option<T> {
         loop {
+            // `notified()` VOR der Prüfung erzeugen, nicht danach: laut
+            // `Notify`-Dokumentation zählt ein Task ab dem Aufruf von
+            // `notified()` als registriert, auch vor dem ersten `.await`.
+            // Würde die Future erst nach der Prüfung erzeugt, könnte
+            // `close()`/das Fallen des letzten `RingSender` in genau diesem
+            // Fenster per `notify_waiters()` feuern -- das weckt (anders
+            // als `notify_one()`) niemanden auf und hinterlässt auch kein
+            // Permit, wodurch dieser Aufruf sonst für immer auf `recv()`
+            // hängen bliebe, statt `None` zu liefern (Regel 17: nie
+            // unbegrenzt blockieren).
+            let notified = self.shared.notify.notified();
             {
                 let mut queue = self.shared.queue.lock().await;
                 if let Some(value) = queue.pop_front() {
@@ -119,7 +130,7 @@ impl<T> RingReceiver<T> {
                     return None;
                 }
             }
-            self.shared.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -132,6 +143,7 @@ impl<T> RingReceiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn send_und_recv_ohne_ueberlauf() {
@@ -178,5 +190,30 @@ mod tests {
     #[should_panic(expected = "größer als 0")]
     fn kapazitaet_null_paniked_bewusst_bei_konstruktion() {
         let _ = ring_channel::<u32>(0);
+    }
+
+    #[tokio::test]
+    async fn recv_endet_zuverlaessig_wenn_letzter_sender_waehrend_des_wartens_faellt() {
+        // Regression: notify_waiters() (ausgelöst beim Fallen des letzten
+        // RingSender) weckt nur Tasks, die notified() bereits VOR diesem
+        // Aufruf erzeugt haben und hinterlässt -- anders als notify_one()
+        // -- kein Permit. Wurde die Notified-Future erst nach der Prüfung
+        // von `closed` erzeugt, konnte ein in genau diesem Fenster
+        // fallender letzter Sender dazu führen, dass recv() nie
+        // zurückkehrt, statt None zu liefern (Regel 17). Viele
+        // Wiederholungen mit einem gezielten `yield_now()` erhöhen die
+        // Chance, dieses enge Zeitfenster tatsächlich zu treffen.
+        for _ in 0..2000 {
+            let (tx, mut rx) = ring_channel::<u32>(4);
+            let recv_task = tokio::spawn(async move { rx.recv().await });
+            tokio::task::yield_now().await;
+            drop(tx);
+
+            let result = tokio::time::timeout(Duration::from_secs(1), recv_task)
+                .await
+                .expect("recv() darf nach Sender-Drop nie unbegrenzt blockieren")
+                .expect("Task darf nicht abbrechen");
+            assert_eq!(result, None);
+        }
     }
 }

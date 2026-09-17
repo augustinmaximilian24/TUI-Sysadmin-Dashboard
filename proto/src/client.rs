@@ -352,6 +352,16 @@ impl InboundReceiver {
     /// eines Reconnects weiter, sobald wieder Daten da sind.
     pub async fn recv(&mut self) -> Option<ServerMessage> {
         loop {
+            // `notified()` VOR der Prüfung erzeugen, nicht danach: ein Task
+            // zählt laut `Notify`-Dokumentation ab dem Aufruf von
+            // `notified()` als registriert, auch vor dem ersten `.await`.
+            // Würde die Future erst nach der Prüfung von `closed` erzeugt,
+            // könnte `InboundSender::close()` in genau diesem Fenster per
+            // `notify_waiters()` feuern -- das weckt niemanden auf und
+            // hinterlässt (anders als `notify_one()`) auch kein Permit,
+            // wodurch dieser Aufruf sonst für immer hängen bliebe, statt
+            // `None` zu liefern.
+            let notified = self.notify.notified();
             {
                 let mut q = self.inner.lock().await;
                 if let Some(msg) = q.items.pop_front() {
@@ -361,7 +371,7 @@ impl InboundReceiver {
                     return None;
                 }
             }
-            self.notify.notified().await;
+            notified.await;
         }
     }
 
@@ -602,5 +612,26 @@ mod tests {
         assert!(d5 > d0);
         // Deckel 30s +/- 20% Jitter
         assert!(d10 <= Duration::from_millis(36_000));
+    }
+
+    #[tokio::test]
+    async fn inbound_recv_endet_zuverlaessig_wenn_waehrend_des_wartens_geschlossen_wird() {
+        // Regression: dieselbe Lost-Wakeup-Klasse wie beim RingReceiver in
+        // logsentry-core (siehe dortiger Test). close() nutzt
+        // notify_waiters(), das nur Tasks weckt, die notified() schon VOR
+        // diesem Aufruf erzeugt haben, und im Gegensatz zu notify_one()
+        // kein Permit hinterlässt.
+        for _ in 0..2000 {
+            let (sender, mut receiver) = inbound_channel(4);
+            let recv_task = tokio::spawn(async move { receiver.recv().await });
+            tokio::task::yield_now().await;
+            sender.close().await;
+
+            let result = tokio::time::timeout(Duration::from_secs(1), recv_task)
+                .await
+                .expect("recv() darf nach close() nie unbegrenzt blockieren")
+                .expect("Task darf nicht abbrechen");
+            assert_eq!(result, None);
+        }
     }
 }
