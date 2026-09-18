@@ -20,18 +20,20 @@ use crate::mask::mask_message;
 
 /// Stabile Kennung eines Templates (FNV-1a-Hash über die Ursprungs-Tokens).
 ///
-/// Zwei reservierte Werte: [`TemplateId::EMPTY`] für leere Nachrichten und
-/// [`TemplateId::OVERFLOW`], wenn die Registry ihre Kapazitätsgrenze
-/// erreicht hat (Regel 18: harte Obergrenze statt unbeschränktem Wachstum).
+/// Ein reservierter Wert: [`TemplateId::EMPTY`] für leere Nachrichten. Die
+/// Registry hat keinen separaten "voll"-Zustand mehr (siehe
+/// `TemplateEngine::process`): An der Kapazitätsgrenze wird stattdessen das
+/// am längsten nicht mehr gesehene Cluster verdrängt, um Platz für ein
+/// neues zu schaffen (Regel 18: harte Obergrenze, aber ohne dass neue,
+/// tatsächlich auftretende Muster in einem gemeinsamen Sammel-Cluster
+/// verschwinden und dort Rate/Baseline/Surprisal aller unerkannten Zeilen
+/// vermischen).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TemplateId(pub u64);
 
 impl TemplateId {
     /// Reservierte ID für leere Nachrichten (kein Token vorhanden).
     pub const EMPTY: TemplateId = TemplateId(0);
-    /// Reservierte ID, wenn die Template-Registry voll ist und keine neuen
-    /// Cluster mehr angelegt werden.
-    pub const OVERFLOW: TemplateId = TemplateId(u64::MAX);
 }
 
 impl std::fmt::Display for TemplateId {
@@ -144,9 +146,10 @@ pub struct TemplateEngine {
     by_len: HashMap<usize, Vec<usize>>,
     similarity_threshold: f64,
     max_templates: usize,
-    /// Anzahl Zeilen, die wegen erreichter `max_templates`-Grenze keinem
-    /// neuen Cluster zugeordnet werden konnten (sichtbar für die GUI).
-    overflow_count: u64,
+    /// Anzahl Cluster, die wegen erreichter `max_templates`-Grenze verdrängt
+    /// wurden, um einem neu gesehenen Muster Platz zu machen (sichtbar für
+    /// die GUI/Diagnose).
+    evicted_count: u64,
 }
 
 impl TemplateEngine {
@@ -160,14 +163,14 @@ impl TemplateEngine {
             by_len: HashMap::new(),
             similarity_threshold: similarity_threshold.clamp(0.0, 1.0),
             max_templates,
-            overflow_count: 0,
+            evicted_count: 0,
         }
     }
 
-    /// Anzahl der Zeilen, die wegen voller Registry keinem neuen Template
-    /// zugeordnet werden konnten.
-    pub fn overflow_count(&self) -> u64 {
-        self.overflow_count
+    /// Anzahl der Cluster, die bisher wegen erreichter Kapazitätsgrenze
+    /// verdrängt wurden.
+    pub fn evicted_count(&self) -> u64 {
+        self.evicted_count
     }
 
     /// Anzahl aktuell verwalteter Templates.
@@ -176,7 +179,7 @@ impl TemplateEngine {
     }
 
     /// Serialisierbare Kopie der gesamten Registry (für die Persistenz,
-    /// Phase 4). Der `overflow_count` wird nicht mitgesichert: Er ist eine
+    /// Phase 4). `evicted_count` wird nicht mitgesichert: Er ist eine
     /// Laufzeit-Kennzahl der aktuellen Sitzung, keine gelernte Information.
     pub fn snapshot(&self) -> TemplateSnapshot {
         TemplateSnapshot {
@@ -263,18 +266,16 @@ impl TemplateEngine {
         }
 
         if self.clusters.len() >= self.max_templates {
-            self.overflow_count += 1;
-            tracing::warn!(
-                max_templates = self.max_templates,
-                "Template-Registry voll, Zeile wird nicht als neues Template registriert"
-            );
-            return TemplateMatch {
-                id: TemplateId::OVERFLOW,
-                template: tokens.join(" "),
-                first_seen_us: timestamp_us,
-                count: 0,
-                is_new: false,
-            };
+            // Verdrängen statt ablehnen: Ein gemeinsamer Sammel-Zustand für
+            // alle unerkannten Zeilen (wie zuvor `TemplateId::OVERFLOW`)
+            // vermischt deren Rate/Baseline/Surprisal und lässt die
+            // Erkennung für neue Muster verstummen, sobald die Registry
+            // einmal voll ist -- auf einem lange laufenden, chattigen Host
+            // ist das ihr Dauerzustand. Stattdessen weicht das am längsten
+            // nicht mehr gesehene Cluster, analog zu
+            // `RateTracker::ensure_capacity` in `analysis::rate`.
+            self.evict_least_recently_seen();
+            self.evicted_count += 1;
         }
 
         let id = TemplateId(fnv1a_hash64(tokens.join(" ").as_bytes()));
@@ -315,6 +316,32 @@ impl TemplateEngine {
         }
 
         best.map(|(idx, _)| idx)
+    }
+
+    /// Entfernt das Cluster mit dem ältesten `last_seen_us`, um an der
+    /// Kapazitätsgrenze Platz für ein neu gesehenes Muster zu schaffen.
+    /// Baut `by_len` danach komplett neu auf: `clusters` ist durch
+    /// `max_templates` hart begrenzt, ein voller Neuaufbau bleibt damit
+    /// billig, spart aber die fehleranfällige Index-Pflege, die ein
+    /// `swap_remove` mit gezieltem Patchen von `by_len` erfordern würde.
+    fn evict_least_recently_seen(&mut self) {
+        let Some((idx, _)) = self
+            .clusters
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, cluster)| cluster.last_seen_us)
+        else {
+            return;
+        };
+        self.clusters.remove(idx);
+
+        self.by_len.clear();
+        for (new_idx, cluster) in self.clusters.iter().enumerate() {
+            self.by_len
+                .entry(cluster.token_template.len())
+                .or_default()
+                .push(new_idx);
+        }
     }
 }
 
@@ -438,7 +465,13 @@ mod tests {
     }
 
     #[test]
-    fn max_templates_grenze_wird_respektiert() {
+    fn max_templates_grenze_verdraengt_das_am_laengsten_inaktive_cluster() {
+        // Regression: ein gemeinsamer Sammel-Zustand für alle unerkannten
+        // Zeilen an der Kapazitätsgrenze (vormals TemplateId::OVERFLOW)
+        // hätte deren Rate/Baseline/Surprisal vermischt und die Erkennung
+        // neuer Muster dauerhaft verstummen lassen, sobald die Registry
+        // einmal voll ist. Ein drittes, völlig neues Muster verdrängt jetzt
+        // stattdessen das am längsten inaktive Cluster.
         let mut engine = TemplateEngine::new(0.7, 2);
         let a = engine.process("erste ganz eigene nachricht", 1000);
         let b = engine.process("zweite komplett andere sache", 1001);
@@ -446,9 +479,24 @@ mod tests {
 
         assert!(a.is_new);
         assert!(b.is_new);
-        assert_eq!(c.id, TemplateId::OVERFLOW);
-        assert_eq!(engine.overflow_count(), 1);
-        assert_eq!(engine.template_count(), 2);
+        assert!(c.is_new, "das neue Muster bekommt jetzt ein echtes Cluster");
+        assert_ne!(c.id, a.id);
+        assert_ne!(c.id, b.id);
+        assert_eq!(engine.evicted_count(), 1);
+        assert_eq!(
+            engine.template_count(),
+            2,
+            "die Obergrenze bleibt trotz Verdrängung eingehalten"
+        );
+
+        // "a" war am längsten inaktiv (zuletzt bei timestamp 1000) und muss
+        // gewichen sein; erneutes Prozessieren derselben Nachricht muss ein
+        // frisches Cluster anlegen, kein bekanntes treffen.
+        let a_again = engine.process("erste ganz eigene nachricht", 1003);
+        assert!(
+            a_again.is_new,
+            "das verdrängte Cluster darf nicht mehr bekannt sein"
+        );
     }
 
     #[test]
