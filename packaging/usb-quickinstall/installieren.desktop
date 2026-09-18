@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=logsentry installieren
+Comment=Installiert das logsentry Sysadmin-Dashboard (Schnellinstallation)
+Exec=bash -c "\"$(dirname '%k')\"/logsentry-installieren.sh"
+Icon=utilities-system-monitor
+Terminal=true
+Categories=System;
