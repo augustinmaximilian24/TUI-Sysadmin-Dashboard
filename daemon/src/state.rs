@@ -31,6 +31,10 @@ const ANOMALY_BROADCAST_CAPACITY: usize = 256;
 /// (`ActionRequest::MuteAnomaly`, siehe [`SharedState::mute`]).
 const MAX_MUTE_ENTRIES: usize = 10_000;
 
+/// Obergrenze gleichzeitig gespeicherter Selbstfilter-Einträge (Regel 18,
+/// siehe [`SharedState::insert_self_filter`]).
+const MAX_SELF_FILTER_ENTRIES: usize = 10_000;
+
 /// Geteilter Zustand des Daemons für einen Collector-Lauf (eine
 /// Prozess-Lebensdauer). `session_id` ändert sich bei jedem Neustart, damit
 /// Clients erkennen, dass zuvor gesehene Anomalie-`id`s neu vergeben sein
@@ -104,19 +108,38 @@ impl SharedState {
     /// `StopUnit`-Aktion für `until_us` (absoluter Zeitstempel in µs) in
     /// den Selbstfilter auf.
     pub fn suppress_unit(&self, unit: &str, until_us: u64) {
-        self.self_filter
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(SelfFilterKey::Unit(unit.to_string()), until_us);
+        self.insert_self_filter(SelfFilterKey::Unit(unit.to_string()), until_us);
     }
 
     /// Nimmt die PID einer soeben per `TerminateProcess` beendeten
     /// Prozesses für `until_us` in den Selbstfilter auf.
     pub fn suppress_pid(&self, pid: i32, until_us: u64) {
-        self.self_filter
+        self.insert_self_filter(SelfFilterKey::Pid(pid), until_us);
+    }
+
+    /// Trägt einen Selbstfilter-Eintrag ein und verdrängt bei Bedarf zuvor
+    /// den am nächsten ablaufenden bestehenden Eintrag (Regel 18: harte
+    /// Obergrenze). Weniger dringlich als bei `rate_limits`/`mute_store`,
+    /// da `unit`/`pid` hier nur aus bereits erlaubten und rate-limitierten
+    /// Aktionen stammen, nicht direkt aus unmoderierten Client-Eingaben --
+    /// dennoch ohne eigene Grenze über die Laufzeit des Daemons
+    /// theoretisch unbeschränkt (z. B. viele verschiedene PIDs über eine
+    /// journalctl-Ausfallzeit hinweg).
+    fn insert_self_filter(&self, key: SelfFilterKey, until_us: u64) {
+        let mut filter = self
+            .self_filter
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(SelfFilterKey::Pid(pid), until_us);
+            .unwrap_or_else(PoisonError::into_inner);
+        if !filter.contains_key(&key) && filter.len() >= MAX_SELF_FILTER_ENTRIES {
+            if let Some(soonest) = filter
+                .iter()
+                .min_by_key(|(_, &expiry)| expiry)
+                .map(|(k, _)| k.clone())
+            {
+                filter.remove(&soonest);
+            }
+        }
+        filter.insert(key, until_us);
     }
 
     /// Ob ein Ereignis mit dieser Unit bzw. PID gerade durch den
@@ -685,5 +708,22 @@ mod tests {
             .unwrap_or_else(PoisonError::into_inner)
             .len();
         assert!(len <= MAX_MUTE_ENTRIES, "Obergrenze verletzt: {len}");
+    }
+
+    #[test]
+    fn self_filter_bleibt_trotz_vieler_unterschiedlicher_pids_beschraenkt() {
+        // Regression: über eine journalctl-Ausfallzeit oder viele
+        // aufeinanderfolgende terminate_process-Aktionen mit
+        // unterschiedlichen PIDs hinweg wuchs self_filter unbegrenzt.
+        let state = SharedState::new(minimal_snapshot(), 10, 10);
+        for pid in 0..(MAX_SELF_FILTER_ENTRIES as i32 + 500) {
+            state.suppress_pid(pid, u64::MAX);
+        }
+        let len = state
+            .self_filter
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len();
+        assert!(len <= MAX_SELF_FILTER_ENTRIES, "Obergrenze verletzt: {len}");
     }
 }

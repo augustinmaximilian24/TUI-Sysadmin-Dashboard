@@ -248,7 +248,12 @@ impl ActionExecutor {
         now_us: u64,
         state: &SharedState,
     ) -> ActionOutcome {
-        let grace = grace_secs.clamp(1, self.config.terminate_max_grace_secs);
+        // `.max(1)` auf die Obergrenze, nicht nur auf `grace_secs`: u16::clamp
+        // panickt, wenn die untere Grenze (1) über der oberen liegt, was bei
+        // einer fehlerhaften Konfiguration (terminate_max_grace_secs = 0)
+        // sonst einen Tippfehler in der TOML-Datei zu einem Panic im
+        // privilegierten Daemon machen würde (Regel 16).
+        let grace = grace_secs.clamp(1, self.config.terminate_max_grace_secs.max(1));
 
         if self.config.dry_run {
             return ActionOutcome::Completed {
@@ -301,10 +306,14 @@ impl ActionExecutor {
     /// `docs/phase8-aktionen.md` Abschnitt 1). Kein Selbstfilter nötig --
     /// eine IP-Sperre erzeugt keine Journal-Zeilen der beobachteten Units.
     async fn dispatch_block_ip(&self, ip: std::net::IpAddr, duration_secs: u32) -> ActionOutcome {
-        let duration = duration_secs.clamp(
-            self.config.block_ip_min_duration_secs,
-            self.config.block_ip_max_duration_secs,
-        );
+        // `.max(min)` auf die Obergrenze: u32::clamp panickt, wenn die
+        // untere Grenze über der oberen liegt, was bei einer invertierten
+        // Konfiguration (block_ip_min_duration_secs > ..._max_...) sonst
+        // einen Tippfehler in der TOML-Datei zu einem Panic im
+        // privilegierten Daemon machen würde (Regel 16).
+        let min = self.config.block_ip_min_duration_secs;
+        let max = self.config.block_ip_max_duration_secs.max(min);
+        let duration = duration_secs.clamp(min, max);
 
         if self.config.dry_run {
             return ActionOutcome::Completed {
@@ -976,6 +985,42 @@ mod tests {
                 reason: DenyReason::NotAllowed
             }
         );
+    }
+
+    #[tokio::test]
+    async fn terminate_process_paniked_nicht_bei_grace_secs_null_in_der_konfiguration() {
+        // Regression: u16::clamp panickt, wenn die untere Grenze (1) über
+        // der oberen liegt. terminate_max_grace_secs = 0 (z. B. ein
+        // Tippfehler in der TOML-Datei) hätte jeden terminate_process-
+        // Aufruf zu einem Panic im privilegierten Daemon gemacht.
+        let state = test_state();
+        let mut cfg = config(&["terminate_process"], &[]);
+        cfg.terminate_max_grace_secs = 0;
+        let executor = ActionExecutor::new(cfg);
+        let action = ActionRequest::TerminateProcess {
+            pid: 999_999,
+            grace_secs: 5,
+        };
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
+        assert!(matches!(outcome, ActionOutcome::Completed { .. }));
+    }
+
+    #[tokio::test]
+    async fn block_ip_paniked_nicht_bei_invertierter_dauer_konfiguration() {
+        // Regression: dieselbe u32::clamp-Panic-Gefahr wie bei grace_secs,
+        // wenn block_ip_min_duration_secs > block_ip_max_duration_secs
+        // konfiguriert ist.
+        let state = test_state();
+        let mut cfg = config(&["block_ip"], &[]);
+        cfg.block_ip_min_duration_secs = 1000;
+        cfg.block_ip_max_duration_secs = 10;
+        let executor = ActionExecutor::new(cfg);
+        let action = ActionRequest::BlockIp {
+            ip: "203.0.113.5".parse().unwrap(),
+            duration_secs: 300,
+        };
+        let outcome = executor.execute(&action, origin(1), 0, &state).await;
+        assert!(matches!(outcome, ActionOutcome::Completed { .. }));
     }
 
     #[tokio::test]
