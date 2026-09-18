@@ -16,7 +16,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -252,9 +252,24 @@ impl BaselineDb {
     fn check_bucket_seconds(&mut self, bucket_seconds: u64) -> Result<(), PersistError> {
         match self.read_meta(META_BUCKET_SECONDS)? {
             None => {
-                // Erster Start mit diesem Feld (oder frische Datei): nichts
-                // zu verwerfen, nur den aktuellen Wert für künftige
-                // Vergleiche festhalten.
+                // Kein gespeicherter Wert bedeutet nicht zwingend eine
+                // frische Datei: Das Feld kam erst nachträglich hinzu, ohne
+                // dafür SCHEMA_VERSION zu erhöhen (additive Änderung, siehe
+                // Moduldokumentation). Eine Datei einer Vorversion kann
+                // also bereits Histogramme/Profile mit unbekannter,
+                // möglicherweise abweichender Bucket-Länge enthalten. Nur
+                // wenn solche Daten tatsächlich vorhanden sind, wird
+                // sicherheitshalber verworfen -- eine wirklich frische
+                // Datei hat leere Tabellen und verliert dabei nichts.
+                if self.has_baseline_data()? {
+                    tracing::warn!(
+                        aktuell = bucket_seconds,
+                        "Bestand ohne gespeicherte Bucket-Länge (Datei einer Vorversion?), \
+                         verwerfe gespeicherte Histogramme und Unit-Profile zur Sicherheit \
+                         (Template-Registry bleibt erhalten)"
+                    );
+                    self.wipe_baselines_and_profiles()?;
+                }
                 self.write_meta(META_BUCKET_SECONDS, &bucket_seconds.to_string())?;
             }
             Some(raw) if raw.parse::<u64>() == Ok(bucket_seconds) => {}
@@ -266,21 +281,45 @@ impl BaselineDb {
                      verwerfe gespeicherte Histogramme und Unit-Profile \
                      (Template-Registry bleibt erhalten)"
                 );
-                let txn = self.db.begin_write().map_err(redb::Error::from)?;
-                {
-                    txn.open_table(BASELINES)
-                        .map_err(redb::Error::from)?
-                        .retain(|_, _| false)
-                        .map_err(redb::Error::from)?;
-                    txn.open_table(UNIT_PROFILES)
-                        .map_err(redb::Error::from)?
-                        .retain(|_, _| false)
-                        .map_err(redb::Error::from)?;
-                }
-                txn.commit().map_err(redb::Error::from)?;
+                self.wipe_baselines_and_profiles()?;
                 self.write_meta(META_BUCKET_SECONDS, &bucket_seconds.to_string())?;
             }
         }
+        Ok(())
+    }
+
+    /// Ob `BASELINES` oder `UNIT_PROFILES` mindestens einen Eintrag hat.
+    fn has_baseline_data(&self) -> Result<bool, PersistError> {
+        let txn = self.db.begin_read().map_err(redb::Error::from)?;
+        let baselines_empty = txn
+            .open_table(BASELINES)
+            .map_err(redb::Error::from)?
+            .is_empty()
+            .map_err(redb::Error::from)?;
+        let profiles_empty = txn
+            .open_table(UNIT_PROFILES)
+            .map_err(redb::Error::from)?
+            .is_empty()
+            .map_err(redb::Error::from)?;
+        Ok(!baselines_empty || !profiles_empty)
+    }
+
+    /// Leert `BASELINES` und `UNIT_PROFILES` in einer Transaktion.
+    /// `TEMPLATES` bleibt unberührt, da das Drain-Clustering nicht von der
+    /// Bucket-Länge abhängt.
+    fn wipe_baselines_and_profiles(&self) -> Result<(), PersistError> {
+        let txn = self.db.begin_write().map_err(redb::Error::from)?;
+        {
+            txn.open_table(BASELINES)
+                .map_err(redb::Error::from)?
+                .retain(|_, _| false)
+                .map_err(redb::Error::from)?;
+            txn.open_table(UNIT_PROFILES)
+                .map_err(redb::Error::from)?
+                .retain(|_, _| false)
+                .map_err(redb::Error::from)?;
+        }
+        txn.commit().map_err(redb::Error::from)?;
         Ok(())
     }
 
@@ -727,6 +766,41 @@ mod tests {
                 .histograms
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn fehlende_bucket_laenge_bei_vorhandenem_bestand_verwirft_sicherheitshalber() {
+        // Regression: das Feld kam nachträglich hinzu, ohne SCHEMA_VERSION
+        // zu erhöhen (additive Änderung). Eine Datei einer Vorversion mit
+        // echten Baselines, aber ohne gespeicherte Bucket-Länge, sah bisher
+        // wie eine frische Datei aus und übernahm den (evtl. mit einer
+        // anderen Länge berechneten) Bestand unverändert.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("baselines.redb");
+        {
+            let db = BaselineDb::open(&path, "testhost", 5).expect("öffnen");
+            db.save(&befuellter_zustand()).expect("sichern");
+
+            // META_BUCKET_SECONDS wieder entfernen, um eine Datei einer
+            // Vorversion (vor Einführung dieses Feldes) zu simulieren.
+            let txn = db.db.begin_write().expect("write txn");
+            {
+                let mut table = txn.open_table(META).expect("meta table");
+                table.remove(META_BUCKET_SECONDS).expect("remove");
+            }
+            txn.commit().expect("commit");
+        }
+
+        let db = BaselineDb::open(&path, "testhost", 5).expect("erneut öffnen");
+        let zustand = db
+            .load()
+            .expect("laden")
+            .expect("Templates müssen erhalten bleiben");
+        assert!(
+            zustand.baselines.histograms.is_empty(),
+            "Histogramme müssen bei unbekannter Bucket-Länge sicherheitshalber verworfen werden"
+        );
+        assert!(!zustand.templates.clusters.is_empty());
     }
 
     #[test]
