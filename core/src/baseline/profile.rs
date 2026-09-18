@@ -151,6 +151,12 @@ impl UnitProfile {
     pub fn is_trusted(&self, min_weight: f64) -> bool {
         self.total_weight() >= min_weight
     }
+
+    /// Bucket der letzten Beobachtung (für die Verdrängung bei
+    /// Kapazitätsdruck in [`super::store::BaselineStore::enforce_limits`]).
+    pub fn last_touched_bucket(&self) -> u64 {
+        self.last_touched_bucket
+    }
 }
 
 #[cfg(test)]

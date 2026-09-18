@@ -93,6 +93,9 @@ struct UnitBucketState {
     /// Bucket seiner letzten Aktivität (für Nullbeobachtungen beim
     /// Bucket-Abschluss und für die Verdrängung bei Kapazitätsdruck).
     known_templates: HashMap<TemplateId, u64>,
+    /// Bucket der letzten Aktivität dieser Unit (für die Verdrängung ganzer
+    /// Units bei Kapazitätsdruck, siehe `BaselineStore::enforce_limits`).
+    last_touched_bucket: u64,
 }
 
 impl Default for Slot {
@@ -164,6 +167,7 @@ impl BaselineStore {
         let max_known = self.max_known_templates;
         let histograms = &mut self.histograms;
         let state = self.unit_states.entry(unit_key).or_default();
+        state.last_touched_bucket = state.last_touched_bucket.max(bucket);
 
         match state.open_bucket {
             Some(prev) if bucket > prev => {
@@ -266,6 +270,15 @@ impl BaselineStore {
     /// Erzwingt `max_baselines`, indem so lange die Histogramme mit dem
     /// geringsten Beobachtungsgewicht verworfen werden, bis die Grenze
     /// eingehalten ist (Regel 18).
+    ///
+    /// `unit_profiles`/`unit_states` unterlagen bisher keiner eigenen
+    /// Grenze: `record()` legt für jeden neu gesehenen `unit_key` einen
+    /// Eintrag an, und nichts entfernte ihn je wieder. Auf einem Host mit
+    /// transienten Unit-Namen (`session-<n>.scope` je Login,
+    /// `docker-<hash>.scope`/`libpod-<hash>.scope` je Container,
+    /// `run-u<n>.scope`) wächst das über die gesamte Laufzeit unbegrenzt --
+    /// jeweils Verdrängung des am längsten inaktiven Eintrags, sobald auch
+    /// diese Grenze erreicht ist.
     pub fn enforce_limits(&mut self) {
         while self.histograms.len() > self.max_baselines {
             let lightest = self
@@ -280,11 +293,50 @@ impl BaselineStore {
                 None => break,
             }
         }
+
+        while self.unit_profiles.len() > self.max_baselines {
+            let oldest = self
+                .unit_profiles
+                .iter()
+                .min_by_key(|(_, profile)| profile.last_touched_bucket())
+                .map(|(key, _)| *key);
+            match oldest {
+                Some(key) => {
+                    self.unit_profiles.remove(&key);
+                }
+                None => break,
+            }
+        }
+
+        while self.unit_states.len() > self.max_baselines {
+            let oldest = self
+                .unit_states
+                .iter()
+                .min_by_key(|(_, state)| state.last_touched_bucket)
+                .map(|(key, _)| *key);
+            match oldest {
+                Some(key) => {
+                    self.unit_states.remove(&key);
+                }
+                None => break,
+            }
+        }
     }
 
     /// Anzahl aktuell gehaltener Slot-Histogramme (für Diagnose/GUI).
     pub fn histogram_count(&self) -> usize {
         self.histograms.len()
+    }
+
+    /// Anzahl aktuell gehaltener Unit-Profile (für Diagnose/Tests).
+    pub fn unit_profile_count(&self) -> usize {
+        self.unit_profiles.len()
+    }
+
+    /// Anzahl aktuell gehaltener offener Bucket-Zustände je Unit (für
+    /// Diagnose/Tests).
+    pub fn unit_state_count(&self) -> usize {
+        self.unit_states.len()
     }
 
     /// Zählwert des Templates im aktuell offenen (noch nicht
@@ -632,6 +684,37 @@ mod tests {
             store.histogram_count() <= 6,
             "Obergrenze verletzt: {}",
             store.histogram_count()
+        );
+    }
+
+    #[test]
+    fn enforce_limits_deckelt_auch_unit_profile_und_unit_states() {
+        // Regression: record() legt für jeden neuen unit_key permanent
+        // einen Eintrag in unit_profiles UND unit_states an; ohne eigene
+        // Verdrängung wuchsen beide unbegrenzt (z. B. bei transienten
+        // Unit-Namen wie session-<n>.scope oder docker-<hash>.scope).
+        let cfg = BaselineConfig {
+            max_baselines: 6,
+            ..test_config()
+        };
+        let mut store = BaselineStore::new(BUCKET_SECONDS, &cfg);
+
+        for unit in 0..20u64 {
+            store.record(t(unit), unit, tid(1));
+        }
+        assert!(store.unit_profile_count() > 6);
+        assert!(store.unit_state_count() > 6);
+
+        store.enforce_limits();
+        assert!(
+            store.unit_profile_count() <= 6,
+            "unit_profiles-Obergrenze verletzt: {}",
+            store.unit_profile_count()
+        );
+        assert!(
+            store.unit_state_count() <= 6,
+            "unit_states-Obergrenze verletzt: {}",
+            store.unit_state_count()
         );
     }
 
