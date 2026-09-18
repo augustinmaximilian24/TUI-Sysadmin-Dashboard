@@ -74,6 +74,12 @@ pub struct GuiState {
     /// Ergebnisse selbst gestellter Aktionsanfragen dieser Sitzung
     /// (`request_id`, Ergebnis), neueste zuletzt.
     pub action_log: VecDeque<(u64, ActionOutcome)>,
+    /// `InboundReceiver::dropped_local()` -- clientseitig (nicht
+    /// serverseitig) verworfene Nachrichten, weil die GUI nicht schnell
+    /// genug abgeholt hat (Regel 17: der Drop-Zähler muss in der UI
+    /// sichtbar sein, nicht nur der daemon-seitige
+    /// `stats.dropped_overflow` im Kopfbereich).
+    pub dropped_local: u64,
 }
 
 impl GuiState {
@@ -152,6 +158,7 @@ pub fn spawn_bridge(
                     };
                     let mut guard = bridge_state.lock().unwrap_or_else(PoisonError::into_inner);
                     apply_message(&mut guard, message, started_at);
+                    guard.dropped_local = inbound.dropped_local();
                     drop(guard);
                     ctx.request_repaint_after(REPAINT_COALESCE);
                 }

@@ -87,6 +87,7 @@ struct RenderSnapshot {
     context: Option<logsentry_proto::ContextReply>,
     log: Vec<String>,
     action_log: Vec<(u64, logsentry_proto::ActionOutcome)>,
+    dropped_local: u64,
 }
 
 pub struct LogsentryApp {
@@ -141,23 +142,35 @@ impl LogsentryApp {
         }
     }
 
-    /// Übernimmt einen Klon des geteilten Zustands für diesen Frame. Wird
-    /// bei `paused` übersprungen, damit die angezeigte Liste stehen
-    /// bleibt, während der Hintergrund-Task weiter empfängt.
+    /// Übernimmt einen Klon des geteilten Zustands für diesen Frame.
+    ///
+    /// Verbindungsstatus, erlaubte Aktionsarten und der Dry-Run-Schalter
+    /// werden auch bei `paused` aktualisiert: sie steuern, ob/wie eine
+    /// Aktion überhaupt ausgelöst werden darf (Regel 12), und dürfen daher
+    /// nie veraltet sein. Ohne das bliebe der Kopfbereich z. B. während
+    /// eines Daemon-Neustarts fälschlich auf "verbunden" stehen, eine im
+    /// pausierten Zustand bestätigte Aktion würde serverseitig warten und
+    /// erst bei der nächsten echten Verbindung verzögert ausgeführt.
+    /// Anomalie-Liste, Verlauf und Meldungen bleiben dagegen bei `paused`
+    /// bewusst stehen, damit sich die angezeigte Liste beim Betrachten
+    /// nicht unter der Maus verändert, während der Hintergrund-Task weiter
+    /// empfängt.
     fn refresh(&mut self) {
-        if self.paused {
-            return;
-        }
         let guard = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.render.connection = guard.connection.clone();
         self.render.hostname = guard.hostname.clone();
+        self.render.allowed_actions = guard.allowed_actions.clone();
+        self.render.dry_run = guard.dry_run;
+        self.render.dropped_local = guard.dropped_local;
+
+        if self.paused {
+            return;
+        }
         self.render.snapshot = guard.snapshot.clone();
         self.render.history = guard.entropy_history.iter().copied().collect();
         self.render.anomalies = guard.anomalies.iter().cloned().collect();
         self.render.context = guard.context_reply.clone();
         self.render.log = guard.log.iter().cloned().collect();
-        self.render.allowed_actions = guard.allowed_actions.clone();
-        self.render.dry_run = guard.dry_run;
         self.render.action_log = guard.action_log.iter().cloned().collect();
     }
 
@@ -331,6 +344,16 @@ impl LogsentryApp {
                     ui.separator();
                     ui.label(format!("Verworfen {}", snapshot.stats.dropped_overflow));
                     ui.separator();
+                    if self.render.dropped_local > 0 {
+                        // Regel 17: clientseitig (nicht serverseitig)
+                        // verworfene Nachrichten müssen sichtbar sein --
+                        // die GUI kam mit dem Abholen nicht hinterher.
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            format!("Lokal verworfen {}", self.render.dropped_local),
+                        );
+                        ui.separator();
+                    }
                     if snapshot.learning.active {
                         let remaining = snapshot
                             .learning
@@ -700,6 +723,13 @@ impl LogsentryApp {
         };
         let description = pending.description.clone();
         let dry_run = self.render.dry_run;
+        // Ohne diese Prüfung ließe sich "Bestätigen" auch anklicken, während
+        // die Verbindung inzwischen (z. B. während des Dialogs) getrennt
+        // wurde: die Aktion bliebe dann in der ausgehenden Warteschlange
+        // liegen und würde erst bei der nächsten echten Verbindung -- unter
+        // Umständen Minuten später gegen einen ganz anderen Systemzustand --
+        // ausgeführt.
+        let connected = is_connected(self.render.connection.as_ref());
         let mut confirm = false;
         let mut cancel = false;
 
@@ -715,11 +745,20 @@ impl LogsentryApp {
                         "Dry-Run aktiv: der Daemon protokolliert nur, führt aber nichts aus.",
                     );
                 }
+                if !connected {
+                    ui.colored_label(
+                        egui::Color32::LIGHT_RED,
+                        "Nicht verbunden -- Bestätigen ist deaktiviert.",
+                    );
+                }
                 ui.horizontal(|ui| {
                     if ui.button("Abbrechen").clicked() {
                         cancel = true;
                     }
-                    if ui.button("Bestätigen").clicked() {
+                    if ui
+                        .add_enabled(connected, egui::Button::new("Bestätigen"))
+                        .clicked()
+                    {
                         confirm = true;
                     }
                 });
