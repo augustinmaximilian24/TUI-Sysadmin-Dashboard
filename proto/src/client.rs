@@ -162,7 +162,7 @@ async fn connection_loop(
     loop {
         let _ = state_tx.send(ConnectionState::Connecting { attempt });
 
-        match connect_and_handshake(&cfg).await {
+        let last_session_error = match connect_and_handshake(&cfg).await {
             Ok((session_id, stream)) => {
                 let _ = state_tx.send(ConnectionState::Connected { session_id });
                 let connected_at = Instant::now();
@@ -171,7 +171,7 @@ async fn connection_loop(
                         inbound_tx.close().await;
                         return;
                     }
-                    SessionEnd::Lost => {
+                    SessionEnd::Lost(reason) => {
                         // Nur nach einer ausreichend lange stehenden Session
                         // zurücksetzen (siehe Begründung bei
                         // `STABLE_CONNECTION`); unten wird `attempt` in
@@ -179,6 +179,7 @@ async fn connection_loop(
                         if connected_at.elapsed() >= STABLE_CONNECTION {
                             attempt = 0;
                         }
+                        reason
                     }
                 }
             }
@@ -197,12 +198,12 @@ async fn connection_loop(
                 tokio::time::sleep(delay).await;
                 continue;
             }
-        }
+        };
 
         let delay = backoff_delay(attempt);
         let _ = state_tx.send(ConnectionState::Disconnected {
             retry_in: delay,
-            last_error: ClientError::Other("Sitzung beendet".to_string()),
+            last_error: last_session_error,
         });
         attempt = attempt.saturating_add(1);
         tokio::time::sleep(delay).await;
@@ -223,7 +224,11 @@ async fn connect_and_handshake(cfg: &ClientConfig) -> Result<(u64, UnixStream), 
         client_version: cfg.client_version.clone(),
         subscription: cfg.subscription,
     };
-    let line = serde_json::to_string(&hello).expect("ClientMessage ist immer serialisierbar");
+    // Regel 15: kein `expect()` außerhalb von Tests/`main()`, auch wenn ein
+    // Fehlschlag hier praktisch ausgeschlossen ist -- ein Bug in einem
+    // künftig hinzugefügten Feldtyp soll den Verbindungsversuch mit einer
+    // regulären Fehlermeldung beenden, nicht den Client-Task paniken lassen.
+    let line = serde_json::to_string(&hello).map_err(|e| ClientError::Other(e.to_string()))?;
     write_frame(&mut write_half, &line)
         .await
         .map_err(|e| ClientError::Other(e.to_string()))?;
@@ -272,8 +277,23 @@ enum SessionEnd {
     /// gelassen -- niemand will mehr etwas senden, der Task kann enden.
     OutboundClosed,
     /// Verbindung verloren (Daemon-Goodbye, EOF, I/O-/Framing-Fehler) --
-    /// `connection_loop` soll erneut verbinden.
-    Lost,
+    /// `connection_loop` soll erneut verbinden. Trägt den konkreten Grund,
+    /// damit `ConnectionState::Disconnected::last_error` mehr zeigt als
+    /// einen generischen "Sitzung beendet"-Text, gerade im häufigsten Fall
+    /// (ein `Goodbye` mit einer Abhilfe im Text, z. B. `TooManyClients`).
+    Lost(ClientError),
+}
+
+/// Bildet einen `GoodbyeReason` auf den passenden `ClientError` ab.
+/// `VersionMismatch` bekommt dieselbe typisierte Variante wie beim
+/// Handshake, alle anderen Gründe werden als Klartext übernommen.
+fn goodbye_to_client_error(reason: GoodbyeReason) -> ClientError {
+    match reason {
+        GoodbyeReason::VersionMismatch { expected, got } => {
+            ClientError::VersionMismatch { expected, got }
+        }
+        other => ClientError::Other(format!("Daemon beendete die Verbindung: {other:?}")),
+    }
 }
 
 /// Verarbeitet eine etablierte Session, bis der Daemon trennt oder ein
@@ -301,8 +321,10 @@ async fn run_session(
                 let Ok(line) = serde_json::to_string(&msg) else {
                     continue;
                 };
-                if write_frame(&mut write_half, &line).await.is_err() {
-                    return SessionEnd::Lost;
+                if let Err(err) = write_frame(&mut write_half, &line).await {
+                    return SessionEnd::Lost(ClientError::Other(format!(
+                        "Schreiben an den Daemon fehlgeschlagen: {err}"
+                    )));
                 }
             }
             frame = reader.read_frame(MAX_SERVER_LINE_BYTES) => {
@@ -311,14 +333,25 @@ async fn run_session(
                         let Ok(msg) = serde_json::from_str::<ServerMessage>(&raw) else {
                             continue; // unbekannte/kaputte Nachricht ignorieren
                         };
-                        let is_goodbye = matches!(msg, ServerMessage::Goodbye { .. });
+                        let goodbye_reason = match &msg {
+                            ServerMessage::Goodbye { reason } => Some(reason.clone()),
+                            _ => None,
+                        };
                         inbound_tx.send(msg).await;
-                        if is_goodbye {
-                            return SessionEnd::Lost;
+                        if let Some(reason) = goodbye_reason {
+                            return SessionEnd::Lost(goodbye_to_client_error(reason));
                         }
                     }
-                    Ok(None) => return SessionEnd::Lost,  // sauberes EOF
-                    Err(_) => return SessionEnd::Lost,    // Framing-/IO-Fehler
+                    Ok(None) => {
+                        return SessionEnd::Lost(ClientError::Other(
+                            "Verbindung vom Daemon beendet (EOF)".to_string(),
+                        ))
+                    }
+                    Err(err) => {
+                        return SessionEnd::Lost(ClientError::Other(format!(
+                            "Lesen vom Daemon fehlgeschlagen: {err}"
+                        )))
+                    }
                 }
             }
         }
