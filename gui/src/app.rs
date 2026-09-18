@@ -72,6 +72,16 @@ enum SortKey {
     Score,
 }
 
+/// Welches Format `export_anomalies` erzeugen soll. Die eigentliche
+/// Serialisierung passiert erst im Hintergrund-Thread (siehe dort), damit
+/// weder sie noch der anschließende Schreibvorgang den Render-Thread
+/// blockieren (Regel 21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportFormat {
+    Json,
+    Csv,
+}
+
 /// Momentaufnahme des geteilten Zustands für einen Frame, damit
 /// `Pause` das Mutex nicht bei jedem Redraw erneut sperren muss und die
 /// UI-Logik auf Klondaten statt einer gehaltenen Sperre arbeitet.
@@ -190,37 +200,24 @@ impl LogsentryApp {
         });
     }
 
-    /// Schreibt `content` (bzw. meldet einen Serialisierungsfehler) in eine
-    /// neue Datei im Home-Verzeichnis (Fallback: aktuelles Arbeitsverzeichnis,
-    /// falls `$HOME` fehlt) und merkt sich das Ergebnis für die Anzeige.
-    /// Kein Datei-Dialog -- dafür bräuchte es eine zusätzliche Abhängigkeit
-    /// (z. B. `rfd`), die für dieses optionale Phase-10-Feature nicht
-    /// gerechtfertigt ist.
+    /// Serialisiert die aktuell geladenen Anomalien in `format` und
+    /// schreibt sie in eine neue Datei im Home-Verzeichnis (Fallback:
+    /// aktuelles Arbeitsverzeichnis, falls `$HOME` fehlt); merkt sich das
+    /// Ergebnis für die Anzeige. Kein Datei-Dialog -- dafür bräuchte es
+    /// eine zusätzliche Abhängigkeit (z. B. `rfd`), die für dieses
+    /// optionale Phase-10-Feature nicht gerechtfertigt ist.
     ///
-    /// Der eigentliche Schreibvorgang läuft in einem eigenen
-    /// `std::thread`, nicht direkt hier: `update()` läuft auf dem
-    /// Render-Thread, und `std::fs::write` blockiert je nach Anzahl
-    /// geladener Anomalien und Datenträgergeschwindigkeit spürbar (Regel
-    /// 21: die GUI blockiert nie auf I/O). `ctx` wird geklont, um den
+    /// Sowohl die Serialisierung als auch der Schreibvorgang laufen in
+    /// einem eigenen `std::thread`, nicht hier: `update()` läuft auf dem
+    /// Render-Thread, `serde_json::to_string_pretty` über tausende
+    /// Anomalien ist bei einem JSON-Export der teurere Teil, `fs::write`
+    /// bei langsamem/vollem Datenträger der andere (Regel 21: die GUI
+    /// blockiert nie auf I/O; dasselbe gilt sinngemäß für spürbare
+    /// CPU-Arbeit auf dem Render-Thread). `ctx` wird geklont, um den
     /// Hintergrund-Thread nach Abschluss gezielt einen Repaint auslösen zu
     /// lassen, statt auf den nächsten ohnehin fälligen Redraw zu warten.
-    fn export_anomalies(
-        &mut self,
-        ctx: &egui::Context,
-        content: Result<String, serde_json::Error>,
-        extension: &str,
-    ) {
-        let content = match content {
-            Ok(content) => content,
-            Err(err) => {
-                *self
-                    .export_message
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner) =
-                    Some(format!("Export fehlgeschlagen: Serialisierung nicht möglich ({err})"));
-                return;
-            }
-        };
+    fn export_anomalies(&mut self, ctx: &egui::Context, format: ExportFormat) {
+        let anomalies = self.render.anomalies.clone();
         let dir = std::env::var_os("HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -228,11 +225,30 @@ impl LogsentryApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
+        let extension = match format {
+            ExportFormat::Json => "json",
+            ExportFormat::Csv => "csv",
+        };
         let path = dir.join(format!("logsentry-export-{timestamp}.{extension}"));
 
         let export_message = Arc::clone(&self.export_message);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
+            let content = match format {
+                ExportFormat::Json => match crate::export::anomalies_to_json(&anomalies) {
+                    Ok(json) => json,
+                    Err(err) => {
+                        *export_message
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(format!(
+                            "Export fehlgeschlagen: Serialisierung nicht möglich ({err})"
+                        ));
+                        ctx.request_repaint();
+                        return;
+                    }
+                },
+                ExportFormat::Csv => crate::export::anomalies_to_csv(&anomalies),
+            };
             let message = match std::fs::write(&path, content) {
                 Ok(()) => format!("Exportiert nach {}", path.display()),
                 Err(err) => format!("Export nach {} fehlgeschlagen: {err}", path.display()),
@@ -807,15 +823,10 @@ impl LogsentryApp {
                 ui.separator();
                 ui.label("Export (alle geladenen Anomalien):");
                 if ui.button("JSON").clicked() {
-                    self.export_anomalies(
-                        ctx,
-                        crate::export::anomalies_to_json(&self.render.anomalies),
-                        "json",
-                    );
+                    self.export_anomalies(ctx, ExportFormat::Json);
                 }
                 if ui.button("CSV").clicked() {
-                    let csv = crate::export::anomalies_to_csv(&self.render.anomalies);
-                    self.export_anomalies(ctx, Ok(csv), "csv");
+                    self.export_anomalies(ctx, ExportFormat::Csv);
                 }
             });
             let export_message = self
