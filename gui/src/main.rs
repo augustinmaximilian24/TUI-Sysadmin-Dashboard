@@ -14,9 +14,11 @@
 mod app;
 mod client;
 mod export;
+mod theme;
 
 use std::path::PathBuf;
 
+use eframe::egui;
 use logsentry_core::Config;
 
 const DEFAULT_CONFIG_PATH: &str = "/etc/logsentry/logsentry.toml";
@@ -55,7 +57,12 @@ fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let _enter = runtime.enter();
 
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1440.0, 900.0])
+            .with_min_inner_size([900.0, 600.0]),
+        ..Default::default()
+    };
     eframe::run_native(
         "logsentry",
         native_options,

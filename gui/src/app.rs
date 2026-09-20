@@ -23,6 +23,7 @@ use crate::client::{
     action_kind_label, connection_label, format_action_outcome, is_connected, GuiState,
     HistoryPoint,
 };
+use crate::theme;
 
 /// Eine per Button ausgelöste, aber noch nicht bestätigte Aktion (Regel 12:
 /// kein Ein-Klick-Vollzug). Der Klick baut schon die fertige
@@ -331,11 +332,7 @@ impl eframe::App for LogsentryApp {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
 
-        ctx.set_visuals(if self.dark_mode {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
-        });
+        theme::apply(ctx, self.dark_mode);
 
         self.draw_header(ctx);
         self.draw_system_panel(ctx);
@@ -347,81 +344,92 @@ impl eframe::App for LogsentryApp {
 
 impl LogsentryApp {
     fn draw_header(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("header").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                let host = self.render.hostname.as_deref().unwrap_or("–");
-                ui.heading(format!("logsentry · {host}"));
-                ui.separator();
+        egui::TopBottomPanel::top("header")
+            .frame(egui::Frame::side_top_panel(&ctx.style()).inner_margin(egui::Margin::symmetric(12.0, 10.0)))
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let host = self.render.hostname.as_deref().unwrap_or("–");
+                    ui.heading(egui::RichText::new("logsentry").strong());
+                    ui.label(egui::RichText::new(host).color(theme::TEXT_MUTED));
+                    ui.add_space(6.0);
 
-                if let Some(snapshot) = &self.render.snapshot {
-                    ui.label(format!("Uptime {}s", snapshot.daemon_uptime_secs));
-                    ui.separator();
-                    ui.label(format!("Entropie {:.2} bit", snapshot.window.entropy_bits));
-                    ui.separator();
-                    ui.label(format!("Verworfen {}", snapshot.stats.dropped_overflow));
-                    ui.separator();
-                    if self.render.dropped_local > 0 {
-                        // Regel 17: clientseitig (nicht serverseitig)
-                        // verworfene Nachrichten müssen sichtbar sein --
-                        // die GUI kam mit dem Abholen nicht hinterher.
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            format!("Lokal verworfen {}", self.render.dropped_local),
+                    theme::chip(
+                        ui,
+                        connection_label(self.render.connection.as_ref()),
+                        theme::connection_color(self.render.connection.as_ref()),
+                    );
+
+                    if let Some(snapshot) = &self.render.snapshot {
+                        theme::neutral_chip(ui, format!("Uptime {}s", snapshot.daemon_uptime_secs));
+                        theme::neutral_chip(
+                            ui,
+                            format!("Entropie {:.2} bit", snapshot.window.entropy_bits),
                         );
-                        ui.separator();
-                    }
-                    if snapshot.learning.active {
-                        let remaining = snapshot
-                            .learning
-                            .remaining_secs
-                            .map(|s| format!("{s}s"))
-                            .unwrap_or_else(|| "?".to_string());
-                        ui.colored_label(egui::Color32::YELLOW, format!("Lernphase ({remaining})"));
+                        if snapshot.stats.dropped_overflow > 0 {
+                            theme::chip(
+                                ui,
+                                format!("Verworfen {}", snapshot.stats.dropped_overflow),
+                                theme::LEVEL_WARN,
+                            );
+                        }
+                        if self.render.dropped_local > 0 {
+                            // Regel 17: clientseitig (nicht serverseitig)
+                            // verworfene Nachrichten müssen sichtbar sein --
+                            // die GUI kam mit dem Abholen nicht hinterher.
+                            theme::chip(
+                                ui,
+                                format!("Lokal verworfen {}", self.render.dropped_local),
+                                theme::LEVEL_WARN,
+                            );
+                        }
+                        if snapshot.learning.active {
+                            let remaining = snapshot
+                                .learning
+                                .remaining_secs
+                                .map(|s| format!("{s}s"))
+                                .unwrap_or_else(|| "?".to_string());
+                            theme::chip(ui, format!("Lernphase ({remaining})"), theme::LEVEL_WARN);
+                        }
+                        if snapshot.replay {
+                            theme::chip(ui, "Replay", theme::ACCENT);
+                        }
                     } else {
-                        ui.label("Lernphase beendet");
+                        theme::neutral_chip(ui, "noch keine Daten vom Daemon");
                     }
-                    ui.separator();
-                    if snapshot.replay {
-                        ui.colored_label(egui::Color32::LIGHT_BLUE, "Replay");
-                        ui.separator();
-                    }
-                } else {
-                    ui.label("noch keine Daten vom Daemon");
-                    ui.separator();
-                }
 
-                ui.label(connection_label(self.render.connection.as_ref()));
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button(if self.dark_mode {
-                            "☀ Hell"
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(if self.dark_mode {
+                                "☀ Hell"
+                            } else {
+                                "🌙 Dunkel"
+                            })
+                            .clicked()
+                        {
+                            self.dark_mode = !self.dark_mode;
+                        }
+                        let pause_label = if self.paused {
+                            "▶ Fortsetzen"
                         } else {
-                            "🌙 Dunkel"
-                        })
-                        .clicked()
-                    {
-                        self.dark_mode = !self.dark_mode;
-                    }
-                    let pause_label = if self.paused {
-                        "▶ Fortsetzen"
-                    } else {
-                        "⏸ Pause"
-                    };
-                    if ui.button(pause_label).clicked() {
-                        self.paused = !self.paused;
-                    }
+                            "⏸ Pause"
+                        };
+                        if ui.button(pause_label).clicked() {
+                            self.paused = !self.paused;
+                        }
+                    });
                 });
             });
-        });
     }
 
     fn draw_system_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("system_panel")
             .resizable(true)
-            .default_width(260.0)
+            .default_width(300.0)
             .show(ctx, |ui| {
+                ui.add_space(2.0);
                 ui.heading("Systemzustand");
+                ui.add_space(4.0);
+
                 match self
                     .render
                     .snapshot
@@ -429,54 +437,108 @@ impl LogsentryApp {
                     .and_then(|s| s.system.as_ref())
                 {
                     None => {
-                        ui.label("noch keine Messung");
+                        ui.label(egui::RichText::new("noch keine Messung").color(theme::TEXT_MUTED));
                     }
                     Some(system) => {
-                        ui.label(format!("CPU {:.1} %", system.cpu.global_usage_percent));
-                        ui.label(format!("RAM {:.1} %", system.memory.used_percent));
-                        ui.label(format!(
-                            "Load {:.2} / {:.2} / {:.2}",
-                            system.load.one, system.load.five, system.load.fifteen
-                        ));
+                        let core_count = system.cpu.per_core_usage_percent.len().max(1) as f64;
+
+                        theme::card(ui, |ui| {
+                            theme::section_heading(ui, "Auslastung");
+                            ui.add_space(4.0);
+                            theme::usage_bar(
+                                ui,
+                                "CPU",
+                                system.cpu.global_usage_percent / 100.0,
+                                format!("{:.0} %", system.cpu.global_usage_percent),
+                            );
+                            theme::usage_bar(
+                                ui,
+                                "RAM",
+                                system.memory.used_percent / 100.0,
+                                format!("{:.0} %", system.memory.used_percent),
+                            );
+                            theme::usage_bar(
+                                ui,
+                                "Load 1m",
+                                (system.load.one / core_count) as f32,
+                                format!(
+                                    "{:.2} / {:.2} / {:.2}",
+                                    system.load.one, system.load.five, system.load.fifteen
+                                ),
+                            );
+                        });
+
                         if !system.temperatures.is_empty() {
-                            ui.separator();
-                            for temp in &system.temperatures {
-                                ui.label(format!("{}: {:.1} °C", temp.label, temp.celsius));
-                            }
+                            ui.add_space(6.0);
+                            theme::card(ui, |ui| {
+                                theme::section_heading(ui, "Temperaturen");
+                                ui.add_space(4.0);
+                                for temp in &system.temperatures {
+                                    theme::usage_bar(
+                                        ui,
+                                        &temp.label,
+                                        temp.celsius / 100.0,
+                                        format!("{:.1} °C", temp.celsius),
+                                    );
+                                }
+                            });
                         }
+
                         if !system.disks.is_empty() {
-                            ui.separator();
-                            for disk in &system.disks {
-                                ui.label(format!(
-                                    "{}: {:.0} % belegt",
-                                    disk.mount_point, disk.used_percent
-                                ));
-                            }
+                            ui.add_space(6.0);
+                            theme::card(ui, |ui| {
+                                theme::section_heading(ui, "Speicher");
+                                ui.add_space(4.0);
+                                for disk in &system.disks {
+                                    theme::usage_bar(
+                                        ui,
+                                        &disk.mount_point,
+                                        disk.used_percent / 100.0,
+                                        format!("{:.0} %", disk.used_percent),
+                                    );
+                                }
+                            });
                         }
+
                         if !system.units.is_empty() {
-                            ui.separator();
-                            ui.label("Units:");
-                            for unit in &system.units {
-                                ui.label(format!(
-                                    "{} — {}/{}",
-                                    unit.name, unit.active_state, unit.sub_state
-                                ));
-                            }
+                            ui.add_space(6.0);
+                            theme::card(ui, |ui| {
+                                theme::section_heading(ui, "Units");
+                                ui.add_space(4.0);
+                                for unit in &system.units {
+                                    let active = unit.active_state == "active";
+                                    let dot_color = if active { theme::OK } else { theme::TEXT_MUTED };
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(dot_color, "●");
+                                        ui.label(&unit.name);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{}/{}",
+                                                unit.active_state, unit.sub_state
+                                            ))
+                                            .color(theme::TEXT_MUTED),
+                                        );
+                                    });
+                                }
+                            });
                         }
                     }
                 }
 
                 if !self.render.log.is_empty() {
-                    ui.separator();
-                    ui.heading("Meldungen");
-                    egui::ScrollArea::vertical()
-                        .id_salt("log_scroll")
-                        .max_height(150.0)
-                        .show(ui, |ui| {
-                            for line in self.render.log.iter().rev() {
-                                ui.label(line);
-                            }
-                        });
+                    ui.add_space(6.0);
+                    theme::card(ui, |ui| {
+                        theme::section_heading(ui, "Meldungen");
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("log_scroll")
+                            .max_height(150.0)
+                            .show(ui, |ui| {
+                                for line in self.render.log.iter().rev() {
+                                    ui.label(line);
+                                }
+                            });
+                    });
                 }
 
                 // Audit-Ansicht (Phase 8, Schritt 9): das Protokoll bietet
@@ -484,19 +546,22 @@ impl LogsentryApp {
                 // Audit-Datei -- diese Liste zeigt nur Ergebnisse von
                 // Aktionen, die diese GUI-Sitzung selbst ausgelöst hat.
                 if !self.render.action_log.is_empty() {
-                    ui.separator();
-                    ui.heading("Aktionen dieser Sitzung");
-                    egui::ScrollArea::vertical()
-                        .id_salt("action_log_scroll")
-                        .max_height(150.0)
-                        .show(ui, |ui| {
-                            for (request_id, outcome) in self.render.action_log.iter().rev() {
-                                ui.label(format!(
-                                    "#{request_id}: {}",
-                                    format_action_outcome(outcome)
-                                ));
-                            }
-                        });
+                    ui.add_space(6.0);
+                    theme::card(ui, |ui| {
+                        theme::section_heading(ui, "Aktionen dieser Sitzung");
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .id_salt("action_log_scroll")
+                            .max_height(150.0)
+                            .show(ui, |ui| {
+                                for (request_id, outcome) in self.render.action_log.iter().rev() {
+                                    ui.label(format!(
+                                        "#{request_id}: {}",
+                                        format_action_outcome(outcome)
+                                    ));
+                                }
+                            });
+                    });
                 }
             });
     }
@@ -504,11 +569,16 @@ impl LogsentryApp {
     fn draw_detail_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("detail_panel")
             .resizable(true)
-            .default_width(360.0)
+            .default_width(380.0)
             .show(ctx, |ui| {
+                ui.add_space(2.0);
                 ui.heading("Detail");
+                ui.add_space(4.0);
                 let Some(selected_id) = self.selected_anomaly else {
-                    ui.label("Anomalie in der Liste auswählen");
+                    ui.label(
+                        egui::RichText::new("Anomalie in der Liste auswählen")
+                            .color(theme::TEXT_MUTED),
+                    );
                     return;
                 };
                 let Some(anomaly) = self
@@ -518,35 +588,57 @@ impl LogsentryApp {
                     .find(|a| a.id == selected_id)
                     .cloned()
                 else {
-                    ui.label("Anomalie nicht mehr im Speicher");
+                    ui.label(
+                        egui::RichText::new("Anomalie nicht mehr im Speicher")
+                            .color(theme::TEXT_MUTED),
+                    );
                     return;
                 };
 
-                ui.label(format!("ID {}", anomaly.id));
-                ui.label(format!("Unit: {}", anomaly.unit.as_deref().unwrap_or("–")));
-                ui.label(format!(
-                    "PID: {}",
-                    anomaly.pid.map_or("–".to_string(), |p| p.to_string())
-                ));
-                ui.label(format!("Level: {:?}", anomaly.level));
-                ui.label(format!("Template: {}", anomaly.template_text));
-                ui.label(format!("Beispielzeile: {}", anomaly.sample_message));
-                if anomaly.suppressed_since_last > 0 {
+                ui.horizontal(|ui| {
+                    theme::level_badge(ui, anomaly.level);
+                    ui.label(egui::RichText::new(format!("#{}", anomaly.id)).color(theme::TEXT_MUTED));
+                });
+                ui.add_space(6.0);
+
+                theme::card(ui, |ui| {
+                    theme::section_heading(ui, "Übersicht");
+                    ui.add_space(4.0);
+                    ui.label(format!("Unit: {}", anomaly.unit.as_deref().unwrap_or("–")));
                     ui.label(format!(
-                        "Seit letzter Meldung unterdrückt: {}",
-                        anomaly.suppressed_since_last
+                        "PID: {}",
+                        anomaly.pid.map_or("–".to_string(), |p| p.to_string())
                     ));
-                }
+                    ui.label(format!("Template: {}", anomaly.template_text));
+                    ui.label(format!("Beispielzeile: {}", anomaly.sample_message));
+                    if anomaly.suppressed_since_last > 0 {
+                        ui.colored_label(
+                            theme::LEVEL_WARN,
+                            format!(
+                                "Seit letzter Meldung unterdrückt: {}",
+                                anomaly.suppressed_since_last
+                            ),
+                        );
+                    }
+                });
 
-                ui.separator();
-                ui.label("Score-Aufschlüsselung:");
-                let b = &anomaly.breakdown;
-                ui.label(format!("Gesamt: {:.3}", b.combined));
-                ui.label(format!("Rate-Z: {:.2} ({:?})", b.rate_z, b.rate_source));
-                ui.label(format!("Surprisal: {:.2} bit", b.surprisal_bits));
-                ui.label(format!("Entropie-Z: {:.2}", b.entropy_z));
+                ui.add_space(6.0);
+                theme::card(ui, |ui| {
+                    theme::section_heading(ui, "Score");
+                    ui.add_space(4.0);
+                    let b = &anomaly.breakdown;
+                    theme::usage_bar(
+                        ui,
+                        "Gesamt",
+                        b.combined as f32,
+                        format!("{:.3}", b.combined),
+                    );
+                    ui.label(format!("Rate-Z: {:.2} ({:?})", b.rate_z, b.rate_source));
+                    ui.label(format!("Surprisal: {:.2} bit", b.surprisal_bits));
+                    ui.label(format!("Entropie-Z: {:.2}", b.entropy_z));
+                });
 
-                ui.separator();
+                ui.add_space(6.0);
                 let connected = is_connected(self.render.connection.as_ref());
                 if ui
                     .add_enabled(connected, egui::Button::new("Kontext laden"))
@@ -555,9 +647,12 @@ impl LogsentryApp {
                     self.request_context(&anomaly);
                 }
 
-                ui.separator();
-                ui.label("Aktionen:");
-                self.draw_action_buttons(ui, &anomaly, connected);
+                ui.add_space(6.0);
+                theme::card(ui, |ui| {
+                    theme::section_heading(ui, "Aktionen");
+                    ui.add_space(4.0);
+                    self.draw_action_buttons(ui, &anomaly, connected);
+                });
 
                 // Nur eine Antwort anzeigen, die tatsächlich zur zuletzt
                 // gestellten Anfrage dieser Auswahl gehört -- sonst könnte
@@ -570,33 +665,41 @@ impl LogsentryApp {
                     .as_ref()
                     .filter(|reply| Some(reply.request_id) == self.pending_context_request);
 
-                match matching_context {
-                    Some(reply) => {
-                        if reply.truncated {
-                            ui.colored_label(egui::Color32::YELLOW, "Ausschnitt gekürzt");
+                ui.add_space(6.0);
+                theme::card(ui, |ui| {
+                    theme::section_heading(ui, "Kontext");
+                    ui.add_space(4.0);
+                    match matching_context {
+                        Some(reply) => {
+                            if reply.truncated {
+                                ui.colored_label(theme::LEVEL_WARN, "Ausschnitt gekürzt");
+                            }
+                            if ui.button("In Zwischenablage kopieren").clicked() {
+                                let text = reply
+                                    .lines
+                                    .iter()
+                                    .map(|line| line.message.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                ui.ctx().copy_text(text);
+                            }
+                            egui::ScrollArea::vertical()
+                                .id_salt("context_scroll")
+                                .max_height(300.0)
+                                .show(ui, |ui| {
+                                    for line in &reply.lines {
+                                        ui.monospace(&line.message);
+                                    }
+                                });
                         }
-                        if ui.button("In Zwischenablage kopieren").clicked() {
-                            let text = reply
-                                .lines
-                                .iter()
-                                .map(|line| line.message.as_str())
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            ui.ctx().copy_text(text);
+                        None => {
+                            ui.label(
+                                egui::RichText::new("noch kein Kontext geladen")
+                                    .color(theme::TEXT_MUTED),
+                            );
                         }
-                        egui::ScrollArea::vertical()
-                            .id_salt("context_scroll")
-                            .max_height(300.0)
-                            .show(ui, |ui| {
-                                for line in &reply.lines {
-                                    ui.monospace(&line.message);
-                                }
-                            });
                     }
-                    None => {
-                        ui.label("noch kein Kontext geladen");
-                    }
-                }
+                });
             });
     }
 
@@ -687,7 +790,7 @@ impl LogsentryApp {
                 }
             });
             if !self.block_ip_input.trim().is_empty() && parsed_ip.is_err() {
-                ui.colored_label(egui::Color32::LIGHT_RED, "keine gültige IP-Adresse");
+                ui.colored_label(theme::LEVEL_CRITICAL, "keine gültige IP-Adresse");
             }
         }
 
@@ -757,13 +860,13 @@ impl LogsentryApp {
                 ui.label(&description);
                 if dry_run {
                     ui.colored_label(
-                        egui::Color32::LIGHT_BLUE,
+                        theme::ACCENT,
                         "Dry-Run aktiv: der Daemon protokolliert nur, führt aber nichts aus.",
                     );
                 }
                 if !connected {
                     ui.colored_label(
-                        egui::Color32::LIGHT_RED,
+                        theme::LEVEL_CRITICAL,
                         "Nicht verbunden -- Bestätigen ist deaktiviert.",
                     );
                 }
@@ -789,62 +892,76 @@ impl LogsentryApp {
 
     fn draw_central(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("Verlauf (Entropie)");
-            let points: PlotPoints = self.render.history.iter().copied().collect();
-            Plot::new("entropy_plot")
-                .height(180.0)
-                .allow_scroll(false)
-                .show(ui, |plot_ui| {
-                    plot_ui.line(Line::new(points));
-                });
-
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Suche:");
-                ui.text_edit_singleline(&mut self.search);
-                ui.label("Unit:");
-                ui.text_edit_singleline(&mut self.unit_filter);
-                egui::ComboBox::from_label("Level")
-                    .selected_text(self.level_filter.label())
-                    .show_ui(ui, |ui| {
-                        for option in [
-                            LevelFilter::All,
-                            LevelFilter::Info,
-                            LevelFilter::Warn,
-                            LevelFilter::Critical,
-                        ] {
-                            ui.selectable_value(&mut self.level_filter, option, option.label());
-                        }
+            theme::card(ui, |ui| {
+                theme::section_heading(ui, "Verlauf (Entropie)");
+                ui.add_space(4.0);
+                let points: PlotPoints = self.render.history.iter().copied().collect();
+                Plot::new("entropy_plot")
+                    .height(160.0)
+                    .allow_scroll(false)
+                    .show(ui, |plot_ui| {
+                        plot_ui.line(Line::new(points).color(theme::ACCENT));
                     });
-                ui.selectable_value(&mut self.sort_key, SortKey::Time, "nach Zeit");
-                ui.selectable_value(&mut self.sort_key, SortKey::Score, "nach Score");
+            });
 
-                ui.separator();
-                ui.label("Export (alle geladenen Anomalien):");
-                if ui.button("JSON").clicked() {
-                    self.export_anomalies(ctx, ExportFormat::Json);
-                }
-                if ui.button("CSV").clicked() {
-                    self.export_anomalies(ctx, ExportFormat::Csv);
+            ui.add_space(8.0);
+
+            theme::card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("🔍");
+                    ui.text_edit_singleline(&mut self.search);
+                    ui.separator();
+                    ui.label("Unit:");
+                    ui.text_edit_singleline(&mut self.unit_filter);
+                    ui.separator();
+                    egui::ComboBox::from_label("Level")
+                        .selected_text(self.level_filter.label())
+                        .show_ui(ui, |ui| {
+                            for option in [
+                                LevelFilter::All,
+                                LevelFilter::Info,
+                                LevelFilter::Warn,
+                                LevelFilter::Critical,
+                            ] {
+                                ui.selectable_value(&mut self.level_filter, option, option.label());
+                            }
+                        });
+                    ui.separator();
+                    ui.selectable_value(&mut self.sort_key, SortKey::Time, "nach Zeit");
+                    ui.selectable_value(&mut self.sort_key, SortKey::Score, "nach Score");
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("CSV").clicked() {
+                            self.export_anomalies(ctx, ExportFormat::Csv);
+                        }
+                        if ui.button("JSON").clicked() {
+                            self.export_anomalies(ctx, ExportFormat::Json);
+                        }
+                        ui.label(egui::RichText::new("Export:").color(theme::TEXT_MUTED));
+                    });
+                });
+                let export_message = self
+                    .export_message
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                if let Some(message) = export_message {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(message).color(theme::TEXT_MUTED));
                 }
             });
-            let export_message = self
-                .export_message
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone();
-            if let Some(message) = export_message {
-                ui.label(message);
-            }
 
-            ui.separator();
+            ui.add_space(8.0);
 
             let selected_before = self.selected_anomaly;
+            let filtered = self.filtered_anomalies();
+            theme::section_heading(ui, &format!("Anomalien ({})", filtered.len()));
+            ui.add_space(4.0);
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("anomaly_grid")
                     .striped(true)
                     .num_columns(5)
+                    .spacing(egui::vec2(12.0, 6.0))
                     .show(ui, |ui| {
                         ui.strong("Level");
                         ui.strong("Unit");
@@ -853,15 +970,13 @@ impl LogsentryApp {
                         ui.strong("");
                         ui.end_row();
 
-                        for anomaly in self.filtered_anomalies() {
-                            let level_color = match anomaly.level {
-                                AnomalyLevel::Info => egui::Color32::LIGHT_BLUE,
-                                AnomalyLevel::Warn => egui::Color32::YELLOW,
-                                AnomalyLevel::Critical => egui::Color32::LIGHT_RED,
-                            };
-                            ui.colored_label(level_color, format!("{:?}", anomaly.level));
+                        for anomaly in filtered {
+                            theme::level_badge(ui, anomaly.level);
                             ui.label(anomaly.unit.as_deref().unwrap_or("–"));
-                            ui.label(format!("{:.2}", anomaly.breakdown.combined));
+                            ui.colored_label(
+                                theme::level_color(anomaly.level),
+                                format!("{:.2}", anomaly.breakdown.combined),
+                            );
                             ui.label(&anomaly.template_text);
                             if ui.button("Details").clicked() {
                                 self.selected_anomaly = Some(anomaly.id);
