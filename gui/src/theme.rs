@@ -1,29 +1,30 @@
-//! Einheitliches Farb- und Stilschema für die GUI.
+//! Einheitliches Farb- und Stilschema für die GUI: „Holographic HUD".
 //!
-//! Bündelt Akzent- und Statusfarben sowie kleine wiederverwendbare Widgets
-//! (Chips, Level-Badges, Auslastungsbalken, Karten-Rahmen) an einer Stelle,
-//! statt Farbliterale über `app.rs` zu verstreuen. Fokus liegt auf dem
-//! Dark-Mode (Standard); Light-Mode bleibt nah an `egui::Visuals::light()`,
-//! übernimmt aber dieselben Akzentfarben für Wiedererkennbarkeit.
+//! Glas-Karten mit leuchtenden Eck-Klammern (wie ein Sci-Fi-HUD), runde
+//! Ring-Gauges für Auslastungswerte statt reiner Balken, elektro-blaue
+//! Akzentfarbe. Hintergrund bewusst neutral dunkelgrau/schwarz statt
+//! blaustichig -- nur Akzente (Rahmen, Klammern, Gauges, Text) sind blau.
+//! Fokus liegt auf dem Dark-Mode (Standard); Light-Mode bleibt nah an
+//! `egui::Visuals::light()`, übernimmt aber dieselbe Akzentfarbe.
 
-use eframe::egui::{self, Color32, Margin, Rounding, Stroke};
+use eframe::egui::{self, Color32, FontId, Margin, Rounding, Shadow, Stroke};
 
 use logsentry_proto::{AnomalyLevel, ConnectionState};
 
-pub const BG_ROOT: Color32 = Color32::from_rgb(16, 17, 21);
-pub const BG_PANEL: Color32 = Color32::from_rgb(22, 24, 29);
-pub const BG_CARD: Color32 = Color32::from_rgb(28, 30, 36);
-pub const BORDER: Color32 = Color32::from_rgb(45, 48, 58);
-pub const TEXT_MUTED: Color32 = Color32::from_rgb(150, 156, 168);
+pub const BG_ROOT: Color32 = Color32::from_rgb(9, 9, 10);
+pub const BG_PANEL: Color32 = Color32::from_rgb(14, 14, 16);
+pub const BG_CARD: Color32 = Color32::from_rgb(20, 21, 24);
+pub const BORDER: Color32 = Color32::from_rgb(40, 41, 46);
+pub const TEXT_MUTED: Color32 = Color32::from_rgb(148, 154, 163);
 
-pub const ACCENT: Color32 = Color32::from_rgb(96, 165, 250);
-pub const OK: Color32 = Color32::from_rgb(74, 222, 128);
-pub const LEVEL_INFO: Color32 = Color32::from_rgb(96, 165, 250);
-pub const LEVEL_WARN: Color32 = Color32::from_rgb(245, 176, 65);
-pub const LEVEL_CRITICAL: Color32 = Color32::from_rgb(239, 83, 80);
+pub const ACCENT: Color32 = Color32::from_rgb(61, 220, 255);
+pub const OK: Color32 = Color32::from_rgb(77, 255, 176);
+pub const LEVEL_INFO: Color32 = Color32::from_rgb(61, 220, 255);
+pub const LEVEL_WARN: Color32 = Color32::from_rgb(255, 194, 77);
+pub const LEVEL_CRITICAL: Color32 = Color32::from_rgb(255, 93, 122);
 
 const PILL_ROUNDING: Rounding = Rounding::same(999.0);
-const CARD_ROUNDING: Rounding = Rounding::same(8.0);
+const CARD_ROUNDING: Rounding = Rounding::same(6.0);
 
 /// Setzt Visuals und Grundabstände für den gegebenen Modus. Wird einmal pro
 /// Frame aufgerufen (billig: reines Setzen von Structs, kein I/O).
@@ -49,7 +50,7 @@ pub fn apply(ctx: &egui::Context, dark: bool) {
 
 fn dark_visuals() -> egui::Visuals {
     let mut v = egui::Visuals::dark();
-    v.panel_fill = BG_PANEL;
+    v.panel_fill = BG_ROOT;
     v.window_fill = BG_PANEL;
     v.extreme_bg_color = BG_ROOT;
     v.faint_bg_color = BG_CARD;
@@ -65,15 +66,15 @@ fn dark_visuals() -> egui::Visuals {
     v.widgets.inactive.bg_fill = BG_CARD;
     v.widgets.inactive.weak_bg_fill = BG_CARD;
     v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, BORDER);
-    v.widgets.inactive.rounding = Rounding::same(6.0);
+    v.widgets.inactive.rounding = Rounding::same(4.0);
 
-    v.widgets.hovered.bg_fill = Color32::from_rgb(36, 39, 47);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(28, 30, 34);
     v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    v.widgets.hovered.rounding = Rounding::same(6.0);
+    v.widgets.hovered.rounding = Rounding::same(4.0);
 
     v.widgets.active.bg_fill = ACCENT.linear_multiply(0.28);
     v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    v.widgets.active.rounding = Rounding::same(6.0);
+    v.widgets.active.rounding = Rounding::same(4.0);
 
     v
 }
@@ -107,7 +108,7 @@ fn level_text(level: AnomalyLevel) -> &'static str {
 /// Ein farbiges Status-Pille (z. B. Verbindungsstatus, Lernphase, Replay).
 pub fn chip(ui: &mut egui::Ui, text: impl Into<String>, color: Color32) {
     egui::Frame::none()
-        .fill(color.linear_multiply(0.14))
+        .fill(color.linear_multiply(0.12))
         .stroke(Stroke::new(1.0_f32, color))
         .rounding(PILL_ROUNDING)
         .inner_margin(Margin::symmetric(9.0, 3.0))
@@ -135,7 +136,7 @@ pub fn neutral_chip(ui: &mut egui::Ui, text: impl Into<String>) {
 pub fn level_badge(ui: &mut egui::Ui, level: AnomalyLevel) {
     let color = level_color(level);
     egui::Frame::none()
-        .fill(color.linear_multiply(0.18))
+        .fill(color.linear_multiply(0.16))
         .stroke(Stroke::new(1.0_f32, color))
         .rounding(Rounding::same(4.0))
         .inner_margin(Margin::symmetric(7.0, 2.0))
@@ -144,7 +145,7 @@ pub fn level_badge(ui: &mut egui::Ui, level: AnomalyLevel) {
         });
 }
 
-/// Farbverlauf grün -> gelb -> rot für Auslastungsbalken, unabhängig davon
+/// Farbverlauf grün -> gelb -> rot für Auslastungsanzeigen, unabhängig davon
 /// ob es sich um Prozent (0..1) oder eine andere auf 0..1 normierte Größe
 /// handelt (z. B. Temperatur / Referenzwert).
 fn usage_color(fraction: f32) -> Color32 {
@@ -158,8 +159,9 @@ fn usage_color(fraction: f32) -> Color32 {
 }
 
 /// Beschrifteter Auslastungsbalken mit fester Label-Breite, damit mehrere
-/// Zeilen (CPU/RAM/Load, Disks, Temperaturen) sauber untereinander
-/// ausgerichtet bleiben.
+/// Zeilen (Temperaturen, Disks, Score) sauber untereinander ausgerichtet
+/// bleiben. Für CPU/RAM/Load im Systemzustand siehe stattdessen
+/// [`radial_gauge`].
 pub fn usage_bar(ui: &mut egui::Ui, label: &str, fraction: f32, value_text: String) {
     ui.horizontal(|ui| {
         ui.add_sized([64.0, 0.0], egui::Label::new(label));
@@ -172,21 +174,88 @@ pub fn usage_bar(ui: &mut egui::Ui, label: &str, fraction: f32, value_text: Stri
     });
 }
 
-/// Rahmt einen Abschnitt als leicht abgesetzte Karte (Hintergrund + Rand +
-/// Innenabstand), damit Systemzustand/Detail-Panel nicht als eine
-/// durchgehende Textwand wirken.
+/// Runder Ring-Gauge im HUD-Stil (Hintergrundring + farbiger Bogen +
+/// zentrierter Wert + Beschriftung darunter), z. B. für CPU/RAM/Load.
+pub fn radial_gauge(ui: &mut egui::Ui, label: &str, fraction: f32, value_text: &str) {
+    let size = 76.0;
+    let stroke_width = 6.0;
+    ui.vertical_centered(|ui| {
+        let (rect, _response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        let center = rect.center();
+        let radius = size / 2.0 - stroke_width;
+
+        painter.circle_stroke(center, radius, Stroke::new(stroke_width, BORDER));
+
+        let frac = fraction.clamp(0.0, 1.0);
+        if frac > 0.0 {
+            let color = usage_color(frac);
+            let start = -std::f32::consts::FRAC_PI_2;
+            let end = start + frac * std::f32::consts::TAU;
+            let steps = ((frac * 48.0).ceil() as usize).max(1);
+            let points: Vec<egui::Pos2> = (0..=steps)
+                .map(|i| {
+                    let t = start + (end - start) * (i as f32 / steps as f32);
+                    center + egui::vec2(radius * t.cos(), radius * t.sin())
+                })
+                .collect();
+            painter.add(egui::Shape::line(points, Stroke::new(stroke_width, color)));
+        }
+
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            value_text,
+            FontId::monospace(14.0),
+            egui::Color32::from_rgb(225, 228, 232),
+        );
+
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new(label).color(TEXT_MUTED).size(11.0));
+    });
+}
+
+/// Zeichnet vier kurze, leuchtende Eck-Klammern über `rect` -- die
+/// namensgebende HUD-Anmutung der Karten, statt eines durchgezogenen
+/// Rahmens an jeder Kante.
+fn corner_brackets(ui: &egui::Ui, rect: egui::Rect, color: Color32) {
+    let len = 12.0;
+    let stroke = Stroke::new(1.5_f32, color);
+    let painter = ui.painter();
+    for (corner, dx, dy) in [
+        (rect.left_top(), 1.0, 1.0),
+        (rect.right_top(), -1.0, 1.0),
+        (rect.left_bottom(), 1.0, -1.0),
+        (rect.right_bottom(), -1.0, -1.0),
+    ] {
+        painter.line_segment([corner, corner + egui::vec2(len * dx, 0.0)], stroke);
+        painter.line_segment([corner, corner + egui::vec2(0.0, len * dy)], stroke);
+    }
+}
+
+/// Rahmt einen Abschnitt als Glas-Karte mit leuchtenden Eck-Klammern und
+/// einem dezenten Akzent-Glow, damit Systemzustand/Detail-Panel nicht als
+/// eine durchgehende Textwand wirken.
 pub fn card(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::none()
+    let response = egui::Frame::none()
         .fill(BG_CARD)
         .stroke(Stroke::new(1.0_f32, BORDER))
         .rounding(CARD_ROUNDING)
-        .inner_margin(Margin::same(10.0))
-        .show(ui, add_contents);
+        .inner_margin(Margin::same(12.0))
+        .shadow(Shadow {
+            offset: egui::vec2(0.0, 0.0),
+            blur: 20.0,
+            spread: 0.0,
+            color: ACCENT.linear_multiply(0.10),
+        })
+        .show(ui, add_contents)
+        .response;
+    corner_brackets(ui, response.rect, ACCENT);
 }
 
 /// Kleine Überschrift für einen Abschnitt innerhalb einer Karte oder eines
 /// Panels: etwas kleiner als `ui.heading()`, aber deutlich abgesetzt vom
 /// Fließtext.
 pub fn section_heading(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).strong().size(14.0));
+    ui.label(egui::RichText::new(text).strong().size(13.0).color(ACCENT));
 }

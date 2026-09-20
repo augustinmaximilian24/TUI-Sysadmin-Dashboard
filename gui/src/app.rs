@@ -444,27 +444,37 @@ impl LogsentryApp {
 
                         theme::card(ui, |ui| {
                             theme::section_heading(ui, "Auslastung");
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.columns(3, |columns| {
+                                    theme::radial_gauge(
+                                        &mut columns[0],
+                                        "CPU",
+                                        system.cpu.global_usage_percent / 100.0,
+                                        &format!("{:.0}%", system.cpu.global_usage_percent),
+                                    );
+                                    theme::radial_gauge(
+                                        &mut columns[1],
+                                        "RAM",
+                                        system.memory.used_percent / 100.0,
+                                        &format!("{:.0}%", system.memory.used_percent),
+                                    );
+                                    theme::radial_gauge(
+                                        &mut columns[2],
+                                        "LOAD 1m",
+                                        (system.load.one / core_count) as f32,
+                                        &format!("{:.2}", system.load.one),
+                                    );
+                                });
+                            });
                             ui.add_space(4.0);
-                            theme::usage_bar(
-                                ui,
-                                "CPU",
-                                system.cpu.global_usage_percent / 100.0,
-                                format!("{:.0} %", system.cpu.global_usage_percent),
-                            );
-                            theme::usage_bar(
-                                ui,
-                                "RAM",
-                                system.memory.used_percent / 100.0,
-                                format!("{:.0} %", system.memory.used_percent),
-                            );
-                            theme::usage_bar(
-                                ui,
-                                "Load 1m",
-                                (system.load.one / core_count) as f32,
-                                format!(
-                                    "{:.2} / {:.2} / {:.2}",
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Load {:.2} / {:.2} / {:.2}",
                                     system.load.one, system.load.five, system.load.fifteen
-                                ),
+                                ))
+                                .color(theme::TEXT_MUTED)
+                                .size(11.0),
                             );
                         });
 
