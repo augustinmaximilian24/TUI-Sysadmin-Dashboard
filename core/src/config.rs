@@ -46,6 +46,9 @@ pub struct Config {
     pub actions: ActionsConfig,
     /// Prometheus-Textfile-Export (Phase 10, optional).
     pub prometheus: PrometheusConfig,
+    /// Anomalie-Masken für wiederkehrende, ungefährliche Wartungsmeldungen
+    /// (siehe [`crate::quiet`]).
+    pub quiet: QuietConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -390,6 +393,74 @@ impl Default for PrometheusConfig {
         Self {
             enabled: false,
             textfile_path: "/var/lib/logsentry/logsentry.prom".to_string(),
+        }
+    }
+}
+
+/// Eine Anomalie-Maske: Ereignisse, deren Nachricht auf `pattern` passt
+/// (und, sofern gesetzt, deren Unit exakt `unit` entspricht), werden vor
+/// der statistischen Analyse ausgefiltert und laufen nie durch
+/// [`AnalysisEngine`](crate::AnalysisEngine).
+///
+/// Anders als das laufzeit-getriggerte `MuteAnomaly` (Phase 8, GUI-Aktion
+/// je Template-ID) ist dies eine statische, in der Konfiguration gepflegte
+/// Allow-List für bekannte, harmlose Wartungsmeldungen (tägliche/stündliche
+/// Cron-Jobs, Backup-Mounts) -- diese Ereignisse erreichen wegen ihrer
+/// niedrigen Frequenz nie das Vertrauensgewicht der Zeitprofil-Baseline
+/// (Phase 4) und würden sonst bei jedem Auftreten erneut als Surprisal
+/// gemeldet.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct QuietTemplateRule {
+    /// Exakter `_SYSTEMD_UNIT`-Name, auf den die Regel eingeschränkt wird.
+    /// `None` (Default) heißt: unabhängig von der Unit anwenden.
+    pub unit: Option<String>,
+    /// Regex gegen die rohe Journal-Nachricht (`MESSAGE`-Feld). Ungültige
+    /// Muster führen nicht zum Absturz (Regel 16): [`crate::quiet::QuietFilter`]
+    /// verwirft sie mit einer Warnung.
+    pub pattern: String,
+}
+
+/// Konfiguration der Anomalie-Masken für wiederkehrende Wartungsmeldungen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct QuietConfig {
+    /// Regeln in Prüfreihenfolge; die erste passende Regel entscheidet.
+    pub templates: Vec<QuietTemplateRule>,
+}
+
+impl QuietConfig {
+    /// Default-Masken für die auf HauptPc identifizierten Wartungs-
+    /// Templates (siehe Anomalie-Review vom 2026-09-21): Timeshift-Backup-
+    /// Mounts, dpkg-db-backup, logrotate, man-db, flatpak-system-helper
+    /// sowie die cron-internen `CMD`/`LIST`-Protokollzeilen für
+    /// `run-parts`. Alle sind tages-/stundenperiodisch, treten dadurch nie
+    /// oft genug für eine vertrauenswürdige Zeitprofil-Baseline auf und
+    /// lösten deshalb bei jedem Lauf erneut Surprisal-Alarme aus (bis zu
+    /// `critical`).
+    fn default_maintenance_rules() -> Vec<QuietTemplateRule> {
+        let rule = |pattern: &str| QuietTemplateRule {
+            unit: None,
+            pattern: pattern.to_string(),
+        };
+        vec![
+            rule(r"^run-timeshift-\d+-backup\.mount: Deactivated successfully\.$"),
+            rule(r"\bdpkg-db-backup\.service\b"),
+            rule(r"\blogrotate\.service\b"),
+            rule(r"\bman-db\.service\b"),
+            rule(
+                r"^flatpak-system-helper\.service: (Deactivated successfully\.|Consumed [0-9.]+s CPU time\.)$",
+            ),
+            rule(r"^\(root\) CMD \(cd / && run-parts --report /etc/cron\.(hourly|daily|weekly|monthly)\)$"),
+            rule(r"^\(root\) LIST \(root\)$"),
+        ]
+    }
+}
+
+impl Default for QuietConfig {
+    fn default() -> Self {
+        Self {
+            templates: Self::default_maintenance_rules(),
         }
     }
 }

@@ -20,7 +20,7 @@ use tokio::time::Instant;
 
 use logsentry_core::analysis::{AnalysisEngine, AnalysisInput};
 use logsentry_core::baseline::{BaselineDb, PersistedState};
-use logsentry_core::{Config, JournalEvent, RingReceiver, TemplateEngine};
+use logsentry_core::{Config, JournalEvent, QuietFilter, RingReceiver, TemplateEngine};
 use logsentry_proto::{LearningState, PipelineStats, Snapshot, WindowStats};
 
 use crate::now_us;
@@ -31,6 +31,9 @@ use crate::wire::{self, AnomalyEventContext, ContextEntry};
 pub struct Pipeline {
     templates: TemplateEngine,
     engine: AnalysisEngine,
+    /// Statische Anomalie-Masken für wiederkehrende Wartungsmeldungen
+    /// (`config.quiet`), geprüft vor jedem `engine.process()`.
+    quiet: QuietFilter,
     db: Option<BaselineDb>,
     state: Arc<SharedState>,
     persist_interval: Duration,
@@ -46,6 +49,9 @@ pub struct Pipeline {
     /// Wegen `ActionRequest::MuteAnomaly` von der Analyse ausgenommene
     /// Ereignisse.
     muted: u64,
+    /// Wegen einer Anomalie-Maske (`config.quiet`) von der Analyse
+    /// ausgenommene Ereignisse.
+    quieted: u64,
     /// Ereigniszähler beim letzten veröffentlichten Snapshot, für
     /// `events_per_sec` (Regel: Magic Numbers gehören in Config, nicht der
     /// Zähler selbst -- der bleibt reiner Laufzeitzustand).
@@ -98,6 +104,7 @@ impl Pipeline {
         Self {
             templates,
             engine,
+            quiet: QuietFilter::new(&config.quiet),
             db,
             state,
             persist_interval: Duration::from_secs(
@@ -112,6 +119,7 @@ impl Pipeline {
             anomalies: 0,
             self_filtered: 0,
             muted: 0,
+            quieted: 0,
             events_at_last_snapshot: 0,
             prometheus_path: config
                 .prometheus
@@ -180,6 +188,19 @@ impl Pipeline {
             .is_muted(matched.id.0, event.systemd_unit.as_deref(), daemon_now_us)
         {
             self.muted += 1;
+            return;
+        }
+
+        // Statische Anomalie-Masken (config.quiet, siehe core::quiet): anders
+        // als der Selbstfilter/Mute oben trifft diese Prüfung nicht auf
+        // eigene Aktionen zurück, sondern auf bekannte, harmlose
+        // Wartungsmeldungen, die wegen ihrer niedrigen Frequenz nie das
+        // Vertrauensgewicht der Zeitprofil-Baseline (Phase 4) erreichen.
+        if self
+            .quiet
+            .is_quiet(event.systemd_unit.as_deref(), &event.message)
+        {
+            self.quieted += 1;
             return;
         }
 
@@ -345,6 +366,7 @@ impl Pipeline {
             suppressed_learning: stats.suppressed_learning,
             self_filtered: self.self_filtered,
             muted: self.muted,
+            quieted: self.quieted,
         }
     }
 }
@@ -371,6 +393,9 @@ pub struct PipelineSummary {
     pub self_filtered: u64,
     /// Wegen `MuteAnomaly` von der Analyse ausgenommene Ereignisse.
     pub muted: u64,
+    /// Wegen einer Anomalie-Maske (`config.quiet`) von der Analyse
+    /// ausgenommene Ereignisse.
+    pub quieted: u64,
 }
 
 #[cfg(test)]
@@ -533,6 +558,28 @@ mod tests {
             0,
             "eigene Zeilen dürfen nie in der Analyse landen"
         );
+    }
+
+    #[test]
+    fn maskierte_wartungszeile_wird_gezaehlt_aber_nicht_analysiert() {
+        let mut pipeline = test_pipeline();
+
+        pipeline.handle(&event(
+            "init.scope",
+            1,
+            "run-timeshift-271289-backup.mount: Deactivated successfully.",
+            1,
+        ));
+
+        assert_eq!(pipeline.quieted, 1);
+        assert_eq!(
+            pipeline.engine.stats().processed,
+            0,
+            "eine per Anomalie-Maske erfasste Zeile darf nie in der Analyse landen"
+        );
+        // Audit-Sichtbarkeit bleibt erhalten, wie bei Selbstfilter/Mute.
+        let (lines, _) = pipeline.state.query_context(1, 1, 1, None);
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]

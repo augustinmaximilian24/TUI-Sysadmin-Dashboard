@@ -360,6 +360,7 @@ async fn main() -> anyhow::Result<()> {
             unterdrueckt_lernphase = summary.suppressed_learning,
             selbstgefiltert = summary.self_filtered,
             stummgeschaltet = summary.muted,
+            maskiert = summary.quieted,
             "logsentry-daemon beendet"
         ),
         Err(err) => tracing::error!(fehler = %err, "Pipeline-Task abgebrochen"),
