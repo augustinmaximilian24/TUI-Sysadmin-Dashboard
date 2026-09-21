@@ -23,7 +23,16 @@ use crate::client::{
     action_kind_label, connection_label, format_action_outcome, is_connected, GuiState,
     HistoryPoint,
 };
+use crate::knowledge_graph::KnowledgeGraphTab;
 use crate::theme;
+
+/// Welcher Tab gerade im Hauptbereich angezeigt wird (Phase 11: bisher gab
+/// es nur die Dashboard-Ansicht in einem festen `CentralPanel`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveTab {
+    Dashboard,
+    KnowledgeGraph,
+}
 
 /// Eine per Button ausgelöste, aber noch nicht bestätigte Aktion (Regel 12:
 /// kein Ein-Klick-Vollzug). Der Klick baut schon die fertige
@@ -127,13 +136,22 @@ pub struct LogsentryApp {
     /// IP muss deshalb manuell eingegeben werden.
     block_ip_input: String,
     render: RenderSnapshot,
+    active_tab: ActiveTab,
+    /// `None`, wenn `knowledge_graph.enabled = false` in der Konfiguration
+    /// steht -- dann wird der Tab im Header gar nicht erst angeboten.
+    knowledge_graph: Option<KnowledgeGraphTab>,
 }
 
 impl LogsentryApp {
     pub fn new(
         state: Arc<Mutex<GuiState>>,
         outbound: tokio::sync::mpsc::Sender<ClientMessage>,
+        knowledge_graph_config: logsentry_core::config::KnowledgeGraphConfig,
+        ctx: &egui::Context,
     ) -> Self {
+        let knowledge_graph = knowledge_graph_config
+            .enabled
+            .then(|| KnowledgeGraphTab::new(&knowledge_graph_config, ctx));
         Self {
             state,
             outbound,
@@ -150,6 +168,8 @@ impl LogsentryApp {
             export_message: Arc::new(Mutex::new(None)),
             block_ip_input: String::new(),
             render: RenderSnapshot::default(),
+            active_tab: ActiveTab::Dashboard,
+            knowledge_graph,
         }
     }
 
@@ -335,9 +355,14 @@ impl eframe::App for LogsentryApp {
         theme::apply(ctx, self.dark_mode);
 
         self.draw_header(ctx);
-        self.draw_system_panel(ctx);
-        self.draw_detail_panel(ctx);
-        self.draw_central(ctx);
+        match self.active_tab {
+            ActiveTab::Dashboard => {
+                self.draw_system_panel(ctx);
+                self.draw_detail_panel(ctx);
+                self.draw_central(ctx);
+            }
+            ActiveTab::KnowledgeGraph => self.draw_knowledge_graph_tab(ctx),
+        }
         self.draw_confirmation_dialog(ctx);
     }
 }
@@ -415,6 +440,25 @@ impl LogsentryApp {
                         };
                         if ui.button(pause_label).clicked() {
                             self.paused = !self.paused;
+                        }
+
+                        // Tab-Umschalter nur anbieten, wenn der
+                        // Wissensgraph-Tab in der Konfiguration aktiviert
+                        // ist (Regel 16: kein leerer/kaputter Tab ohne
+                        // Datenquelle in der Standard-Konfiguration).
+                        if self.knowledge_graph.is_some() {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.selectable_value(
+                                &mut self.active_tab,
+                                ActiveTab::KnowledgeGraph,
+                                "Wissensgraph",
+                            );
+                            ui.selectable_value(
+                                &mut self.active_tab,
+                                ActiveTab::Dashboard,
+                                "Dashboard",
+                            );
                         }
                     });
                 });
@@ -898,6 +942,17 @@ impl LogsentryApp {
         } else if cancel {
             self.pending_confirmation = None;
         }
+    }
+
+    /// Zeigt den Wissensgraph-Tab (Phase 11) als eigenes, alleiniges
+    /// `CentralPanel` -- die Dashboard-Seitenpanele (System-/Detailansicht)
+    /// beziehen sich auf Anomalien und wären hier nur ablenkende Leerfläche.
+    fn draw_knowledge_graph_tab(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(tab) = &mut self.knowledge_graph {
+                tab.show(ui);
+            }
+        });
     }
 
     fn draw_central(&mut self, ctx: &egui::Context) {

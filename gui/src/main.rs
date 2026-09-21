@@ -14,6 +14,7 @@
 mod app;
 mod client;
 mod export;
+mod knowledge_graph;
 mod theme;
 
 use std::path::PathBuf;
@@ -30,25 +31,31 @@ fn find_flag_value(args: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
+/// Lädt die Konfiguration aus `--config` (oder dem Default-Pfad). Eine
+/// fehlende Datei ist kein Fehler -- dann gelten die eingebauten Defaults
+/// aus [`Config`] (u. a. für `socket` und `knowledge_graph`).
+fn load_config(args: &[String]) -> Config {
+    let config_path = find_flag_value(args, "--config")
+        .map_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH), PathBuf::from);
+    Config::load_from_file(&config_path).unwrap_or_default()
+}
+
 /// Ermittelt den Socket-Pfad: `--socket` hat Vorrang, sonst `[socket].path`
-/// aus der Konfigurationsdatei (`--config` oder Default-Pfad). Eine
-/// fehlende Konfigurationsdatei ist kein Fehler -- dann gilt schlicht der
-/// eingebaute Default aus `SocketConfig`.
-fn resolve_socket_path(args: &[String]) -> PathBuf {
+/// aus der geladenen Konfiguration.
+fn resolve_socket_path(args: &[String], config: &Config) -> PathBuf {
     if let Some(socket) = find_flag_value(args, "--socket") {
         return PathBuf::from(socket);
     }
-    let config_path = find_flag_value(args, "--config")
-        .map_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH), PathBuf::from);
-    let config = Config::load_from_file(&config_path).unwrap_or_default();
-    PathBuf::from(config.socket.path)
+    PathBuf::from(config.socket.path.clone())
 }
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args: Vec<String> = std::env::args().collect();
-    let socket_path = resolve_socket_path(&args);
+    let config = load_config(&args);
+    let socket_path = resolve_socket_path(&args, &config);
+    let knowledge_graph_config = config.knowledge_graph.clone();
 
     // Eigenständige Runtime statt `#[tokio::main]`: `eframe::run_native`
     // übernimmt den aufrufenden Thread mit seiner eigenen Event-Loop, die
@@ -68,7 +75,12 @@ fn main() -> anyhow::Result<()> {
         native_options,
         Box::new(move |cc| {
             let (state, outbound) = client::spawn_bridge(socket_path, cc.egui_ctx.clone());
-            Ok(Box::new(app::LogsentryApp::new(state, outbound)))
+            Ok(Box::new(app::LogsentryApp::new(
+                state,
+                outbound,
+                knowledge_graph_config,
+                &cc.egui_ctx,
+            )))
         }),
     )
     .map_err(|err| anyhow::anyhow!("eframe konnte nicht gestartet werden: {err}"))?;
@@ -89,18 +101,22 @@ mod tests {
 
     #[test]
     fn socket_flag_hat_vorrang_vor_konfiguration() {
-        let path = resolve_socket_path(&args(&[
+        let call_args = args(&[
             "--config",
             "/pfad/den/es/nicht/gibt.toml",
             "--socket",
             "/tmp/mein.sock",
-        ]));
+        ]);
+        let config = load_config(&call_args);
+        let path = resolve_socket_path(&call_args, &config);
         assert_eq!(path, PathBuf::from("/tmp/mein.sock"));
     }
 
     #[test]
     fn fehlende_konfiguration_ergibt_eingebauten_default() {
-        let path = resolve_socket_path(&args(&["--config", "/pfad/den/es/nicht/gibt.toml"]));
+        let call_args = args(&["--config", "/pfad/den/es/nicht/gibt.toml"]);
+        let config = load_config(&call_args);
+        let path = resolve_socket_path(&call_args, &config);
         assert_eq!(
             path,
             PathBuf::from(logsentry_core::config::SocketConfig::default().path)

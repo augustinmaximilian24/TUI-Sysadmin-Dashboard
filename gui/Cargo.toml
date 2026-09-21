@@ -13,11 +13,19 @@ logsentry-core = { path = "../core" }
 logsentry-proto = { path = "../proto", features = ["client"] }
 anyhow.workspace = true
 tokio.workspace = true
-# JSON-Export der Anomalien (Phase 10, optional).
+serde.workspace = true
+# JSON-Export der Anomalien (Phase 10, optional) und Parsen von
+# graphify's graph.json (Phase 11, optional).
 serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 eframe = "0.29"
 # egui_plot: Live-Graph mit dynamischer Y-Achse (Phase 7, Regel: Live-Graph
 # ohne feste Obergrenze). Version an `eframe`/`egui` 0.29 gekoppelt.
 egui_plot = "0.29"
+
+[dev-dependencies]
+# Für Tests des Wissensgraph-Tabs (Phase 11): temporäre graph.json-Dateien
+# statt gegen echte Nutzerdaten zu testen. Gleiche Version wie in `core`.
+tempfile = "3"
