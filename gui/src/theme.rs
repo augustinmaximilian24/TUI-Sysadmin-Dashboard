@@ -16,6 +16,10 @@ pub const BG_PANEL: Color32 = Color32::from_rgb(14, 14, 16);
 pub const BG_CARD: Color32 = Color32::from_rgb(20, 21, 24);
 pub const BORDER: Color32 = Color32::from_rgb(40, 41, 46);
 pub const TEXT_MUTED: Color32 = Color32::from_rgb(148, 154, 163);
+/// Für Werte, die auf wechselnd hellem/dunklem Untergrund lesbar bleiben
+/// müssen (z. B. neben einem `ProgressBar`-Fill), statt fest auf einer
+/// Hintergrundfarbe zu kontrastieren wie `TEXT_MUTED`.
+pub const TEXT_HIGH_CONTRAST: Color32 = Color32::from_rgb(240, 242, 245);
 
 pub const ACCENT: Color32 = Color32::from_rgb(61, 220, 255);
 pub const OK: Color32 = Color32::from_rgb(77, 255, 176);
@@ -162,14 +166,29 @@ fn usage_color(fraction: f32) -> Color32 {
 /// Zeilen (Temperaturen, Disks, Score) sauber untereinander ausgerichtet
 /// bleiben. Für CPU/RAM/Load im Systemzustand siehe stattdessen
 /// [`radial_gauge`].
+///
+/// Der Wert wird bewusst *neben* statt als `ProgressBar`-Overlay *auf* dem
+/// Balken gezeichnet: das Overlay läuft über Fill- und Leerbereich hinweg,
+/// die beide je nach Auslastung eine andere Helligkeit haben -- eine
+/// einzelne Textfarbe ist dann gegen mindestens einen der beiden Bereiche
+/// nie kontrastreich genug (bekannt geworden an den kaum lesbaren
+/// Temperatur-Werten). Auf dem immer gleich dunklen Karten-Hintergrund
+/// bleibt der feste helle Text dagegen in jedem Zustand lesbar.
 pub fn usage_bar(ui: &mut egui::Ui, label: &str, fraction: f32, value_text: String) {
     ui.horizontal(|ui| {
         ui.add_sized([64.0, 0.0], egui::Label::new(label));
         ui.add(
             egui::ProgressBar::new(fraction.clamp(0.0, 1.0))
                 .desired_width(150.0)
-                .fill(usage_color(fraction))
-                .text(value_text),
+                .fill(usage_color(fraction)),
+        );
+        ui.add_sized(
+            [56.0, 0.0],
+            egui::Label::new(
+                egui::RichText::new(value_text)
+                    .color(TEXT_HIGH_CONTRAST)
+                    .monospace(),
+            ),
         );
     });
 }
