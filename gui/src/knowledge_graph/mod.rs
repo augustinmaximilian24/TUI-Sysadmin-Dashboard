@@ -57,6 +57,57 @@ fn community_color(community: i64) -> Color32 {
     COMMUNITY_COLORS[idx]
 }
 
+/// Wie viele konzentrische Ringe ein Knoten-Glow benutzt. Mehr Ringe ergeben
+/// einen weicheren Verlauf, kosten aber mehr gezeichnete Shapes pro Frame --
+/// bei den paar Dutzend Knoten eines persönlichen Wissensgraphen unkritisch.
+const NODE_GLOW_RINGS: usize = 7;
+
+/// Wie viele zusätzliche, breiter werdende Passes eine "starke" Kante für
+/// ihren Glow bekommt.
+const EDGE_GLOW_PASSES: usize = 3;
+
+/// Geschwindigkeit des leichten Leucht-Pulses (rad/s). Bewusst langsam und
+/// dezent -- soll wie ein ruhig atmendes Leuchten wirken, nicht blinken.
+const PULSE_SPEED_RAD_PER_SEC: f32 = 1.1;
+
+/// Zeichnet einen weichen Halo aus konzentrischen, zunehmend transparenten
+/// Kreisen um `center` -- eine Bloom-Annäherung ohne echten Blur-Shader
+/// (den `egui::Painter` nicht anbietet). `strength` skaliert die
+/// Maximalhelligkeit (z. B. höher für Hover/Auswahl/Hub-Knoten).
+/// Radius und Deckkraft des `ring_index`-ten (1 = innerster) von
+/// `total_rings` Glow-Ringen. Als reine Funktion ausgelagert, damit die
+/// Verlaufsform ohne einen `egui::Painter` testbar ist.
+fn glow_ring(ring_index: usize, total_rings: usize, base_radius: f32, strength: f32) -> (f32, u8) {
+    let t = ring_index as f32 / total_rings as f32;
+    let ring_radius = base_radius * (1.0 + 2.6 * t);
+    let alpha = (strength * 100.0 * (1.0 - t).powf(1.7)).clamp(0.0, 255.0) as u8;
+    (ring_radius, alpha)
+}
+
+fn draw_node_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Color32, strength: f32) {
+    for i in (1..=NODE_GLOW_RINGS).rev() {
+        let (ring_radius, alpha) = glow_ring(i, NODE_GLOW_RINGS, radius, strength);
+        if alpha == 0 {
+            continue;
+        }
+        painter.circle_filled(
+            center,
+            ring_radius,
+            Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha),
+        );
+    }
+}
+
+/// Mischt zwei Farben zu gleichen Teilen -- für den Kanten-Glow zwischen
+/// zwei unterschiedlich gefärbten Communities.
+fn blend_color(a: Color32, b: Color32) -> Color32 {
+    Color32::from_rgb(
+        ((a.r() as u16 + b.r() as u16) / 2) as u8,
+        ((a.g() as u16 + b.g() as u16) / 2) as u8,
+        ((a.b() as u16 + b.b() as u16) / 2) as u8,
+    )
+}
+
 struct ResolvedEdge {
     a: usize,
     b: usize,
@@ -226,6 +277,10 @@ pub struct KnowledgeGraphTab {
     rotation_degrees_per_sec: f32,
     idle_resume_secs: f32,
     drag_sensitivity_deg_per_px: f32,
+    /// Phase des dezenten Leucht-Pulses (rad, läuft frei weiter). An `dt`
+    /// gekoppelt statt an die Wanduhr, damit sie sich an dieselbe reaktive
+    /// Repaint-Rate hält wie die Auto-Rotation.
+    pulse_phase: f32,
 }
 
 impl KnowledgeGraphTab {
@@ -254,6 +309,7 @@ impl KnowledgeGraphTab {
             rotation_degrees_per_sec: config.rotation_degrees_per_sec,
             idle_resume_secs: config.idle_resume_secs.max(0.0),
             drag_sensitivity_deg_per_px: config.drag_sensitivity_deg_per_px,
+            pulse_phase: 0.0,
         }
     }
 
@@ -261,6 +317,8 @@ impl KnowledgeGraphTab {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
+        self.pulse_phase = (self.pulse_phase + dt * PULSE_SPEED_RAD_PER_SEC)
+            % (std::f32::consts::TAU);
 
         let (error, current) = {
             let guard = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
@@ -352,6 +410,19 @@ impl KnowledgeGraphTab {
             if hull.len() >= 3 {
                 let centroid =
                     hull.iter().fold(Pos2::ZERO, |acc, p| acc + p.to_vec2()) / hull.len() as f32;
+                // Weicher Außenrand: dieselbe Hülle mehrfach mit
+                // wachsender Breite und schwindender Deckkraft nachziehen,
+                // bevor die eigentliche Füllung darübergezeichnet wird.
+                for pass in (1..=3).rev() {
+                    let alpha = (26 / pass) as u8;
+                    painter.add(egui::Shape::closed_line(
+                        hull.clone(),
+                        Stroke::new(
+                            pass as f32 * 2.5,
+                            Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, alpha),
+                        ),
+                    ));
+                }
                 painter.add(egui::Shape::convex_polygon(
                     hull,
                     Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, 24),
@@ -392,8 +463,38 @@ impl KnowledgeGraphTab {
             let extracted = edge.confidence == "EXTRACTED";
             let alpha = if extracted { 140 } else { 60 };
             let width: f32 = if extracted { 1.6 } else { 1.0 };
+            let a = to_screen(pa);
+            let b = to_screen(pb);
+
+            // Nur verlässlich extrahierte Kanten bekommen einen Glow --
+            // sonst verschwimmt der Graph bei vielen schwachen Kanten zu
+            // einem einzigen Nebel.
+            if extracted {
+                let glow_color = blend_color(
+                    community_color(graph.nodes[edge.a].community),
+                    community_color(graph.nodes[edge.b].community),
+                );
+                let pulse = 0.75 + 0.25 * self.pulse_phase.sin();
+                for pass in (1..=EDGE_GLOW_PASSES).rev() {
+                    let t = pass as f32 / EDGE_GLOW_PASSES as f32;
+                    let glow_alpha = (55.0 * pulse * (1.0 - t)).clamp(0.0, 255.0) as u8;
+                    painter.line_segment(
+                        [a, b],
+                        Stroke::new(
+                            width + pass as f32 * 3.0,
+                            Color32::from_rgba_unmultiplied(
+                                glow_color.r(),
+                                glow_color.g(),
+                                glow_color.b(),
+                                glow_alpha,
+                            ),
+                        ),
+                    );
+                }
+            }
+
             painter.line_segment(
-                [to_screen(pa), to_screen(pb)],
+                [a, b],
                 Stroke::new(width, Color32::from_rgba_unmultiplied(150, 156, 165, alpha)),
             );
         }
@@ -425,8 +526,21 @@ impl KnowledgeGraphTab {
 
             let color = community_color(graph.nodes[idx].community);
             let is_selected = self.selected_node == Some(idx);
+            let is_hovered_now = hovered == Some(idx);
+
+            // Basis-Glow: Hub-Knoten (hoher Grad) leuchten stärker, dazu
+            // ein leises, gleichmäßiges Pulsieren; Hover/Auswahl geben
+            // einen deutlichen zusätzlichen Flare.
+            let hub_boost = 0.5 + 0.9 * (graph.degree[idx] as f32 / graph.max_degree as f32);
+            let pulse = 0.85 + 0.15 * (self.pulse_phase + idx as f32 * 0.6).sin();
+            let mut glow_strength = hub_boost * pulse;
+            if is_selected || is_hovered_now {
+                glow_strength += 1.6;
+            }
+            draw_node_glow(&painter, screen, radius, color, glow_strength);
+
             painter.circle_filled(screen, radius, color);
-            if is_selected || hovered == Some(idx) {
+            if is_selected || is_hovered_now {
                 painter.circle_stroke(screen, radius + 2.0, Stroke::new(2.0_f32, Color32::WHITE));
             }
         }
@@ -584,6 +698,33 @@ mod tests {
     fn community_color_wrappt_bei_vielen_communities() {
         assert_eq!(community_color(0), community_color(8));
         assert_eq!(community_color(3), COMMUNITY_COLORS[3]);
+    }
+
+    #[test]
+    fn glow_ring_wird_nach_aussen_schwaecher_und_groesser() {
+        let (inner_radius, inner_alpha) = glow_ring(1, NODE_GLOW_RINGS, 10.0, 1.0);
+        let (outer_radius, outer_alpha) = glow_ring(NODE_GLOW_RINGS, NODE_GLOW_RINGS, 10.0, 1.0);
+        assert!(outer_radius > inner_radius, "äußerer Ring muss größer sein");
+        assert!(
+            outer_alpha < inner_alpha,
+            "äußerer Ring muss durchsichtiger sein (innen {inner_alpha}, außen {outer_alpha})"
+        );
+    }
+
+    #[test]
+    fn glow_ring_alpha_bleibt_immer_im_gueltigen_byte_bereich() {
+        for strength in [0.0_f32, 0.5, 1.0, 5.0, 100.0] {
+            for i in 1..=NODE_GLOW_RINGS {
+                let (_, alpha) = glow_ring(i, NODE_GLOW_RINGS, 10.0, strength);
+                assert!((0..=255).contains(&(alpha as i32)));
+            }
+        }
+    }
+
+    #[test]
+    fn blend_color_mischt_zu_gleichen_teilen() {
+        let mixed = blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(200, 100, 40));
+        assert_eq!(mixed, Color32::from_rgb(100, 50, 20));
     }
 
     #[test]

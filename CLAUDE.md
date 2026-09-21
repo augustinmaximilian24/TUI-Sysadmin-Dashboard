@@ -251,6 +251,19 @@ Tab ist ein reiner Konsument einer externen, optionalen Datei.
 - [x] Rendering per `egui::Painter`: Community-Farben, gradbasierte
       Knotengröße, Hyperkanten als konvexe Hülle mit Label (wie in
       graphify's `graph.html`)
+- [x] Glow-Effekt (2026-09-21 Nachmittag, auf Wunsch bewusst "teuer"
+      aussehend statt minimal): Knoten bekommen einen mehrschichtigen
+      Halo aus konzentrischen, nach außen schwächer werdenden Kreisen
+      (`glow_ring`/`draw_node_glow`), stärker für Hub-Knoten (hoher
+      Grad), Hover und Auswahl, dazu ein leises, dauerhaftes Pulsieren.
+      Verlässlich extrahierte Kanten (`confidence == "EXTRACTED"`)
+      bekommen einen mehrpassigen Farbglow aus der gemischten Farbe
+      ihrer beiden Community-Endpunkte (`blend_color`); schwache
+      Kanten bleiben bewusst ohne Glow, damit der Graph nicht zu
+      Nebel verschwimmt. Hyperkanten-Hüllen bekommen einen weichen
+      Außenrand aus mehreren nachgezogenen Konturen. Reine
+      Verlaufs-/Alpha-Berechnung (`glow_ring`) ohne `egui`-Abhängigkeit
+      testbar.
 - [x] Maus-Drag dreht frei (Yaw/Pitch), nach `idle_resume_secs` ohne
       Interaktion übernimmt wieder die automatische horizontale Rotation;
       Scroll zoomt
