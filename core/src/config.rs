@@ -49,6 +49,8 @@ pub struct Config {
     /// Anomalie-Masken für wiederkehrende, ungefährliche Wartungsmeldungen
     /// (siehe [`crate::quiet`]).
     pub quiet: QuietConfig,
+    /// Darstellung des `graphify`-Wissensgraphen im eigenen GUI-Tab (Phase 11, optional).
+    pub knowledge_graph: KnowledgeGraphConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -465,6 +467,57 @@ impl Default for QuietConfig {
     }
 }
 
+/// Einstellungen für den Wissensgraph-Tab der GUI (Phase 11, optional):
+/// zeigt die von `graphify` erzeugte `graph.json` als langsam rotierende
+/// 3D-Darstellung, statt dass dafür `graph.html` im Browser geöffnet werden
+/// muss.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct KnowledgeGraphConfig {
+    /// Schaltet den Tab in der GUI ein/aus. Default `true`, da eine fehlende
+    /// `graph.json` (siehe `graph_json_path`) im Tab selbst nur einen
+    /// Hinweis statt eines Fehlers erzeugt (Regel 16: kein Absturz bei
+    /// fehlender optionaler Datenquelle).
+    pub enabled: bool,
+    /// Pfad zur von `graphify` erzeugten `graph.json`. `~` am Anfang wird
+    /// beim Laden durch `$HOME` ersetzt (wie bei `export_anomalies` in
+    /// `gui/src/app.rs`), da dies -- anders als `socket.path` -- ein
+    /// Pfad im Home-Verzeichnis des jeweiligen Benutzers ist.
+    pub graph_json_path: String,
+    /// Abstand zwischen zwei Prüfungen der `mtime` von `graph_json_path` in
+    /// Sekunden, um ein `graphify --update` im Hintergrund zu erkennen und
+    /// den Graphen neu zu laden.
+    pub poll_interval_secs: u64,
+    /// Geschwindigkeit der automatischen horizontalen Rotation in Grad pro
+    /// Sekunde, solange nicht per Maus gedreht wird ("langsam" laut
+    /// Auftrag -- Default entspricht einer vollen Umdrehung in 90 s).
+    pub rotation_degrees_per_sec: f32,
+    /// Wie viele Sekunden nach der letzten Drag-Interaktion vergehen,
+    /// bevor die automatische Rotation wieder einsetzt.
+    pub idle_resume_secs: f32,
+    /// Umrechnung von Maus-Drag-Pixeln in Grad Rotation.
+    pub drag_sensitivity_deg_per_px: f32,
+    /// Anzahl Iterationen des 3D-Force-Layouts beim (Neu-)Laden eines
+    /// Graphen. `graph.json` selbst enthält keine Positionen (siehe
+    /// `layout`-Modul) -- mehr Iterationen ergeben ein stabileres Layout,
+    /// kosten aber Zeit beim Laden.
+    pub layout_iterations: usize,
+}
+
+impl Default for KnowledgeGraphConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            graph_json_path: "~/.claude/activity-log/graphify-out/graph.json".to_string(),
+            poll_interval_secs: 2,
+            rotation_degrees_per_sec: 4.0,
+            idle_resume_secs: 2.5,
+            drag_sensitivity_deg_per_px: 0.3,
+            layout_iterations: 300,
+        }
+    }
+}
+
 impl Config {
     /// Lädt die Konfiguration aus einer TOML-Datei am gegebenen Pfad.
     ///
@@ -610,5 +663,34 @@ mod tests {
     fn fehlende_datei_liefert_fehler_statt_panic() {
         let result = Config::load_from_file("/pfad/der/nicht/existiert.toml");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn default_knowledge_graph_config_hat_erwartete_werte() {
+        let config = Config::default();
+        assert!(config.knowledge_graph.enabled);
+        assert_eq!(
+            config.knowledge_graph.graph_json_path,
+            "~/.claude/activity-log/graphify-out/graph.json"
+        );
+        assert_eq!(config.knowledge_graph.poll_interval_secs, 2);
+        assert_eq!(config.knowledge_graph.rotation_degrees_per_sec, 4.0);
+        assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
+        assert_eq!(config.knowledge_graph.layout_iterations, 300);
+    }
+
+    #[test]
+    fn knowledge_graph_config_teiluerberschreibung_laesst_restliche_defaults_stehen() {
+        let raw = r#"
+            [knowledge_graph]
+            enabled = false
+            rotation_degrees_per_sec = 10.0
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert!(!config.knowledge_graph.enabled);
+        assert_eq!(config.knowledge_graph.rotation_degrees_per_sec, 10.0);
+        // Nicht gesetzte Felder bleiben beim Default.
+        assert_eq!(config.knowledge_graph.poll_interval_secs, 2);
+        assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
     }
 }
