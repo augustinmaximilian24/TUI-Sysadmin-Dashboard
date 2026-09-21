@@ -16,7 +16,9 @@ pub mod quiet;
 pub mod system;
 pub mod template;
 
-pub use analysis::{AnalysisEngine, AnalysisInput, Anomaly, AnomalyLevel, ScoreBreakdown};
+pub use analysis::{
+    explain_breakdown, AnalysisEngine, AnalysisInput, Anomaly, AnomalyLevel, ScoreBreakdown,
+};
 pub use channel::{ring_channel, RingReceiver, RingSender};
 pub use config::Config;
 pub use journal::{JournalEvent, JournalParseError};

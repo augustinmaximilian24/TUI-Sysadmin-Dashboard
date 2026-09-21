@@ -94,6 +94,69 @@ pub struct ScoreBreakdown {
     pub rate_source: RateSource,
 }
 
+/// Für Menschen verständliche Kurzerklärung, welches Signal eine Meldung
+/// ausgelöst hat -- ohne dass dafür extra ein LLM gefragt werden muss. Das
+/// dominante der drei normierten Komponenten bestimmt den Text; bei der
+/// Entropie unterscheidet das Vorzeichen von `entropy_z` zwischen Log-Sturm
+/// (Einbruch) und Wildwuchs (Anstieg), siehe Modul-Dokumentation oben.
+///
+/// Freie Funktion statt Methode, damit sowohl [`ScoreBreakdown::explain`]
+/// als auch die per-Protokoll übertragene (aber strukturell identische)
+/// `proto::ScoreBreakdown` in der GUI dieselbe Logik nutzen können, ohne
+/// dass die Protokoll-Crate von `logsentry-core` abhängen müsste.
+pub fn explain_breakdown(
+    rate_z: f64,
+    surprisal_bits: f64,
+    entropy_z: f64,
+    rate_component: f64,
+    surprisal_component: f64,
+    entropy_component: f64,
+) -> String {
+    let dominant = [
+        ("rate", rate_component),
+        ("surprisal", surprisal_component),
+        ("entropy", entropy_component),
+    ]
+    .into_iter()
+    .max_by(|a, b| a.1.total_cmp(&b.1))
+    .map(|(kind, _)| kind)
+    .unwrap_or("rate");
+
+    match dominant {
+        "surprisal" => format!(
+            "Diese Art von Meldung ist neu oder extrem selten (Überraschungswert {surprisal_bits:.1} Bit) – \
+             so eine Zeile wurde bisher kaum oder gar nicht beobachtet."
+        ),
+        "entropy" if entropy_z < 0.0 => format!(
+            "Log-Sturm: eine einzelne Quelle dominiert das Zeitfenster deutlich stärker als \
+             sonst (Entropie-Z {entropy_z:.1}) – meist ein sich wiederholender Fehler oder eine \
+             Endlosschleife."
+        ),
+        "entropy" => format!(
+            "Ungewöhnlich viele verschiedene Arten von Meldungen gleichzeitig \
+             (Entropie-Z {entropy_z:.1}) – mehrere Quellen sind zeitgleich auffällig geworden."
+        ),
+        _ => format!(
+            "Dieses Template tritt gerade deutlich häufiger auf als sonst üblich \
+             (Rate-Z {rate_z:.1}) – z. B. ein sich wiederholender Vorgang oder Fehler."
+        ),
+    }
+}
+
+impl ScoreBreakdown {
+    /// Siehe [`explain_breakdown`].
+    pub fn explain(&self) -> String {
+        explain_breakdown(
+            self.rate_z,
+            self.surprisal_bits,
+            self.entropy_z,
+            self.rate_component,
+            self.surprisal_component,
+            self.entropy_component,
+        )
+    }
+}
+
 /// Eine gemeldete Anomalie.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Anomaly {
@@ -969,5 +1032,47 @@ mod tests {
         engine.process(input(0, 1));
         engine.process(input(u64::MAX / 2, 999_999));
         assert!(engine.stats().processed == 4);
+    }
+
+    fn breakdown_with(
+        rate_component: f64,
+        surprisal_component: f64,
+        entropy_component: f64,
+        entropy_z: f64,
+    ) -> ScoreBreakdown {
+        ScoreBreakdown {
+            rate_z: 4.2,
+            surprisal_bits: 9.7,
+            entropy_z,
+            rate_component,
+            surprisal_component,
+            entropy_component,
+            combined: 0.8,
+            rate_source: RateSource::ShortTerm,
+        }
+    }
+
+    #[test]
+    fn explain_nennt_surprisal_bei_neuem_template() {
+        let text = breakdown_with(0.2, 0.9, 0.1, 0.0).explain();
+        assert!(text.contains("neu"), "war: {text}");
+    }
+
+    #[test]
+    fn explain_nennt_log_sturm_bei_entropie_einbruch() {
+        let text = breakdown_with(0.1, 0.2, 0.9, -3.0).explain();
+        assert!(text.contains("Log-Sturm"), "war: {text}");
+    }
+
+    #[test]
+    fn explain_nennt_wildwuchs_bei_entropie_anstieg() {
+        let text = breakdown_with(0.1, 0.2, 0.9, 3.0).explain();
+        assert!(text.contains("verschiedene Arten"), "war: {text}");
+    }
+
+    #[test]
+    fn explain_nennt_rate_als_default() {
+        let text = breakdown_with(0.9, 0.1, 0.1, 0.0).explain();
+        assert!(text.contains("häufiger"), "war: {text}");
     }
 }

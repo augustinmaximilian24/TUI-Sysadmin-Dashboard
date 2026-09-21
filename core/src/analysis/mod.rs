@@ -12,7 +12,8 @@ pub mod stats;
 pub mod window;
 
 pub use engine::{
-    AnalysisEngine, AnalysisInput, AnalysisStats, Anomaly, AnomalyLevel, ScoreBreakdown,
+    explain_breakdown, AnalysisEngine, AnalysisInput, AnalysisStats, Anomaly, AnomalyLevel,
+    ScoreBreakdown,
 };
 pub use rate::RateTracker;
 pub use window::SlidingWindow;

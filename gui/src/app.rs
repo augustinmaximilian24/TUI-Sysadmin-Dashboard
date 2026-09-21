@@ -693,6 +693,22 @@ impl LogsentryApp {
                 });
 
                 ui.add_space(6.0);
+                theme::card(ui, |ui| {
+                    theme::section_heading(ui, "Erklärung");
+                    ui.add_space(4.0);
+                    let b = &anomaly.breakdown;
+                    let text = logsentry_core::explain_breakdown(
+                        b.rate_z,
+                        b.surprisal_bits,
+                        b.entropy_z,
+                        b.rate_component,
+                        b.surprisal_component,
+                        b.entropy_component,
+                    );
+                    ui.label(egui::RichText::new(text).color(theme::TEXT_MUTED));
+                });
+
+                ui.add_space(6.0);
                 let connected = is_connected(self.render.connection.as_ref());
                 if ui
                     .add_enabled(connected, egui::Button::new("Kontext laden"))
