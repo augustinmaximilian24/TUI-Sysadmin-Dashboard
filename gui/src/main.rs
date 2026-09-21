@@ -15,6 +15,7 @@ mod app;
 mod client;
 mod export;
 mod knowledge_graph;
+mod network_map;
 mod theme;
 
 use std::path::PathBuf;
@@ -56,6 +57,7 @@ fn main() -> anyhow::Result<()> {
     let config = load_config(&args);
     let socket_path = resolve_socket_path(&args, &config);
     let knowledge_graph_config = config.knowledge_graph.clone();
+    let network_map_config = config.network_map.clone();
 
     // Eigenständige Runtime statt `#[tokio::main]`: `eframe::run_native`
     // übernimmt den aufrufenden Thread mit seiner eigenen Event-Loop, die
@@ -79,6 +81,7 @@ fn main() -> anyhow::Result<()> {
                 state,
                 outbound,
                 knowledge_graph_config,
+                network_map_config,
                 &cc.egui_ctx,
             )))
         }),

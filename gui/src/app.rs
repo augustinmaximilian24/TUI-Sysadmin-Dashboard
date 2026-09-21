@@ -24,6 +24,7 @@ use crate::client::{
     HistoryPoint,
 };
 use crate::knowledge_graph::KnowledgeGraphTab;
+use crate::network_map::NetworkMapPanel;
 use crate::theme;
 
 /// Welcher Tab gerade im Hauptbereich angezeigt wird (Phase 11: bisher gab
@@ -140,6 +141,9 @@ pub struct LogsentryApp {
     /// `None`, wenn `knowledge_graph.enabled = false` in der Konfiguration
     /// steht -- dann wird der Tab im Header gar nicht erst angeboten.
     knowledge_graph: Option<KnowledgeGraphTab>,
+    /// `None`, wenn `network_map.enabled = false` in der Konfiguration
+    /// steht -- dann bleibt die Karte im Systemzustands-Panel einfach weg.
+    network_map: Option<NetworkMapPanel>,
 }
 
 impl LogsentryApp {
@@ -147,11 +151,15 @@ impl LogsentryApp {
         state: Arc<Mutex<GuiState>>,
         outbound: tokio::sync::mpsc::Sender<ClientMessage>,
         knowledge_graph_config: logsentry_core::config::KnowledgeGraphConfig,
+        network_map_config: logsentry_core::config::NetworkMapConfig,
         ctx: &egui::Context,
     ) -> Self {
         let knowledge_graph = knowledge_graph_config
             .enabled
             .then(|| KnowledgeGraphTab::new(&knowledge_graph_config, ctx));
+        let network_map = network_map_config
+            .enabled
+            .then(|| NetworkMapPanel::new(&network_map_config, ctx));
         Self {
             state,
             outbound,
@@ -170,6 +178,7 @@ impl LogsentryApp {
             render: RenderSnapshot::default(),
             active_tab: ActiveTab::Dashboard,
             knowledge_graph,
+            network_map,
         }
     }
 
@@ -1036,41 +1045,70 @@ impl LogsentryApp {
 
             let selected_before = self.selected_anomaly;
             let filtered = self.filtered_anomalies();
-            theme::section_heading(ui, &format!("Anomalien ({})", filtered.len()));
-            ui.add_space(4.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("anomaly_grid")
-                    .striped(true)
-                    .num_columns(5)
-                    .spacing(egui::vec2(12.0, 6.0))
-                    // Ohne Obergrenze wächst die Template-Spalte mit der
-                    // längsten je gesehenen Log-Zeile mit und schiebt die
-                    // "Details"-Schaltfläche jeder Zeile aus dem sichtbaren
-                    // Panel heraus -- klickbar, aber unsichtbar.
-                    .max_col_width(420.0)
-                    .show(ui, |ui| {
-                        ui.strong("Level");
-                        ui.strong("Unit");
-                        ui.strong("Score");
-                        ui.strong("Template");
-                        ui.strong("");
-                        ui.end_row();
 
-                        for anomaly in filtered {
-                            theme::level_badge(ui, anomaly.level);
-                            ui.label(anomaly.unit.as_deref().unwrap_or("–"));
-                            ui.colored_label(
-                                theme::level_color(anomaly.level),
-                                format!("{:.2}", anomaly.breakdown.combined),
-                            );
-                            ui.add(egui::Label::new(&anomaly.template_text).truncate())
-                                .on_hover_text(&anomaly.template_text);
-                            if ui.button("Details").clicked() {
-                                self.selected_anomaly = Some(anomaly.id);
-                            }
-                            ui.end_row();
-                        }
+            // Vor dem Aufteilen in Spalten gemessen: eine frische
+            // `Ui`-Spalte aus `egui::Ui::columns` berichtet ihre eigene
+            // `available_height()` nicht zuverlässig als die tatsächliche
+            // Resthöhe des Panels (anders als die `ScrollArea` der
+            // Anomalien-Liste, die intern anders rechnet) -- die Karte
+            // fiel dadurch sichtbar kleiner aus als der freie Bereich
+            // neben der Liste.
+            let content_height = ui.available_height();
+
+            // Zwei gleich breite Spalten: links die Anomalien-Liste (wie
+            // zuvor), rechts -- auf Wunsch als "großer Kasten direkt
+            // neben der Anomalie-Liste" statt als schmale Karte im
+            // Systemzustands-Panel -- die Netzwerk-Weltkarte. Beide
+            // erhalten dieselbe verfügbare Höhe wie der bisherige
+            // Vollbreiten-Block.
+            ui.columns(2, |columns| {
+                let list_ui = &mut columns[0];
+                theme::section_heading(list_ui, &format!("Anomalien ({})", filtered.len()));
+                list_ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("anomaly_scroll")
+                    .show(list_ui, |ui| {
+                        egui::Grid::new("anomaly_grid")
+                            .striped(true)
+                            .num_columns(5)
+                            .spacing(egui::vec2(12.0, 6.0))
+                            // Ohne Obergrenze wächst die Template-Spalte mit
+                            // der längsten je gesehenen Log-Zeile mit und
+                            // schiebt die "Details"-Schaltfläche jeder Zeile
+                            // aus dem sichtbaren Panel heraus -- klickbar,
+                            // aber unsichtbar.
+                            .max_col_width(420.0)
+                            .show(ui, |ui| {
+                                ui.strong("Level");
+                                ui.strong("Unit");
+                                ui.strong("Score");
+                                ui.strong("Template");
+                                ui.strong("");
+                                ui.end_row();
+
+                                for anomaly in filtered {
+                                    theme::level_badge(ui, anomaly.level);
+                                    ui.label(anomaly.unit.as_deref().unwrap_or("–"));
+                                    ui.colored_label(
+                                        theme::level_color(anomaly.level),
+                                        format!("{:.2}", anomaly.breakdown.combined),
+                                    );
+                                    ui.add(egui::Label::new(&anomaly.template_text).truncate())
+                                        .on_hover_text(&anomaly.template_text);
+                                    if ui.button("Details").clicked() {
+                                        self.selected_anomaly = Some(anomaly.id);
+                                    }
+                                    ui.end_row();
+                                }
+                            });
                     });
+
+                if let Some(network_map) = &mut self.network_map {
+                    let map_ui = &mut columns[1];
+                    theme::section_heading(map_ui, "Netzwerk-Weltkarte");
+                    map_ui.add_space(4.0);
+                    network_map.show(map_ui, content_height);
+                }
             });
 
             // Auswahl hat sich geändert (neuer Klick oben): vorherige

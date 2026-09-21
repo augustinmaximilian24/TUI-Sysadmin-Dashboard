@@ -51,6 +51,9 @@ pub struct Config {
     pub quiet: QuietConfig,
     /// Darstellung des `graphify`-Wissensgraphen im eigenen GUI-Tab (Phase 11, optional).
     pub knowledge_graph: KnowledgeGraphConfig,
+    /// Weltkarte mit den aktiven ausgehenden Verbindungen im
+    /// Systemzustands-Panel (Phase 12, optional).
+    pub network_map: NetworkMapConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -514,6 +517,56 @@ impl Default for KnowledgeGraphConfig {
             idle_resume_secs: 2.5,
             drag_sensitivity_deg_per_px: 0.3,
             layout_iterations: 300,
+        }
+    }
+}
+
+/// Einstellungen für die Weltkarte im Systemzustands-Panel (Phase 12,
+/// optional): zeigt, in welche Länder gerade aktive ausgehende
+/// TCP-Verbindungen bestehen, per Länder-Zuordnung über die lokal
+/// installierte `geoip-database` (siehe
+/// `gui/src/network_map/geoip.rs`) -- kein Cloud-Dienst, keine externe
+/// Anfrage pro Verbindung.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct NetworkMapConfig {
+    /// Schaltet die Karte ein/aus. Default `true`, da eine fehlende
+    /// `GeoIP.dat` (siehe `geoip_database_path`) im Panel selbst nur
+    /// einen Hinweis statt eines Fehlers erzeugt (Regel 16).
+    pub enabled: bool,
+    /// Pfad zur legacy MaxMind "GeoIP Country Edition"-Datenbank, wie sie
+    /// das Debian/Ubuntu-Paket `geoip-database` installiert.
+    pub geoip_database_path: String,
+    /// Abstand zwischen zwei Scans von `/proc/net/tcp` in Sekunden.
+    pub poll_interval_seconds: u64,
+    /// ISO-3166-1-Alpha-2-Code für den "Zuhause"-Punkt auf der Karte.
+    /// Leer = aus der Locale (`$LC_ALL`/`$LANG`) raten, z. B. `de_DE.UTF-8`
+    /// -> `DE`; schlägt das fehl, wird kein Zuhause-Punkt gezeichnet.
+    pub home_country_override: String,
+    /// Wie schnell Kamera-Mittelpunkt und Zoom pro Sekunde in Richtung des
+    /// aktuellen Verbindungs-Bereichs nachziehen (exponentielle
+    /// Glättung; höher = spürbar schnelleres Heran-/Herauszoomen).
+    pub camera_ease_per_second: f32,
+    /// Kleinster Kartenausschnitt in Grad Breite, selbst wenn alle aktiven
+    /// Verbindungen (und Zuhause) auf einem Punkt liegen -- verhindert,
+    /// dass die Karte auf eine einzelne Verbindung hin auf einen
+    /// bedeutungslosen Bildpunkt hineinzoomt.
+    pub min_zoom_span_degrees: f32,
+    /// Zusätzlicher Rand um den Bereich aller aktiven Punkte, als Anteil
+    /// der Bereichsgröße (0.25 = 25 % Luft auf jeder Seite).
+    pub zoom_padding_fraction: f32,
+}
+
+impl Default for NetworkMapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            geoip_database_path: "/usr/share/GeoIP/GeoIP.dat".to_string(),
+            poll_interval_seconds: 5,
+            home_country_override: String::new(),
+            camera_ease_per_second: 3.0,
+            min_zoom_span_degrees: 40.0,
+            zoom_padding_fraction: 0.25,
         }
     }
 }
