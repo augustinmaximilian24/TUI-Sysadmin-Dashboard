@@ -1043,6 +1043,11 @@ impl LogsentryApp {
                     .striped(true)
                     .num_columns(5)
                     .spacing(egui::vec2(12.0, 6.0))
+                    // Ohne Obergrenze wächst die Template-Spalte mit der
+                    // längsten je gesehenen Log-Zeile mit und schiebt die
+                    // "Details"-Schaltfläche jeder Zeile aus dem sichtbaren
+                    // Panel heraus -- klickbar, aber unsichtbar.
+                    .max_col_width(420.0)
                     .show(ui, |ui| {
                         ui.strong("Level");
                         ui.strong("Unit");
@@ -1058,7 +1063,8 @@ impl LogsentryApp {
                                 theme::level_color(anomaly.level),
                                 format!("{:.2}", anomaly.breakdown.combined),
                             );
-                            ui.label(&anomaly.template_text);
+                            ui.add(egui::Label::new(&anomaly.template_text).truncate())
+                                .on_hover_text(&anomaly.template_text);
                             if ui.button("Details").clicked() {
                                 self.selected_anomaly = Some(anomaly.id);
                             }
