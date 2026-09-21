@@ -230,6 +230,45 @@ dem Benutzerkonto. Diese Trennung ist verpflichtend.
 - [ ] Tages-Export als JSON/CSV zur Weiterverarbeitung
 - [ ] „Erkläre diese Anomalie": ausgewählte Zeilen + Kontext auf Knopfdruck an ein LLM, Ergebnis im Detail-Panel
 
+**Phase 11 – Wissensgraph-Tab (optional, außerhalb des ursprünglichen v1.0-Scopes)**
+
+Zeigt den von einem separaten Tool (`graphify`) erzeugten persönlichen
+Wissensgraphen (`~/.claude/activity-log/graphify-out/graph.json`) direkt
+als Tab in der GUI, statt dass dafür `graph.html` im Browser geöffnet
+werden muss. `graph.json` selbst ist kein logsentry-Datenmodell -- dieser
+Tab ist ein reiner Konsument einer externen, optionalen Datei.
+
+- [x] `KnowledgeGraphConfig` (`core/src/config.rs`): Pfad, Poll-Intervall,
+      Rotationsgeschwindigkeit, Idle-Timeout, Drag-Sensitivität, Layout-
+      Iterationen -- alles konfigurierbar statt Magic Numbers (Regel 22)
+- [x] Parser für `graph.json` (`gui/src/knowledge_graph/data.rs`)
+- [x] Deterministisches 3D-Force-Layout, da `graph.json` keine Positionen
+      enthält (`gui/src/knowledge_graph/layout.rs`)
+- [x] Reine Rotations-/Projektionsmathematik, ohne `egui`-Abhängigkeit
+      testbar (`gui/src/knowledge_graph/camera.rs`)
+- [x] Hintergrund-Thread pollt `graph_json_path` per `mtime` und lädt bei
+      Änderung (z. B. durch `graphify --update`) automatisch neu (Regel 21)
+- [x] Rendering per `egui::Painter`: Community-Farben, gradbasierte
+      Knotengröße, Hyperkanten als konvexe Hülle mit Label (wie in
+      graphify's `graph.html`)
+- [x] Maus-Drag dreht frei (Yaw/Pitch), nach `idle_resume_secs` ohne
+      Interaktion übernimmt wieder die automatische horizontale Rotation;
+      Scroll zoomt
+- [x] Klick auf einen Knoten zeigt Label, Community, Typ, Quelle,
+      Rationale und Verbindungen (Relation + Gegenknoten) in einem
+      Overlay
+- [x] Tab-Umschalter im Header (Dashboard/Wissensgraph), Tab nur
+      sichtbar wenn `knowledge_graph.enabled = true`
+- [x] Visuell verifiziert: Tab rendert Knoten/Kanten/Hyperkanten korrekt
+      und die automatische Rotation läuft sichtbar (Screenshot-Vergleich
+      über zwei Zeitpunkte). Interaktive Maus-Drag-/Klick-Verifikation
+      war in der Entwicklungsumgebung nicht möglich (`xdotool`-Synthetic-
+      Events erreichten das winit-Fenster nicht) -- die Interaktionslogik
+      selbst folgt denselben `egui::Sense`/`Response`-Mustern wie die
+      bereits funktionierenden Buttons in `app.rs` und ist über
+      `camera::apply_drag`/`project_point` auf Ebene der reinen
+      Mathematik unit-getestet.
+
 ## 7. Definition of Done (v1.0)
 
 - Daemon läuft 72 h ohne Absturz und ohne Speicherwachstum
