@@ -104,13 +104,58 @@ fn airport_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
     })
 }
 
-/// Versucht, `ip` über Reverse-DNS + Flughafencode-Tabelle genauer zu
-/// verorten als der Länder-Mittelpunkt. `None`, wenn Reverse-DNS
-/// fehlschlägt oder der Hostname keinem bekannten Muster entspricht --
-/// der Aufrufer fällt dann auf den Länder-Mittelpunkt zurück.
+/// Standortkürzel im Backbone-Namensschema der Deutschen Telekom
+/// (`<router>.<KÜRZEL>.DE.NET.DTAG.DE`, z. B. `f-eh1-i.F.DE.NET.DTAG.DE`).
+/// Die Kürzel sind die üblichen deutschen Städtekennzeichen -- erst durch
+/// sie unterscheidet die Routenanzeige überhaupt zwischen zwei deutschen
+/// Zwischenstationen, statt beide auf denselben Länder-Mittelpunkt zu
+/// legen. Wie bei [`AIRPORT_HINTS`] nur Städte, deren Lage eindeutiges
+/// Allgemeinwissen ist.
+const DTAG_CITY_HINTS: &[(&str, f32, f32, &str)] = &[
+    ("f", 50.11, 8.68, "Frankfurt"),
+    ("m", 48.14, 11.58, "München"),
+    ("b", 52.52, 13.40, "Berlin"),
+    ("d", 51.23, 6.78, "Düsseldorf"),
+    ("hh", 53.55, 9.99, "Hamburg"),
+    ("k", 50.94, 6.96, "Köln"),
+    ("s", 48.78, 9.18, "Stuttgart"),
+    ("h", 52.37, 9.73, "Hannover"),
+    ("n", 49.45, 11.08, "Nürnberg"),
+    ("l", 51.34, 12.37, "Leipzig"),
+    ("bn", 50.74, 7.10, "Bonn"),
+    ("ma", 49.49, 8.47, "Mannheim"),
+    ("do", 51.51, 7.47, "Dortmund"),
+    ("e", 51.46, 7.01, "Essen"),
+    ("br", 53.08, 8.80, "Bremen"),
+];
+
+/// Erkennt das Telekom-Backbone-Schema: endet der Hostname auf
+/// `.DE.NET.DTAG.DE`, steht direkt davor das Standortkürzel. Bewusst über
+/// die festen Endlabels geprüft statt per Teilstring-Suche -- ein bloßes
+/// `"f"` irgendwo im Namen wäre sonst ein Dauer-Fehltreffer.
+fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
+    let labels: Vec<String> = hostname.split('.').map(|l| l.to_ascii_lowercase()).collect();
+    let suffix_start = labels.len().checked_sub(4)?;
+    if labels[suffix_start..] != ["de", "net", "dtag", "de"] {
+        return None;
+    }
+    let code = labels.get(suffix_start.checked_sub(1)?)?;
+    DTAG_CITY_HINTS
+        .iter()
+        .find(|(c, ..)| c == code)
+        .map(|&(_, lat, lon, city)| (lat, lon, city))
+}
+
+/// Versucht, `ip` über Reverse-DNS genauer zu verorten als der
+/// Länder-Mittelpunkt: erst das Telekom-Backbone-Schema (trifft auf die
+/// ersten Zwischenstationen jeder Route dieses Anschlusses zu), sonst die
+/// Flughafencode-Tabelle (trifft auf die Rechenzentren am Ende zu).
+/// `None`, wenn Reverse-DNS fehlschlägt oder der Hostname keinem bekannten
+/// Muster entspricht -- der Aufrufer fällt dann auf den Länder-Mittelpunkt
+/// zurück.
 pub fn resolve_precise(ip: Ipv4Addr) -> Option<(f32, f32, String)> {
     let hostname = reverse_dns(ip)?;
-    let (lat, lon, city) = airport_hint(&hostname)?;
+    let (lat, lon, city) = dtag_city_hint(&hostname).or_else(|| airport_hint(&hostname))?;
     Some((lat, lon, city.to_string()))
 }
 
@@ -148,5 +193,26 @@ mod tests {
     fn leerer_oder_unbekannter_hostname_liefert_none() {
         assert_eq!(airport_hint(""), None);
         assert_eq!(airport_hint("random-host.example.org"), None);
+    }
+
+    #[test]
+    fn erkennt_telekom_backbone_standorte() {
+        // Beide Hostnamen stammen aus echten Messläufen dieses Anschlusses.
+        assert_eq!(
+            dtag_city_hint("f-eh1-i.F.DE.NET.DTAG.DE").map(|(_, _, city)| city),
+            Some("Frankfurt")
+        );
+        assert_eq!(
+            dtag_city_hint("m-ef1-i.M.DE.NET.DTAG.DE").map(|(_, _, city)| city),
+            Some("München")
+        );
+    }
+
+    #[test]
+    fn dtag_muster_greift_nur_bei_passendem_suffix() {
+        assert_eq!(dtag_city_hint("f-eh1-i.F.DE.NET.EXAMPLE.DE"), None);
+        assert_eq!(dtag_city_hint("p3e9bf27a.dip0.t-ipconnect.de"), None);
+        assert_eq!(dtag_city_hint("DE.NET.DTAG.DE"), None, "kein Kürzel davor");
+        assert_eq!(dtag_city_hint("x-1.ZZ.DE.NET.DTAG.DE"), None, "unbekanntes Kürzel");
     }
 }

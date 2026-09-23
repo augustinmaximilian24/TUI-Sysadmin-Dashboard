@@ -543,18 +543,46 @@ pub struct NetworkMapConfig {
     /// Leer = aus der Locale (`$LC_ALL`/`$LANG`) raten, z. B. `de_DE.UTF-8`
     /// -> `DE`; schlägt das fehl, wird kein Zuhause-Punkt gezeichnet.
     pub home_country_override: String,
-    /// Wie schnell Kamera-Mittelpunkt und Zoom pro Sekunde in Richtung des
-    /// aktuellen Verbindungs-Bereichs nachziehen (exponentielle
-    /// Glättung; höher = spürbar schnelleres Heran-/Herauszoomen).
+    /// Genaue Koordinaten des eigenen Standorts. Sind beide gesetzt, steht
+    /// der Zuhause-Punkt exakt dort, statt auf dem Mittelpunkt des Landes
+    /// aus [`home_country_override`] zu liegen -- der kann je nach Land
+    /// hunderte Kilometer danebenliegen.
+    ///
+    /// Bewusst eine Angabe des Betreibers und keine automatische
+    /// Ermittlung: die eigene Position ließe sich nur über einen externen
+    /// Dienst genau bestimmen, und die Karte kommt ohne Cloud-Abfrage aus.
+    ///
+    /// [`home_country_override`]: NetworkMapConfig::home_country_override
+    pub home_latitude: Option<f32>,
+    pub home_longitude: Option<f32>,
+    /// Wie schnell die Kamera nach einer Leerlaufzeit ([`idle_resume_secs`])
+    /// pro Sekunde zur "Zuhause"-Ursprungsansicht zurückdreht (exponentielle
+    /// Glättung; höher = spürbar schnelleres Zurückschwenken).
+    ///
+    /// [`idle_resume_secs`]: NetworkMapConfig::idle_resume_secs
     pub camera_ease_per_second: f32,
-    /// Kleinster Kartenausschnitt in Grad Breite, selbst wenn alle aktiven
-    /// Verbindungen (und Zuhause) auf einem Punkt liegen -- verhindert,
-    /// dass die Karte auf eine einzelne Verbindung hin auf einen
-    /// bedeutungslosen Bildpunkt hineinzoomt.
-    pub min_zoom_span_degrees: f32,
-    /// Zusätzlicher Rand um den Bereich aller aktiven Punkte, als Anteil
-    /// der Bereichsgröße (0.25 = 25 % Luft auf jeder Seite).
-    pub zoom_padding_fraction: f32,
+    /// Wie viele Sekunden nach der letzten Drag-Interaktion vergehen, bevor
+    /// die Kugel wieder zur Ursprungsansicht zurückdreht.
+    pub idle_resume_secs: f32,
+    /// Umrechnung von Maus-Drag-Pixeln in Grad Rotation (dieselbe Bedeutung
+    /// wie bei [`KnowledgeGraphConfig::drag_sensitivity_deg_per_px`]).
+    pub drag_sensitivity_deg_per_px: f32,
+    /// Umrechnung von Scroll-Delta in Zoomstufen (Faktor auf den
+    /// Kugelradius, siehe `network_map::globe::GlobeCamera::apply_zoom`).
+    pub zoom_sensitivity: f32,
+    /// Ob der tatsächliche Weg zu jeder Gegenstelle gemessen wird (`mtr`
+    /// als Subprozess, siehe `gui/src/network_map/traceroute.rs`), um die
+    /// Zwischenstationen statt nur einer direkten Linie zu zeichnen.
+    ///
+    /// Anders als der Rest der Karte ist das **nicht** rein passiv: es
+    /// sendet Messpakete an jede neue Gegenstelle. Deshalb ein eigener
+    /// Schalter -- wer nur passiv beobachten will, lässt ihn auf `false`.
+    pub traceroute_enabled: bool,
+    /// Obergrenze der gemessenen Zwischenstationen (`mtr --max-ttl`).
+    pub traceroute_max_hops: u8,
+    /// Harter Zeitdeckel je Messlauf in Sekunden. Nicht antwortende Hops
+    /// kosten sonst je Hop die volle Wartezeit.
+    pub traceroute_timeout_seconds: u64,
 }
 
 impl Default for NetworkMapConfig {
@@ -564,9 +592,15 @@ impl Default for NetworkMapConfig {
             geoip_database_path: "/usr/share/GeoIP/GeoIP.dat".to_string(),
             poll_interval_seconds: 5,
             home_country_override: String::new(),
+            home_latitude: None,
+            home_longitude: None,
             camera_ease_per_second: 3.0,
-            min_zoom_span_degrees: 40.0,
-            zoom_padding_fraction: 0.25,
+            idle_resume_secs: 4.0,
+            drag_sensitivity_deg_per_px: 0.3,
+            zoom_sensitivity: 0.01,
+            traceroute_enabled: true,
+            traceroute_max_hops: 20,
+            traceroute_timeout_seconds: 20,
         }
     }
 }

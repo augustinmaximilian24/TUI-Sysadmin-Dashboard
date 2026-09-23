@@ -10,7 +10,9 @@
 //! IPv6-Verbindung taucht hier also nicht auf, statt mit einer Adresse
 //! ohne Länder-Zuordnung in der Liste zu landen.
 
+use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::path::Path;
 
 const PROC_NET_TCP: &str = "/proc/net/tcp";
 
@@ -67,10 +69,104 @@ fn parse_hex_ipv4(hex: &str) -> Option<Ipv4Addr> {
     Some(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]))
 }
 
+/// Ordnet jeder aktuell verbundenen öffentlichen Gegenstelle das Programm
+/// zu, das die Verbindung hält -- damit die Karte nicht nur zeigt, *wohin*
+/// verbunden ist, sondern auch *womit* ("Steam -> Server in den USA").
+///
+/// Verfahren ohne Root-Rechte (Regel 7): `/proc/net/tcp` liefert die
+/// Socket-`inode` je Verbindung, `/proc/<pid>/fd/*` sind symbolische Links
+/// der Form `socket:[<inode>]` -- läuft dasselbe Verfahren wie `lsof`/`ss
+/// -p` intern nutzt. Nur `/proc/<pid>`-Verzeichnisse eigener Prozesse sind
+/// für einen unprivilegierten Benutzer überhaupt lesbar; fremde (root-
+/// oder andere Nutzer-Prozesse) liefern beim `read_dir` einen
+/// Berechtigungsfehler, der hier einfach übersprungen wird (Regel 16:
+/// kein Absturz, die Verbindung bleibt dann ohne Programmnamen).
+pub fn resolve_program_names() -> HashMap<Ipv4Addr, String> {
+    let mut result = HashMap::new();
+    let Ok(contents) = std::fs::read_to_string(PROC_NET_TCP) else {
+        return result;
+    };
+    let inode_to_ip = parse_established_inodes(&contents);
+    if inode_to_ip.is_empty() {
+        return result;
+    }
+
+    let Ok(proc_entries) = std::fs::read_dir("/proc") else {
+        return result;
+    };
+    for entry in proc_entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue; // kein PID-Verzeichnis (z. B. "self", "net", "cpuinfo")
+        };
+        let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+            continue; // fremder Prozess oder bereits beendet -- kein Fehler
+        };
+        for fd in fds.flatten() {
+            let Ok(link) = std::fs::read_link(fd.path()) else { continue };
+            let Some(inode) = parse_socket_inode(&link) else { continue };
+            let Some(&ip) = inode_to_ip.get(&inode) else { continue };
+            if let Some(name) = read_process_name(pid) {
+                result.insert(ip, name);
+            }
+        }
+    }
+    result
+}
+
+/// Wie [`parse_established_remote_ipv4`], liefert aber zusätzlich die
+/// Socket-`inode` je Verbindung (letztes Feld in `/proc/net/tcp`) statt
+/// nur die Adresse -- Grundlage für [`resolve_program_names`].
+fn parse_established_inodes(contents: &str) -> HashMap<u64, Ipv4Addr> {
+    contents
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let _sl = fields.next()?;
+            let _local = fields.next()?;
+            let rem_address = fields.next()?;
+            let state = fields.next()?;
+            if state != TCP_ESTABLISHED {
+                return None;
+            }
+            let (hex_ip, _hex_port) = rem_address.split_once(':')?;
+            let ip = parse_hex_ipv4(hex_ip)?;
+            if !is_routable_public(ip) {
+                return None;
+            }
+            let _tx_rx_queue = fields.next()?;
+            let _tr_tm_when = fields.next()?;
+            let _retrnsmt = fields.next()?;
+            let _uid = fields.next()?;
+            let _timeout = fields.next()?;
+            let inode: u64 = fields.next()?.parse().ok()?;
+            Some((inode, ip))
+        })
+        .collect()
+}
+
+/// Extrahiert die Inode-Nummer aus einem `/proc/<pid>/fd/<n>`-Symlink-Ziel
+/// der Form `socket:[12345]`. Alles andere (reguläre Datei, Pipe, `anon_inode`)
+/// liefert `None`.
+fn parse_socket_inode(link: &Path) -> Option<u64> {
+    link.to_str()?.strip_prefix("socket:[")?.strip_suffix(']')?.parse().ok()
+}
+
+/// Prozessname aus `/proc/<pid>/comm` -- vom Kernel selbst auf 15 Zeichen
+/// gekürzt (`TASK_COMM_LEN`), reicht aber für die Anzeige ("steam",
+/// "discord", "firefox").
+fn read_process_name(pid: u32) -> Option<String> {
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    let name = comm.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 /// Nur Adressen, für die ein Länder-Lookup und ein Kartenpunkt überhaupt
 /// Sinn ergeben -- lokaler/privater Verkehr (LAN, Loopback, Link-Local,
-/// Multicast) hat keine sinnvolle Position auf einer Weltkarte.
-fn is_routable_public(ip: Ipv4Addr) -> bool {
+/// Multicast) hat keine sinnvolle Position auf einer Weltkarte. Auch von
+/// [`super::traceroute`] genutzt, um den eigenen Router als ersten Hop
+/// auszusortieren.
+pub(super) fn is_routable_public(ip: Ipv4Addr) -> bool {
     !(ip.is_private()
         || ip.is_loopback()
         || ip.is_link_local()
@@ -124,4 +220,19 @@ mod tests {
         assert!(!is_routable_public(Ipv4Addr::new(10, 0, 0, 5)));
         assert!(is_routable_public(Ipv4Addr::new(8, 8, 8, 8)));
     }
+
+    #[test]
+    fn parse_established_inodes_liest_nur_oeffentliche_etablierte_zeilen() {
+        let result = parse_established_inodes(FIXTURE);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get(&55555), Some(&Ipv4Addr::new(8, 8, 4, 4)));
+    }
+
+    #[test]
+    fn parse_socket_inode_erkennt_socket_symlink_ziel() {
+        assert_eq!(parse_socket_inode(Path::new("socket:[55555]")), Some(55555));
+        assert_eq!(parse_socket_inode(Path::new("/dev/pts/3")), None);
+        assert_eq!(parse_socket_inode(Path::new("pipe:[123]")), None);
+    }
+
 }
