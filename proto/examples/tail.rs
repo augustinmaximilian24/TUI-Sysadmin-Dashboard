@@ -12,7 +12,7 @@
 
 use std::path::PathBuf;
 
-use logsentry_proto::{spawn, ClientConfig, ConnectionState, Subscription};
+use logsentry_proto::{spawn, ClientConfig, ConnectionState, Endpoint, Subscription};
 
 #[tokio::main]
 async fn main() {
@@ -24,7 +24,7 @@ async fn main() {
     eprintln!("verbinde zu {}", socket_path.display());
 
     let (_outbound, mut inbound, mut connection_state) = spawn(ClientConfig {
-        socket_path,
+        endpoint: Endpoint::Unix(socket_path),
         client_name: "logsentry-tail".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         subscription: Subscription::default(),

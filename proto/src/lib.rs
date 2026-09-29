@@ -12,7 +12,9 @@ mod framing;
 mod wire;
 
 #[cfg(feature = "client")]
-pub use client::{spawn, ClientConfig, ClientError, ConnectionState};
+pub use client::{
+    backoff_delay, spawn, ClientConfig, ClientError, ConnectionState, Endpoint, InboundReceiver,
+};
 pub use error::{FrameError, ProtoError};
 pub use framing::{read_frame, write_frame, FrameReader};
 pub use wire::*;

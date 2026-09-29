@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use logsentry_proto::{
     spawn, ActionKind, ActionOutcome, AnomalyEvent, ClientConfig, ConnectionState, ContextReply,
-    ErrorCode, GoodbyeReason, ServerMessage, Snapshot, Subscription,
+    Endpoint, ErrorCode, GoodbyeReason, ServerMessage, Snapshot, Subscription,
 };
 
 /// Obergrenze der im Speicher gehaltenen Anomalien (Regel 18). Die
@@ -27,9 +27,17 @@ use logsentry_proto::{
 /// nachfolgend gestreamten `Anomaly`-Ereignissen.
 const ANOMALY_CAP: usize = 1000;
 
-/// Obergrenze der Verlaufspunkte für den Live-Graph (bei 1 Hz Snapshot-Rate
+/// Obergrenze der Verlaufspunkte für den Live-Graph (bei `SNAPSHOT_INTERVAL_MS`
 /// entspricht das gut 30 Minuten).
-const HISTORY_CAP: usize = 1800;
+const HISTORY_CAP: usize = 7200;
+
+/// Snapshot-Rate, die die GUI beim Daemon abonniert. Der Daemon erlaubt bis
+/// zu `min_snapshot_interval_ms` (Default 250 ms, siehe
+/// `core::config::SocketConfig`); 1000 ms lag darunter und ließ die
+/// Entropielinie sichtbar in Sprüngen statt flüssig wandern. 250 ms trifft
+/// die von Regel 20 vorgegebene Zielrate von 4-10 Aktualisierungen/Sekunde
+/// exakt am unteren Ende.
+const SNAPSHOT_INTERVAL_MS: u32 = 250;
 
 /// Obergrenze für angezeigte Protokoll-/Verbindungsfehler.
 const LOG_CAP: usize = 100;
@@ -128,10 +136,13 @@ pub fn spawn_bridge(
 ) {
     let state = Arc::new(Mutex::new(GuiState::default()));
     let (outbound, mut inbound, mut connection_state) = spawn(ClientConfig {
-        socket_path,
+        endpoint: Endpoint::Unix(socket_path),
         client_name: "logsentry-gui".to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
-        subscription: Subscription::default(),
+        subscription: Subscription {
+            snapshot_interval_ms: SNAPSHOT_INTERVAL_MS,
+            ..Subscription::default()
+        },
     });
 
     let bridge_state = Arc::clone(&state);

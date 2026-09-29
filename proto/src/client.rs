@@ -7,12 +7,13 @@
 //! Abschnitt 6 (dieses Modul).
 
 use std::io;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use tokio::io::BufReader;
-use tokio::net::UnixStream;
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::{mpsc, watch};
 
 use crate::framing::{read_frame, write_frame};
@@ -21,10 +22,28 @@ use crate::wire::{
     PROTOCOL_VERSION,
 };
 
+/// Wie sich der Client mit dem Daemon verbindet. Deckt bewusst nur die zwei
+/// tatsächlich gebrauchten Fälle ab (YAGNI) -- ein dritter Transport kommt
+/// hinzu, wenn er gebraucht wird, nicht vorher.
+#[derive(Debug, Clone)]
+pub enum Endpoint {
+    Unix(PathBuf),
+    /// TCP-Verbindung, typischerweise das lokale Ende eines SSH-Tunnels
+    /// (Fleet-Tab, Phase 13), aber transportseitig gleichgültig, woher die
+    /// Verbindung tatsächlich führt.
+    Tcp(SocketAddr),
+}
+
+/// Vereinheitlicht `UnixStream` und `TcpStream` auf einen einzigen Typ, damit
+/// Handshake und Session-Loop unabhängig vom tatsächlichen Transport
+/// geschrieben werden können.
+trait AsyncStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncStream for T {}
+
 /// Startparameter für [`spawn`].
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    pub socket_path: PathBuf,
+    pub endpoint: Endpoint,
     pub client_name: String,
     pub client_version: String,
     pub subscription: Subscription,
@@ -101,7 +120,10 @@ const INBOUND_CAPACITY: usize = 128;
 /// Größe der Sender-Queue Richtung Daemon.
 const OUTBOUND_CAPACITY: usize = 32;
 
-fn backoff_delay(attempt: u32) -> Duration {
+/// Öffentlich, damit andere Verbindungs-Supervisoren mit demselben
+/// Reconnect-Verhalten (z. B. der SSH-Tunnel-Supervisor des Fleet-Tabs,
+/// Phase 13) dieselbe Kurve wiederverwenden statt sie zu duplizieren.
+pub fn backoff_delay(attempt: u32) -> Duration {
     let exp = attempt.min(6); // 500ms * 2^6 = 32s, danach ohnehin gekappt
     let raw = BACKOFF_BASE.saturating_mul(1u32 << exp);
     let capped = raw.min(BACKOFF_CAP);
@@ -210,13 +232,22 @@ async fn connection_loop(
     }
 }
 
-async fn connect_and_handshake(cfg: &ClientConfig) -> Result<(u64, UnixStream), ClientError> {
-    let stream = UnixStream::connect(&cfg.socket_path)
-        .await
-        .map_err(|e| ClientError::from_connect_io(&e))?;
-
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
+async fn connect_and_handshake(
+    cfg: &ClientConfig,
+) -> Result<(u64, Box<dyn AsyncStream>), ClientError> {
+    let stream: Box<dyn AsyncStream> = match &cfg.endpoint {
+        Endpoint::Unix(path) => Box::new(
+            UnixStream::connect(path)
+                .await
+                .map_err(|e| ClientError::from_connect_io(&e))?,
+        ),
+        Endpoint::Tcp(addr) => Box::new(
+            TcpStream::connect(addr)
+                .await
+                .map_err(|e| ClientError::from_connect_io(&e))?,
+        ),
+    };
+    let mut reader = BufReader::new(stream);
 
     let hello = ClientMessage::Hello {
         protocol_version: PROTOCOL_VERSION,
@@ -229,7 +260,7 @@ async fn connect_and_handshake(cfg: &ClientConfig) -> Result<(u64, UnixStream), 
     // künftig hinzugefügten Feldtyp soll den Verbindungsversuch mit einer
     // regulären Fehlermeldung beenden, nicht den Client-Task paniken lassen.
     let line = serde_json::to_string(&hello).map_err(|e| ClientError::Other(e.to_string()))?;
-    write_frame(&mut write_half, &line)
+    write_frame(&mut reader, &line)
         .await
         .map_err(|e| ClientError::Other(e.to_string()))?;
 
@@ -252,12 +283,7 @@ async fn connect_and_handshake(cfg: &ClientConfig) -> Result<(u64, UnixStream), 
                     got: protocol_version,
                 });
             }
-            let stream = reader.into_inner().reunite(write_half).map_err(|_| {
-                ClientError::Other(
-                    "interner Fehler: Lese-/Schreibhälfte stammen nicht vom selben Stream".into(),
-                )
-            })?;
-            Ok((session_id, stream))
+            Ok((session_id, reader.into_inner()))
         }
         ServerMessage::Goodbye {
             reason: GoodbyeReason::VersionMismatch { expected, got },
@@ -300,11 +326,14 @@ fn goodbye_to_client_error(reason: GoodbyeReason) -> ClientError {
 /// I/O-Fehler auftritt. Weitergabe an die Anwendung über [`InboundSender`]
 /// (Drop-Verhalten bei Überlauf siehe dort und an [`spawn`]).
 async fn run_session(
-    stream: UnixStream,
+    stream: Box<dyn AsyncStream>,
     outbound_rx: &mut mpsc::Receiver<ClientMessage>,
     inbound_tx: &InboundSender,
 ) -> SessionEnd {
-    let (read_half, mut write_half) = stream.into_split();
+    // `tokio::io::split()` (freie Funktion) statt der Inherent-Methode
+    // `into_split()`: die gibt es nur auf `UnixStream`/`TcpStream` selbst,
+    // nicht auf dem hier ankommenden `Box<dyn AsyncStream>`.
+    let (read_half, mut write_half) = tokio::io::split(stream);
     // FrameReader statt der freien `read_frame`-Funktion: dieser Zweig
     // steht in einem `select!` neben dem ausgehenden Zweig, ein Sieg des
     // anderen Zweigs mitten in einer mehrteiligen Nachricht (z. B.
@@ -488,7 +517,7 @@ mod tests {
 
     fn test_config(path: PathBuf) -> ClientConfig {
         ClientConfig {
-            socket_path: path,
+            endpoint: Endpoint::Unix(path),
             client_name: "logsentry-test".into(),
             client_version: "0.0.0".into(),
             subscription: Subscription::default(),
