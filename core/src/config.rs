@@ -54,6 +54,9 @@ pub struct Config {
     /// Weltkarte mit den aktiven ausgehenden Verbindungen im
     /// Systemzustands-Panel (Phase 12, optional).
     pub network_map: NetworkMapConfig,
+    /// Read-only Übersicht mehrerer logsentry-Daemon-Instanzen im eigenen
+    /// GUI-Tab (Phase 13, optional).
+    pub fleet: FleetConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -605,6 +608,59 @@ impl Default for NetworkMapConfig {
     }
 }
 
+/// Ein einzelner entfernter Host für den Fleet-Tab (Phase 13, optional).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RemoteHost {
+    /// Anzeigename im Tab, z. B. "Heimserver".
+    pub name: String,
+    /// SSH-Ziel, wie an `ssh` übergeben -- `user@host` oder ein Eintrag aus
+    /// `~/.ssh/config`. Kein eigenes Auth-Handling: SSH-Schlüssel/Agent des
+    /// aufrufenden Benutzers gelten wie bei jedem anderen `ssh`-Aufruf.
+    pub ssh_target: String,
+    /// Pfad des Unix-Sockets auf dem entfernten Host.
+    pub remote_socket_path: String,
+    /// Lokaler TCP-Port für den Tunnel. `None` = deterministisch aus dem
+    /// Index in `hosts` abgeleitet (`FLEET_BASE_LOCAL_PORT + index`), da
+    /// `ssh -L` einen mit Port 0 gewählten Port nicht zurückmeldet.
+    pub local_port: Option<u16>,
+}
+
+impl Default for RemoteHost {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            ssh_target: String::new(),
+            remote_socket_path: "/run/logsentry/collector.sock".to_string(),
+            local_port: None,
+        }
+    }
+}
+
+/// Basis-Portnummer für die deterministische Portvergabe der SSH-Tunnel
+/// (`FLEET_BASE_LOCAL_PORT + Index in hosts`), oberhalb des üblichen
+/// dynamischen/privaten Portbereichs vieler Systeme gewählt, um Kollisionen
+/// mit kurzlebigen ausgehenden Verbindungen unwahrscheinlich zu machen.
+pub const FLEET_BASE_LOCAL_PORT: u16 = 17870;
+
+/// Read-only Übersicht mehrerer logsentry-Daemon-Instanzen im eigenen
+/// GUI-Tab (Phase 13, optional, außerhalb des ursprünglichen v1.0-Scopes,
+/// siehe CLAUDE.md "Out of Scope"). Jeder entfernte Host wird über einen
+/// SSH-Tunnel auf seinen eigenen Unix-Socket erreicht (`ssh -L
+/// <lokaler_port>:<remote_socket_path> <ssh_target>`), niemals über rohes
+/// TCP zum Daemon-Port -- das Protokoll hat keine eigene
+/// Authentisierung/Verschlüsselung (Regel 11 wäre sonst verletzt).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FleetConfig {
+    /// Schaltet den Tab ein/aus. Default `false` -- anders als
+    /// Wissensgraph/Weltkarte hat eine leere `hosts`-Liste keinen
+    /// sinnvollen "leerer Tab mit Hinweis"-Zustand, der ohne explizite
+    /// Konfiguration Sinn ergibt.
+    pub enabled: bool,
+    pub hosts: Vec<RemoteHost>,
+}
+
 impl Config {
     /// Lädt die Konfiguration aus einer TOML-Datei am gegebenen Pfad.
     ///
@@ -779,5 +835,43 @@ mod tests {
         // Nicht gesetzte Felder bleiben beim Default.
         assert_eq!(config.knowledge_graph.poll_interval_secs, 2);
         assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
+    }
+
+    #[test]
+    fn default_fleet_config_ist_deaktiviert_und_leer() {
+        let config = Config::default();
+        assert!(!config.fleet.enabled);
+        assert!(config.fleet.hosts.is_empty());
+    }
+
+    #[test]
+    fn fleet_config_mit_hosts_aus_toml() {
+        let raw = r#"
+            [fleet]
+            enabled = true
+
+            [[fleet.hosts]]
+            name = "Heimserver"
+            ssh_target = "max@heimserver.local"
+            remote_socket_path = "/run/logsentry/collector.sock"
+
+            [[fleet.hosts]]
+            name = "Zweiter Test-Daemon"
+            ssh_target = "localhost"
+            remote_socket_path = "/run/user/1000/logsentry-test2/collector.sock"
+            local_port = 18000
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert!(config.fleet.enabled);
+        assert_eq!(config.fleet.hosts.len(), 2);
+
+        let first = &config.fleet.hosts[0];
+        assert_eq!(first.name, "Heimserver");
+        assert_eq!(first.ssh_target, "max@heimserver.local");
+        assert_eq!(first.remote_socket_path, "/run/logsentry/collector.sock");
+        assert_eq!(first.local_port, None);
+
+        let second = &config.fleet.hosts[1];
+        assert_eq!(second.local_port, Some(18000));
     }
 }
