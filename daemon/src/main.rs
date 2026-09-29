@@ -223,7 +223,19 @@ pub(crate) fn now_us() -> u64 {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // `EnvFilter::try_from_default_env()` allein ergibt bei fehlendem
+    // `RUST_LOG` einen leeren Filter, der ausnahmslos alles unterdrückt --
+    // mit aktiviertem "env-filter"-Feature (siehe Cargo.toml) ist das
+    // stille Standardverhalten von `fmt::init()`. Ohne diesen Fallback lief
+    // der Daemon seit der allerersten Inbetriebnahme ohne jede sichtbare
+    // Log-Ausgabe, `RUST_LOG` bleibt aber weiterhin nutzbar, um gezielt mehr
+    // Details zu sehen (z. B. `RUST_LOG=debug`).
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
     let cli = parse_args(&args);

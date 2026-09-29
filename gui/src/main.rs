@@ -52,7 +52,15 @@ fn resolve_socket_path(args: &[String], config: &Config) -> PathBuf {
 }
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Siehe Kommentar in daemon/src/main.rs: ohne diesen Fallback
+    // unterdrückt `fmt::init()` mit aktiviertem "env-filter"-Feature bei
+    // fehlendem `RUST_LOG` ausnahmslos jede Ausgabe.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let args: Vec<String> = std::env::args().collect();
     let config = load_config(&args);
