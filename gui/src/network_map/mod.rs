@@ -67,6 +67,34 @@ const MAX_CACHED_ROUTES: usize = 256;
 /// ungleich seltener als die Verbindungsliste selbst.
 const ROUTE_SCAN_INTERVAL: Duration = Duration::from_secs(3);
 
+/// Feste, gut unterscheidbare Palette für LAN-Geräte-Farben
+/// (Phase-12-Erweiterung) -- eigenständig von `knowledge_graph`s
+/// `COMMUNITY_COLORS`, auch wenn ähnlich aufgebaut, damit beide Module
+/// unabhängig bleiben. `theme::ACCENT` (eigene Verbindungen dieser
+/// Maschine) kommt hier bewusst nicht vor, damit ein Gerät nie versehentlich
+/// wie "Dieser PC" aussieht.
+const DEVICE_COLORS: [Color32; 8] = [
+    Color32::from_rgb(0xE1, 0x57, 0x59),
+    Color32::from_rgb(0x59, 0xA1, 0x4F),
+    Color32::from_rgb(0xED, 0xC9, 0x48),
+    Color32::from_rgb(0xB0, 0x7A, 0xA1),
+    Color32::from_rgb(0xFF, 0x9D, 0xA7),
+    Color32::from_rgb(0x76, 0xB7, 0xB2),
+    Color32::from_rgb(0xF2, 0x8E, 0x2B),
+    Color32::from_rgb(0x4E, 0x79, 0xA7),
+];
+
+/// Deterministische Farbzuweisung pro Gerät (Seed: MAC-Adresse) -- dieselbe
+/// MAC bekommt über Neustarts hinweg dieselbe Farbe, ohne dass dafür eine
+/// Zuweisungsreihenfolge gespeichert werden müsste. Reine Funktion, daher
+/// isoliert testbar.
+fn device_color(seed: &str) -> Color32 {
+    let hash = seed
+        .bytes()
+        .fold(0u32, |acc, byte| acc.wrapping_mul(31).wrapping_add(u32::from(byte)));
+    DEVICE_COLORS[(hash as usize) % DEVICE_COLORS.len()]
+}
+
 /// Ein Zwischenschritt auf dem Weg zu einer Gegenstelle (siehe
 /// [`traceroute`]) -- so vollständig, wie er messbar war.
 ///
@@ -113,7 +141,11 @@ struct ConnectionPoint {
     /// Programm, das laut [`connections::resolve_program_names`] gerade
     /// diese Verbindung hält -- `None`, solange sich der Prozess nicht
     /// (mehr) zuordnen ließ (z. B. Verbindung eines fremden Benutzers,
-    /// oder Prozess bereits beendet).
+    /// oder Prozess bereits beendet). Bei LAN-Geräte-Verbindungen
+    /// (Phase-12-Erweiterung, siehe [`spawn_lan_watcher`]) steht hier
+    /// stattdessen der Anzeigename des Geräts -- dieselbe Bedeutung
+    /// ("wer hält diese Verbindung"), nur der Besitzer ist ein anderes
+    /// Gerät statt ein Prozess dieser Maschine.
     program: Option<String>,
     /// Gemessener Weg zum Ziel (siehe [`traceroute`]), aus dem Routen-Cache
     /// übernommen. Leer, solange noch nicht gemessen -- dann zeichnet die
@@ -121,6 +153,11 @@ struct ConnectionPoint {
     /// bei jedem Frame mitkopiert wird und sich nie mehr ändert.
     route: Arc<Vec<RouteHop>>,
     last_seen: Instant,
+    /// Farbe für Marker, Bogen und Legenden-Eintrag. Eigene Verbindungen
+    /// dieser Maschine bekommen immer `theme::ACCENT` (unverändertes
+    /// Aussehen); LAN-Geräte-Verbindungen eine stabile, pro Gerät
+    /// unterschiedliche Farbe aus [`device_color`].
+    color: Color32,
 }
 
 impl ConnectionPoint {
@@ -161,6 +198,13 @@ struct Shared {
     /// flatternde Verbindung soll nicht immer wieder neu vermessen werden.
     /// Begrenzt durch [`MAX_CACHED_ROUTES`].
     routes: HashMap<Ipv4Addr, Arc<Vec<RouteHop>>>,
+    /// `(Ziel-IP, Quell-MAC) -> ConnectionPoint` für LAN-Geräte-Verbindungen
+    /// (Phase-12-Erweiterung, siehe [`spawn_lan_watcher`]). Getrennt von
+    /// [`Self::points`] (eigene Verbindungen dieser Maschine), weil dieselbe
+    /// Ziel-IP von mehreren Geräten gleichzeitig angesprochen werden kann --
+    /// eine reine IP-Schlüsselung wie bei `points` würde solche
+    /// Verbindungen fälschlich zu einer zusammenfassen.
+    lan_points: HashMap<(Ipv4Addr, String), ConnectionPoint>,
 }
 
 fn spawn_watcher(
@@ -265,6 +309,7 @@ fn spawn_watcher(
                             program: program_names.get(&ip).cloned(),
                             route: Arc::new(Vec::new()),
                             last_seen: now,
+                            color: crate::theme::ACCENT,
                         });
                     }
                     None => unresolved += 1,
@@ -283,6 +328,107 @@ fn spawn_watcher(
             guard.unresolved_count = unresolved;
             drop(guard);
             ctx.request_repaint();
+            std::thread::sleep(poll_interval);
+        }
+    });
+}
+
+/// Ergänzt die Karte um LAN-Geräte-Verbindungen (Phase-12-Erweiterung):
+/// pollt `gui_state` (von der Haupt-Daemon-Verbindung befüllt, siehe
+/// `gui/src/client.rs::apply_message`) auf neue `LanFlowEvent`s, löst jedes
+/// neue Ziel über dieselbe lokale GeoIP-Datenbank auf wie [`spawn_watcher`]
+/// und schreibt das Ergebnis nach [`Shared::lan_points`]. Bewusst ein
+/// **eigener** Thread mit eigener `CountryDb`-Instanz statt eine geteilte
+/// Kopplung an `spawn_watcher` -- beide Datenquellen (eigene ausgehende
+/// Verbindungen vs. gemeldete LAN-Flows) haben nichts miteinander zu tun
+/// außer derselben Anzeige.
+fn spawn_lan_watcher(
+    db_path: std::path::PathBuf,
+    poll_interval: Duration,
+    gui_state: Arc<Mutex<crate::client::GuiState>>,
+    shared: Arc<Mutex<Shared>>,
+    ctx: egui::Context,
+) {
+    std::thread::spawn(move || {
+        let db = CountryDb::load(&db_path).ok();
+
+        loop {
+            let now = Instant::now();
+            let (devices, flows): (Vec<logsentry_proto::LanDeviceInfo>, Vec<logsentry_proto::LanFlowEvent>) = {
+                let guard = gui_state.lock().unwrap_or_else(PoisonError::into_inner);
+                (
+                    guard.lan_devices.clone(),
+                    guard.recent_lan_flows.iter().cloned().collect(),
+                )
+            };
+            let mac_to_label: HashMap<String, String> =
+                devices.into_iter().map(|d| (d.mac, d.display_name)).collect();
+
+            // Wie bei `spawn_watcher`: erst nur kurz sperren, um bereits
+            // bekannte Ziele aufzufrischen und neue zu erkennen, die
+            // eigentliche (potenziell langsame) Reverse-DNS-Auflösung läuft
+            // danach ohne gehaltene Sperre (Regel 21).
+            let new_keys: Vec<(Ipv4Addr, String)> = {
+                let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                guard
+                    .lan_points
+                    .retain(|_, point| now.duration_since(point.last_seen) < CONNECTION_HOLD);
+                let mut fresh = Vec::new();
+                for flow in &flows {
+                    let Ok(dst_ip) = flow.dst_ip.parse::<Ipv4Addr>() else {
+                        continue;
+                    };
+                    let key = (dst_ip, flow.src_mac.clone());
+                    match guard.lan_points.get_mut(&key) {
+                        Some(point) => point.last_seen = now,
+                        None => fresh.push(key),
+                    }
+                }
+                fresh
+            };
+
+            let mut newly_resolved = Vec::new();
+            for (dst_ip, src_mac) in new_keys {
+                let resolved = db.as_ref().and_then(|db| db.lookup_v4(dst_ip)).and_then(|code| {
+                    geoip::country_centroid(code).map(|(lat, lon)| (code, lat, lon))
+                });
+                let Some((country, country_lat, country_lon)) = resolved else {
+                    continue;
+                };
+                let (lat, lon, precise_city) = match precise_location::resolve_precise(dst_ip) {
+                    Some((lat, lon, city)) => (lat, lon, Some(city)),
+                    None => (country_lat, country_lon, None),
+                };
+                let owner_label = mac_to_label
+                    .get(&src_mac)
+                    .cloned()
+                    .unwrap_or_else(|| src_mac.clone());
+                let color = device_color(&src_mac);
+                newly_resolved.push((
+                    (dst_ip, src_mac),
+                    ConnectionPoint {
+                        ip: dst_ip,
+                        country,
+                        lat,
+                        lon,
+                        precise_city,
+                        program: Some(owner_label),
+                        route: Arc::new(Vec::new()),
+                        last_seen: now,
+                        color,
+                    },
+                ));
+            }
+
+            if !newly_resolved.is_empty() {
+                let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                for (key, point) in newly_resolved {
+                    guard.lan_points.insert(key, point);
+                }
+                drop(guard);
+                ctx.request_repaint();
+            }
+
             std::thread::sleep(poll_interval);
         }
     });
@@ -435,11 +581,26 @@ pub struct NetworkMapPanel {
 }
 
 impl NetworkMapPanel {
-    pub fn new(config: &NetworkMapConfig, ctx: &egui::Context) -> Self {
+    /// `gui_state`: dieselbe geteilte GUI-Zustand-Instanz wie die
+    /// Haupt-Daemon-Verbindung (`gui/src/client.rs::spawn_bridge`) -- von
+    /// dort kommen die LAN-Geräte/Flow-Nachrichten (Phase-12-Erweiterung),
+    /// `network_map` selbst hält keine eigene zweite Verbindung zum Daemon.
+    pub fn new(
+        config: &NetworkMapConfig,
+        gui_state: Arc<Mutex<crate::client::GuiState>>,
+        ctx: &egui::Context,
+    ) -> Self {
         let shared = Arc::new(Mutex::new(Shared::default()));
         spawn_watcher(
             std::path::PathBuf::from(&config.geoip_database_path),
             Duration::from_secs(config.poll_interval_seconds.max(1)),
+            Arc::clone(&shared),
+            ctx.clone(),
+        );
+        spawn_lan_watcher(
+            std::path::PathBuf::from(&config.geoip_database_path),
+            Duration::from_secs(config.poll_interval_seconds.max(1)),
+            gui_state,
             Arc::clone(&shared),
             ctx.clone(),
         );
@@ -503,7 +664,16 @@ impl NetworkMapPanel {
 
         let (points, error, unresolved, countries) = {
             let guard = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
-            let mut points: Vec<ConnectionPoint> = guard.points.values().cloned().collect();
+            // Eigene Verbindungen und LAN-Geräte-Verbindungen
+            // (Phase-12-Erweiterung) gemeinsam gezeichnet -- beide sind
+            // `ConnectionPoint`s mit derselben Struktur, nur `color`/
+            // `program` unterscheiden sich in der Bedeutung.
+            let mut points: Vec<ConnectionPoint> = guard
+                .points
+                .values()
+                .chain(guard.lan_points.values())
+                .cloned()
+                .collect();
             points.sort_by_key(|a| a.ip);
             (
                 points,
@@ -606,7 +776,7 @@ impl NetworkMapPanel {
             .id_salt("network_map_connection_list")
             .max_height(CONNECTION_LIST_HEIGHT_PX)
             .show(ui, |ui| {
-                for point in points {
+                for point in &points {
                     ui.label(
                         egui::RichText::new(format!(
                             "{} → zu Server: {} in {}",
@@ -634,6 +804,35 @@ impl NetworkMapPanel {
                     }
                 }
             });
+
+        // Legende (Phase-12-Erweiterung): eine Farbe je Gerät, das gerade
+        // mindestens eine sichtbare Verbindung hat -- "Dieser PC" für die
+        // `theme::ACCENT`-farbenen (eigenen) Punkte, sonst der Anzeigename
+        // des LAN-Geräts. Unterhalb der Verbindungsliste, rechtsbündig.
+        let mut legend: Vec<(Color32, String)> = Vec::new();
+        for point in &points {
+            if legend.iter().any(|(color, _)| *color == point.color) {
+                continue;
+            }
+            let label = if point.color == crate::theme::ACCENT {
+                "Dieser PC".to_string()
+            } else {
+                point.program.clone().unwrap_or_else(|| point.ip.to_string())
+            };
+            legend.push((point.color, label));
+        }
+        if !legend.is_empty() {
+            ui.add_space(4.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (color, label) in legend.iter().rev() {
+                        ui.label(egui::RichText::new(label).color(crate::theme::TEXT_MUTED).size(10.0));
+                        ui.colored_label(*color, "⬤");
+                        ui.add_space(10.0);
+                    }
+                });
+            });
+        }
 
         ui.ctx().request_repaint_after(REPAINT_INTERVAL);
     }
@@ -754,7 +953,7 @@ impl NetworkMapPanel {
                 // ist: liegt es hinter der Kugel, ist der vordere Teil der
                 // Route trotzdem zu sehen (die Linie bricht an der
                 // Sichtkante von selbst ab, siehe `draw_visible_runs`).
-                draw_connection_route(&painter, &view, &waypoints, self.pulse_phase);
+                draw_connection_route(&painter, &view, &waypoints, self.pulse_phase, point.color);
 
                 for ((_, _, place), sphere) in stops.iter().zip(&waypoints[1..]) {
                     let (hx, hy, hop_visible) = view.project(*sphere);
@@ -787,7 +986,7 @@ impl NetworkMapPanel {
         // Label-Anker sammeln.
         let screen_positions = declump(&visible_targets.iter().map(|(_, p)| *p).collect::<Vec<_>>());
         for ((point, _), &target) in visible_targets.iter().zip(&screen_positions) {
-            painter.circle_filled(target, 3.0, crate::theme::ACCENT);
+            painter.circle_filled(target, 3.0, point.color);
             painter.circle_stroke(target, 3.0, Stroke::new(1.0_f32, MAP_OCEAN));
             label_anchors.push(target);
             label_texts.push(point.place());
@@ -1023,12 +1222,13 @@ fn draw_connection_route(
     view: &globe::GlobeView,
     waypoints: &[Vec3],
     phase: f32,
+    color: Color32,
 ) {
     const STEPS_PER_SEGMENT: usize = 24;
     let Some(segments) = waypoints.len().checked_sub(1).filter(|&n| n > 0) else {
         return;
     };
-    let stroke = Stroke::new(1.0_f32, crate::theme::ACCENT.gamma_multiply(0.4));
+    let stroke = Stroke::new(1.0_f32, color.gamma_multiply(0.4));
 
     for pair in waypoints.windows(2) {
         let bulge = globe::segment_bulge(pair[0], pair[1], ARC_BULGE);
@@ -1052,7 +1252,7 @@ fn draw_connection_route(
     let point = globe::arc_point(from, to, progress - index as f32, bulge);
     let (x, y, visible) = view.project(point);
     if visible {
-        painter.circle_filled(Pos2::new(x, y), 2.0, crate::theme::ACCENT);
+        painter.circle_filled(Pos2::new(x, y), 2.0, color);
     }
 }
 
@@ -1148,6 +1348,21 @@ fn draw_text_with_halo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_color_ist_deterministisch_fuer_dieselbe_mac() {
+        let a = device_color("aa:bb:cc:dd:ee:ff");
+        let b = device_color("aa:bb:cc:dd:ee:ff");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn device_color_liegt_nie_auf_theme_accent() {
+        for i in 0..50 {
+            let seed = format!("mac-{i}");
+            assert_ne!(device_color(&seed), crate::theme::ACCENT);
+        }
+    }
 
     #[test]
     fn declump_laesst_weit_entfernte_punkte_unveraendert() {

@@ -165,7 +165,7 @@ impl LogsentryApp {
             .then(|| KnowledgeGraphTab::new(&knowledge_graph_config, ctx));
         let network_map = network_map_config
             .enabled
-            .then(|| NetworkMapPanel::new(&network_map_config, ctx));
+            .then(|| NetworkMapPanel::new(&network_map_config, Arc::clone(&state), ctx));
         let fleet = fleet_config
             .enabled
             .then(|| FleetTab::new(&fleet_config, ctx));
