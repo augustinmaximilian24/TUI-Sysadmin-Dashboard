@@ -74,6 +74,13 @@ pub struct Subscription {
     pub snapshots: bool,
     pub anomalies: bool,
     pub snapshot_interval_ms: u32,
+    /// LAN-Geräte + Fritz!Box-Traffic (Phase 12-Erweiterung). Eigenes Feld
+    /// statt an `anomalies` gekoppelt, da der Fleet-Tab (Phase 13) bewusst
+    /// NIE `lan: true` setzt -- read-only-Übersicht über andere Hosts hat
+    /// nichts mit deren Heimnetz-Traffic zu tun. `#[serde(default)]` hält
+    /// ältere Clients ohne dieses Feld kompatibel (Policy siehe Moduldoc).
+    #[serde(default)]
+    pub lan: bool,
 }
 
 impl Default for Subscription {
@@ -82,6 +89,7 @@ impl Default for Subscription {
             snapshots: true,
             anomalies: true,
             snapshot_interval_ms: 1000,
+            lan: false,
         }
     }
 }
@@ -133,6 +141,55 @@ pub enum ServerMessage {
     Goodbye {
         reason: GoodbyeReason,
     },
+    /// Aktueller Bestand bekannter LAN-Geräte (Phase 12-Erweiterung), nur an
+    /// Clients mit `Subscription::lan == true` gesendet -- immer der
+    /// vollständige Bestand, kein Delta, da die Liste selten wechselt und
+    /// ein Delta-Protokoll hier keinen echten Vorteil brächte (YAGNI).
+    LanDevices {
+        devices: Vec<LanDeviceInfo>,
+    },
+    /// Eine einzelne beobachtete ausgehende Verbindung eines LAN-Geräts
+    /// (Phase 12-Erweiterung), nur an Clients mit `Subscription::lan ==
+    /// true` gesendet.
+    LanFlow(LanFlowEvent),
+}
+
+/// Ein per ARP erkanntes Gerät im Heimnetz (Phase-12-Erweiterung um
+/// LAN-Geräte und Fritz!Box-Traffic). `mac` identifiziert das Gerät stabil
+/// auch über DHCP-Lease-Wechsel hinweg -- `ip` allein würde das nicht tun.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LanDeviceInfo {
+    pub mac: String,
+    pub ip: String,
+    /// Anzeigename, best-effort per mDNS aufgelöst (`avahi-resolve-address`)
+    /// -- fällt auf `ip` zurück, wenn keine Auflösung möglich war.
+    pub display_name: String,
+    pub first_seen_us: u64,
+    pub last_seen_us: u64,
+}
+
+/// Layer-4-Protokoll einer beobachteten Verbindung. Bewusst nur die zwei
+/// tatsächlich im Heimnetz relevanten Fälle (YAGNI) -- IPv6 ist wie beim
+/// bestehenden GeoIP-Modul bewusst out of scope für diesen ersten Wurf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LanProtocol {
+    Tcp,
+    Udp,
+}
+
+/// Eine beobachtete ausgehende Verbindung eines LAN-Geräts ins Internet
+/// (Quelle: Fritz!Box-Paketmitschnitt). Nur Header-Felder (Ziel-IP/Port,
+/// Protokoll) -- keine Nutzdaten, kein DPI.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LanFlowEvent {
+    pub src_mac: String,
+    pub dst_ip: String,
+    pub dst_port: u16,
+    pub protocol: LanProtocol,
+    pub timestamp_us: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

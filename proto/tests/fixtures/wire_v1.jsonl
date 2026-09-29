@@ -1,5 +1,5 @@
-{"type":"hello","protocol_version":1,"client_name":"logsentry-gui","client_version":"0.1.0","subscription":{"snapshots":true,"anomalies":true,"snapshot_interval_ms":1000}}
-{"type":"subscribe","subscription":{"snapshots":true,"anomalies":false,"snapshot_interval_ms":5000}}
+{"type":"hello","protocol_version":1,"client_name":"logsentry-gui","client_version":"0.1.0","subscription":{"snapshots":true,"anomalies":true,"snapshot_interval_ms":1000,"lan":false}}
+{"type":"subscribe","subscription":{"snapshots":true,"anomalies":false,"snapshot_interval_ms":5000,"lan":true}}
 {"type":"get_context","request_id":42,"timestamp_us":1726000000000000,"before":20,"after":20,"unit":"sshd.service"}
 {"type":"action","request_id":7,"action":{"kind":"restart_unit","unit":"sshd.service"}}
 {"type":"action","request_id":8,"action":{"kind":"stop_unit","unit":"cron.service"}}
@@ -19,4 +19,6 @@
 {"type":"action_result","request_id":14,"outcome":{"outcome":"failed","message":"polkit hat abgelehnt"}}
 {"type":"pong","nonce":123}
 {"type":"error","code":{"code":"lagged","missed":4},"message":"Broadcast-Puffer übergelaufen","request_id":null}
+{"type":"lan_devices","devices":[{"mac":"aa:bb:cc:dd:ee:ff","ip":"192.168.178.20","display_name":"iPhone von Max","first_seen_us":1726000000000000,"last_seen_us":1726000005000000}]}
+{"type":"lan_flow","src_mac":"aa:bb:cc:dd:ee:ff","dst_ip":"140.82.121.3","dst_port":443,"protocol":"tcp","timestamp_us":1726000006000000}
 {"type":"goodbye","reason":{"reason":"version_mismatch","expected":1,"got":2}}
