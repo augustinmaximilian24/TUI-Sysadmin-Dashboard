@@ -50,8 +50,22 @@ enum CaptureError {
         "PBKDF2-Login wird noch nicht unterstützt (Fritz!OS 7.25+, Challenge begann mit \"2$\")"
     )]
     Pbkdf2NotSupported,
-    #[error("unerwartete pcap-Magic-Bytes im Mitschnitt-Stream")]
-    UnknownPcapMagic,
+    #[error("unerwartete pcap-Magic-Bytes im Mitschnitt-Stream, erste Bytes: {0}")]
+    UnknownPcapMagic(String),
+}
+
+/// Formatiert die ersten Bytes eines unerwarteten Streams zur Diagnose: Hex
+/// und, soweit druckbar, als Text -- damit sich z. B. eine HTML-Fehlerseite
+/// (abgelaufene Session, falsche Interface-Kennung) sofort im Log von einem
+/// echten, nur anders aufgebauten Binärformat unterscheiden lässt.
+fn preview_bytes(bytes: &[u8]) -> String {
+    let sample = &bytes[..bytes.len().min(32)];
+    let hex: String = sample.iter().map(|b| format!("{b:02x} ")).collect();
+    let text: String = sample
+        .iter()
+        .map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' })
+        .collect();
+    format!("hex=[{}] text=\"{}\"", hex.trim_end(), text)
 }
 
 /// Liest die Passwortdatei (eine Zeile, kein Encoding). Getrennt von
@@ -144,7 +158,7 @@ impl PcapStreamParser {
             self.little_endian = match &self.buffer[0..4] {
                 [0xd4, 0xc3, 0xb2, 0xa1] => true,
                 [0xa1, 0xb2, 0xc3, 0xd4] => false,
-                _ => return Err(CaptureError::UnknownPcapMagic),
+                _ => return Err(CaptureError::UnknownPcapMagic(preview_bytes(&self.buffer))),
             };
             self.buffer.drain(0..24);
             self.header_consumed = true;
