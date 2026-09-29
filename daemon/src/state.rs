@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use tokio::sync::{broadcast, watch};
 
-use logsentry_proto::{AnomalyEvent, Snapshot, SystemSnapshot};
+use logsentry_proto::{AnomalyEvent, LanDeviceInfo, LanFlowEvent, Snapshot, SystemSnapshot};
 
 use crate::wire::ContextEntry;
 
@@ -26,6 +26,12 @@ use crate::wire::ContextEntry;
 /// Betrieb die Ausnahme bleibt und nicht der Regelfall bei zwei, drei
 /// gleichzeitigen Clients.
 const ANOMALY_BROADCAST_CAPACITY: usize = 256;
+
+/// Kapazität des Broadcast-Kanals für LAN-Flow-Ereignisse
+/// (Phase-12-Erweiterung). Ein aktiv genutztes Heimnetz kann kurzzeitig
+/// mehr Verbindungen pro Sekunde erzeugen als Anomalien -- etwas großzügiger
+/// dimensioniert als [`ANOMALY_BROADCAST_CAPACITY`].
+const LAN_FLOW_BROADCAST_CAPACITY: usize = 512;
 
 /// Obergrenze gleichzeitig gespeicherter Stummschaltungen
 /// (`ActionRequest::MuteAnomaly`, siehe [`SharedState::mute`]).
@@ -67,6 +73,15 @@ pub struct SharedState {
     /// alle Units hinweg. Wert ist der Ablauf-Zeitstempel in µs
     /// (`u64::MAX` für „dauerhaft", siehe `MuteScope::Permanent`).
     mute_store: Mutex<HashMap<(u64, Option<String>), u64>>,
+    /// Aktueller Bestand bekannter LAN-Geräte (Phase-12-Erweiterung),
+    /// `watch` statt `broadcast` -- wie bei `snapshot_tx` soll ein neu
+    /// verbundener Client sofort den zuletzt bekannten Bestand sehen, kein
+    /// leeres "warte auf die erste Änderung".
+    lan_devices_tx: watch::Sender<Arc<Vec<LanDeviceInfo>>>,
+    /// Einzelne beobachtete LAN-Verbindungen (Phase-12-Erweiterung),
+    /// `broadcast` wie `anomaly_tx` -- ein Ereignisstrom, kein Zustand mit
+    /// "zuletzt bekanntem Wert".
+    lan_flow_tx: broadcast::Sender<Arc<LanFlowEvent>>,
     pub session_id: u64,
 }
 
@@ -89,6 +104,8 @@ impl SharedState {
     ) -> Self {
         let (snapshot_tx, _) = watch::channel(Arc::new(initial_snapshot));
         let (anomaly_tx, _) = broadcast::channel(ANOMALY_BROADCAST_CAPACITY);
+        let (lan_devices_tx, _) = watch::channel(Arc::new(Vec::new()));
+        let (lan_flow_tx, _) = broadcast::channel(LAN_FLOW_BROADCAST_CAPACITY);
         Self {
             snapshot_tx,
             anomaly_tx,
@@ -100,6 +117,8 @@ impl SharedState {
             system: Mutex::new(None),
             self_filter: Mutex::new(HashMap::new()),
             mute_store: Mutex::new(HashMap::new()),
+            lan_devices_tx,
+            lan_flow_tx,
             session_id: random_session_id(),
         }
     }
@@ -293,6 +312,40 @@ impl SharedState {
     /// Abschnitt 4, Regel 5) statt den Fehler zu ignorieren.
     pub fn subscribe_anomalies(&self) -> broadcast::Receiver<Arc<AnomalyEvent>> {
         self.anomaly_tx.subscribe()
+    }
+
+    /// Veröffentlicht den aktuellen Bestand bekannter LAN-Geräte
+    /// (Phase-12-Erweiterung). `send_replace` wie bei `publish_snapshot` --
+    /// der Bestand soll aktuell sein, auch wenn sich gerade niemand als
+    /// Abonnent hält.
+    pub fn publish_lan_devices(&self, devices: Vec<LanDeviceInfo>) {
+        self.lan_devices_tx.send_replace(Arc::new(devices));
+    }
+
+    /// Liefert den zuletzt veröffentlichten Geräte-Bestand (für einen
+    /// frisch verbundenen Client, bevor er selbst einen `watch`-Abonnenten
+    /// hält).
+    pub fn latest_lan_devices(&self) -> Arc<Vec<LanDeviceInfo>> {
+        self.lan_devices_tx.borrow().clone()
+    }
+
+    /// Neuer `watch`-Abonnent für den LAN-Geräte-Bestand.
+    pub fn subscribe_lan_devices(&self) -> watch::Receiver<Arc<Vec<LanDeviceInfo>>> {
+        self.lan_devices_tx.subscribe()
+    }
+
+    /// Veröffentlicht ein einzelnes beobachtetes LAN-Flow-Ereignis
+    /// (Phase-12-Erweiterung). Wie bei `publish_anomaly` ist es kein Fehler,
+    /// wenn gerade niemand abonniert hat.
+    pub fn publish_lan_flow(&self, event: LanFlowEvent) {
+        let _ = self.lan_flow_tx.send(Arc::new(event));
+    }
+
+    /// Neuer Broadcast-Abonnent für LAN-Flow-Ereignisse. Der Aufrufer muss
+    /// `RecvError::Lagged` behandeln, genau wie bei
+    /// [`SharedState::subscribe_anomalies`].
+    pub fn subscribe_lan_flows(&self) -> broadcast::Receiver<Arc<LanFlowEvent>> {
+        self.lan_flow_tx.subscribe()
     }
 
     /// Nimmt eine Rohzeile in den Kontext-Ring auf (für spätere
