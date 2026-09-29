@@ -28,7 +28,9 @@ Heimserver (Haswell-Klasse, headless, später per TUI oder SSH).
 **Out of Scope (v1.0)**
 - Automatische Reaktion ohne Bestätigung (Auto-Remediation) – erst v2, mit Rate-Limit und Circuit-Breaker
 - TUI-Client – das Protokoll wird dafür vorbereitet, gebaut wird er später
-- Web-UI, Multi-Host-Aggregation, Alerting per Mail/Matrix
+- Web-UI, Multi-Host-Aggregation, Alerting per Mail/Matrix (eine rein
+  lesende Multi-Host-Übersicht wurde später optional als Phase 13 ergänzt,
+  siehe dort; entfernte Aktionsausführung bleibt out of scope)
 - ML-Modelle (Isolation Forest, TF-IDF)
 - Windows-/macOS-Support
 - LLM-Integration außer als explizit ausgelöste „Erkläre diese Anomalie"-Funktion
@@ -281,6 +283,49 @@ Tab ist ein reiner Konsument einer externen, optionalen Datei.
       bereits funktionierenden Buttons in `app.rs` und ist über
       `camera::apply_drag`/`project_point` auf Ebene der reinen
       Mathematik unit-getestet.
+
+**Phase 12 – Netzwerkkarte:** existiert bereits im Code
+(`gui/src/network_map/`, `NetworkMapConfig`) und wird dort selbst als
+"Phase 12" referenziert, war aber nie in dieser Phasenliste aufgeführt --
+wird bei der geplanten Erweiterung um LAN-Geräte-Erkennung und
+Fritz!Box-Paketmitschnitt nachgetragen.
+
+**Phase 13 – Fleet-Tab (Multi-Host-Übersicht, read-only, außerhalb des
+ursprünglichen v1.0-Scopes)**
+
+Zeigt Anomalie-/Statusdaten mehrerer logsentry-Daemon-Instanzen (lokal plus
+konfigurierte entfernte Hosts) nebeneinander in einem eigenen Tab. Das
+Protokoll hat bewusst keine eigene Authentisierung/Verschlüsselung (nur
+Unix-Socket-Dateirechte, Regel 11) -- Zugriff auf entfernte Hosts läuft
+deshalb ausschließlich über SSH-Tunnel (`ssh -L
+<lokaler_port>:<remote_socket_path> <ssh_target>`) auf den dortigen
+Unix-Socket, niemals über ein zweites, roh erreichbares TCP-Listening des
+Daemons -- der Daemon selbst bleibt dadurch vollständig unverändert.
+Read-only: keine Aktionen (Neustart/Kill/IP-Sperre) werden über diesen Tab
+an entfernte Hosts geschickt, das bleibt lokal wie bisher.
+
+- [x] `FleetConfig`/`RemoteHost` (`core/src/config.rs`): `enabled`, Liste
+      konfigurierter Hosts mit `ssh_target`, `remote_socket_path`,
+      optionalem `local_port` -- alles konfigurierbar statt Magic Numbers
+      (Regel 22)
+- [x] `proto::client::Endpoint` (`proto/src/client.rs`): Client
+      verallgemeinert auf Unix-Socket **und** TCP, damit dieselbe
+      Handshake-/Session-/Reconnect-Logik (inkl. Backoff) für den
+      Tunnel-Port wie für den lokalen Socket gilt
+- [x] SSH-Tunnel-Subprozess pro Host mit eigener Backoff-Überwachung
+      (`gui/src/fleet/tunnel.rs`), `kill_on_drop` für sauberes Beenden,
+      `BatchMode=yes`/`ExitOnForwardFailure=yes` gegen hängende/stille
+      Fehlschläge
+- [x] Pro-Host-Zusammenfassung (`gui/src/fleet/mod.rs`): Tunnel- und
+      Daemon-Verbindungsstatus getrennt sichtbar, Anomalie-Zähler nach
+      Schweregrad, letzte 20 Anomalien -- keine volle Historie/Graphen pro
+      Host (Übersicht, kein zweites Dashboard)
+- [x] Tab-Umschalter im Header (`gui/src/app.rs`), Tab nur sichtbar wenn
+      `fleet.enabled = true`
+- [ ] Manuell verifiziert: zwei lokale Daemon-Instanzen (separate
+      Configs/Sockets), Tunnel via `ssh localhost` auf die zweite Instanz,
+      Fleet-Tab zeigt beide Hosts; zweite Instanz beendet -> Fleet zeigt
+      klaren getrennten Zustand statt Absturz
 
 ## 7. Definition of Done (v1.0)
 
