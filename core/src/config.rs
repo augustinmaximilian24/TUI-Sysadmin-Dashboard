@@ -57,6 +57,12 @@ pub struct Config {
     /// Read-only Übersicht mehrerer logsentry-Daemon-Instanzen im eigenen
     /// GUI-Tab (Phase 13, optional).
     pub fleet: FleetConfig,
+    /// Erkennung anderer Geräte im Heimnetz per ARP (Phase-12-Erweiterung,
+    /// optional).
+    pub lan_devices: LanDevicesConfig,
+    /// Fritz!Box-Paketmitschnitt zur Zuordnung ausgehender Verbindungen zu
+    /// LAN-Geräten (Phase-12-Erweiterung, optional).
+    pub fritzbox: FritzboxConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -661,6 +667,75 @@ pub struct FleetConfig {
     pub hosts: Vec<RemoteHost>,
 }
 
+/// Erkennung anderer Geräte im Heimnetz per ARP-Tabelle (`ip neigh`),
+/// optional per Ping-Sweep aufgefrischt, plus best-effort mDNS-Namensauf-
+/// lösung -- reine Anwesenheitserkennung, kein Traffic (dafür siehe
+/// [`FritzboxConfig`]).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct LanDevicesConfig {
+    pub enabled: bool,
+    /// Abstand zwischen zwei ARP-Tabellen-Scans in Sekunden.
+    pub scan_interval_secs: u64,
+    /// Vor jedem Scan einen `nmap -sn <subnet>`-Sweep ausführen, damit auch
+    /// schlafende Geräte (die sonst nicht in der ARP-Tabelle auftauchen)
+    /// erfasst werden. Erfordert `nmap`, ist deshalb eigens abschaltbar.
+    pub ping_sweep_enabled: bool,
+    /// Subnetz für den Ping-Sweep in CIDR-Notation (z. B.
+    /// `192.168.178.0/24`), nur relevant wenn `ping_sweep_enabled = true`.
+    /// Leer = kein automatisches Erraten -- lieber ein klar sichtbar
+    /// wirkungsloser Sweep als ein Sweep im falschen Netz.
+    pub ping_sweep_subnet: String,
+}
+
+impl Default for LanDevicesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            scan_interval_secs: 30,
+            ping_sweep_enabled: false,
+            ping_sweep_subnet: String::new(),
+        }
+    }
+}
+
+/// Fritz!Box-Paketmitschnitt (Phase-12-Erweiterung, optional): ordnet
+/// ausgehende Verbindungen den in [`LanDevicesConfig`] erkannten Geräten zu,
+/// über die eingebaute Diagnose-Funktion der Box (`login_sid.lua` +
+/// `/cgi-bin/capture_notimeout`). Das Passwort steht bewusst NICHT hier in
+/// der TOML, sondern in einer separaten Datei mit restriktiven Rechten
+/// (`password_file`) -- dieselbe Begründung wie bei Fleet-SSH-Zielen, nur
+/// dass hier tatsächlich ein Passwort statt eines SSH-Schlüssels betroffen
+/// ist.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FritzboxConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub username: String,
+    /// Pfad zu einer Datei, die ausschließlich das Passwort enthält (eine
+    /// Zeile, kein Encoding). Sollte Modus 600 und denselben Eigentümer wie
+    /// der Daemon-Prozess haben.
+    pub password_file: String,
+    /// Modellabhängige Schnittstellen-Kennung für den Paketmitschnitt (z. B.
+    /// `2-1` für die LAN-Bridge bei vielen Boxen) -- einmalig manuell in der
+    /// Fritz!Box-Oberfläche unter Diagnose/Support/Paketmitschnitt
+    /// nachsehen, es gibt keine zuverlässige automatische Erkennung.
+    pub capture_iface: String,
+}
+
+impl Default for FritzboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "fritz.box".to_string(),
+            username: String::new(),
+            password_file: String::new(),
+            capture_iface: String::new(),
+        }
+    }
+}
+
 impl Config {
     /// Lädt die Konfiguration aus einer TOML-Datei am gegebenen Pfad.
     ///
@@ -873,5 +948,34 @@ mod tests {
 
         let second = &config.fleet.hosts[1];
         assert_eq!(second.local_port, Some(18000));
+    }
+
+    #[test]
+    fn default_lan_devices_und_fritzbox_config_sind_deaktiviert() {
+        let config = Config::default();
+        assert!(!config.lan_devices.enabled);
+        assert!(!config.lan_devices.ping_sweep_enabled);
+        assert_eq!(config.lan_devices.scan_interval_secs, 30);
+        assert!(!config.fritzbox.enabled);
+        assert_eq!(config.fritzbox.host, "fritz.box");
+        assert!(config.fritzbox.password_file.is_empty());
+    }
+
+    #[test]
+    fn fritzbox_config_aus_toml() {
+        let raw = r#"
+            [fritzbox]
+            enabled = true
+            username = "Max"
+            password_file = "/etc/logsentry/fritzbox.secret"
+            capture_iface = "2-1"
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert!(config.fritzbox.enabled);
+        assert_eq!(config.fritzbox.username, "Max");
+        assert_eq!(config.fritzbox.password_file, "/etc/logsentry/fritzbox.secret");
+        assert_eq!(config.fritzbox.capture_iface, "2-1");
+        // Nicht gesetztes Feld bleibt beim Default.
+        assert_eq!(config.fritzbox.host, "fritz.box");
     }
 }
