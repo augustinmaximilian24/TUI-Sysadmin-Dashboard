@@ -17,7 +17,8 @@ use tokio::sync::mpsc;
 
 use logsentry_proto::{
     spawn, ActionKind, ActionOutcome, AnomalyEvent, ClientConfig, ConnectionState, ContextReply,
-    Endpoint, ErrorCode, GoodbyeReason, ServerMessage, Snapshot, Subscription,
+    Endpoint, ErrorCode, GoodbyeReason, LanDeviceInfo, LanFlowEvent, ServerMessage, Snapshot,
+    Subscription,
 };
 
 /// Obergrenze der im Speicher gehaltenen Anomalien (Regel 18). Die
@@ -58,6 +59,11 @@ const REPAINT_COALESCE: Duration = Duration::from_millis(150);
 /// Anfragen (Phase 8, Schritt 9).
 const ACTION_LOG_CAP: usize = 200;
 
+/// Obergrenze der im Speicher gehaltenen LAN-Flow-Ereignisse
+/// (Phase-12-Erweiterung, Regel 18). `network_map` liest daraus, welche
+/// Verbindungen seit dem letzten Poll neu hinzugekommen sind.
+const LAN_FLOW_CAP: usize = 500;
+
 /// Ein Punkt im Entropie-Verlauf: (Sekunden seit Programmstart, Bit).
 pub type HistoryPoint = [f64; 2];
 
@@ -88,6 +94,14 @@ pub struct GuiState {
     /// sichtbar sein, nicht nur der daemon-seitige
     /// `stats.dropped_overflow` im Kopfbereich).
     pub dropped_local: u64,
+    /// Aktueller Bestand bekannter LAN-Geräte (Phase-12-Erweiterung), direkt
+    /// aus `ServerMessage::LanDevices` übernommen -- immer der vollständige
+    /// Bestand, kein inkrementelles Zusammenführen nötig.
+    pub lan_devices: Vec<LanDeviceInfo>,
+    /// Seit Verbindungsaufbau beobachtete LAN-Flows, älteste zuerst
+    /// (Regel 18: siehe [`LAN_FLOW_CAP`]). `network_map` verbraucht neue
+    /// Einträge beim Poll und muss sie sich nicht selbst merken.
+    pub recent_lan_flows: VecDeque<LanFlowEvent>,
 }
 
 impl GuiState {
@@ -103,6 +117,13 @@ impl GuiState {
             self.action_log.pop_front();
         }
         self.action_log.push_back((request_id, outcome));
+    }
+
+    fn push_lan_flow(&mut self, event: LanFlowEvent) {
+        if self.recent_lan_flows.len() >= LAN_FLOW_CAP {
+            self.recent_lan_flows.pop_front();
+        }
+        self.recent_lan_flows.push_back(event);
     }
 
     fn push_log(&mut self, line: String) {
@@ -141,6 +162,11 @@ pub fn spawn_bridge(
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         subscription: Subscription {
             snapshot_interval_ms: SNAPSHOT_INTERVAL_MS,
+            // Diese Verbindung speist auch `network_map` (Phase-12-
+            // Erweiterung um LAN-Geräte/Fritz!Box-Traffic) -- anders als
+            // die Fleet-Tab-Verbindungen (Phase 13), die bewusst nie
+            // `lan: true` setzen (siehe dortiger Kommentar).
+            lan: true,
             ..Subscription::default()
         },
     });
@@ -214,6 +240,8 @@ fn apply_message(state: &mut GuiState, message: ServerMessage, started_at: std::
         ServerMessage::Goodbye { reason } => {
             state.push_log(format_goodbye(&reason));
         }
+        ServerMessage::LanDevices { devices } => state.lan_devices = devices,
+        ServerMessage::LanFlow(event) => state.push_lan_flow(event),
     }
 }
 
