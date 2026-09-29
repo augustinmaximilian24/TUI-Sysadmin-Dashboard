@@ -158,6 +158,14 @@ impl PcapStreamParser {
             self.little_endian = match &self.buffer[0..4] {
                 [0xd4, 0xc3, 0xb2, 0xa1] => true,
                 [0xa1, 0xb2, 0xc3, 0xd4] => false,
+                // AVM-eigene Magic-Number, empirisch gegen eine echte
+                // Fritz!Box verifiziert: der Rest des Headers ist bei
+                // Big-Endian-Lesart identisch zum Standardformat aufgebaut
+                // (Version 2.4, Snaplen, Linktyp Ethernet), auch der erste
+                // Paket-Zeitstempel ergibt nur big-endian ein plausibles
+                // aktuelles Datum. Keine offizielle libpcap-Magic, aber
+                // strukturell dasselbe Format.
+                [0xa1, 0xb2, 0xcd, 0x34] => false,
                 _ => return Err(CaptureError::UnknownPcapMagic(preview_bytes(&self.buffer))),
             };
             self.buffer.drain(0..24);
@@ -407,6 +415,29 @@ mod tests {
         let mut header = vec![0xff, 0xff, 0xff, 0xff];
         header.extend_from_slice(&[0u8; 20]);
         assert!(parser.feed(&header).is_err());
+    }
+
+    #[test]
+    fn pcap_parser_akzeptiert_die_avm_eigene_magic_number() {
+        // Echte, per journalctl beobachtete erste Bytes eines Fritz!Box-
+        // Mitschnitt-Streams (siehe Kommentar an der Magic-Prüfung):
+        // AVM-Magic a1 b2 cd 34, Rest des Headers big-endian (Version 2.4,
+        // Snaplen 0x800, Linktyp 1 = Ethernet).
+        let mut stream: Vec<u8> = vec![
+            0xa1, 0xb2, 0xcd, 0x34, 0x00, 0x02, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ];
+        // Ein minimaler Record: ts_sec/ts_usec (big-endian) egal fuer den
+        // Test, incl_len=orig_len=4, ein 4-Byte-"Frame".
+        stream.extend_from_slice(&0x6abc2cb5u32.to_be_bytes());
+        stream.extend_from_slice(&0x000911b8u32.to_be_bytes());
+        stream.extend_from_slice(&4u32.to_be_bytes());
+        stream.extend_from_slice(&4u32.to_be_bytes());
+        stream.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+
+        let mut parser = PcapStreamParser::new();
+        let frames = parser.feed(&stream).expect("AVM-Magic muss akzeptiert werden");
+        assert_eq!(frames, vec![vec![0xAA, 0xBB, 0xCC, 0xDD]]);
     }
 
     #[test]
