@@ -14,6 +14,7 @@
 mod app;
 mod client;
 mod export;
+mod fleet;
 mod knowledge_graph;
 mod network_map;
 mod theme;
@@ -58,6 +59,7 @@ fn main() -> anyhow::Result<()> {
     let socket_path = resolve_socket_path(&args, &config);
     let knowledge_graph_config = config.knowledge_graph.clone();
     let network_map_config = config.network_map.clone();
+    let fleet_config = config.fleet.clone();
 
     // Eigenständige Runtime statt `#[tokio::main]`: `eframe::run_native`
     // übernimmt den aufrufenden Thread mit seiner eigenen Event-Loop, die
@@ -82,6 +84,7 @@ fn main() -> anyhow::Result<()> {
                 outbound,
                 knowledge_graph_config,
                 network_map_config,
+                fleet_config,
                 &cc.egui_ctx,
             )))
         }),

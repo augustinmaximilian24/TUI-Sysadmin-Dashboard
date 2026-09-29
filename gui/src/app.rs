@@ -23,6 +23,7 @@ use crate::client::{
     action_kind_label, connection_label, format_action_outcome, is_connected, GuiState,
     HistoryPoint,
 };
+use crate::fleet::FleetTab;
 use crate::knowledge_graph::KnowledgeGraphTab;
 use crate::network_map::NetworkMapPanel;
 use crate::theme;
@@ -33,6 +34,7 @@ use crate::theme;
 enum ActiveTab {
     Dashboard,
     KnowledgeGraph,
+    Fleet,
 }
 
 /// Eine per Button ausgelöste, aber noch nicht bestätigte Aktion (Regel 12:
@@ -144,6 +146,9 @@ pub struct LogsentryApp {
     /// `None`, wenn `network_map.enabled = false` in der Konfiguration
     /// steht -- dann bleibt die Karte im Systemzustands-Panel einfach weg.
     network_map: Option<NetworkMapPanel>,
+    /// `None`, wenn `fleet.enabled = false` in der Konfiguration steht --
+    /// dann wird der Tab im Header gar nicht erst angeboten.
+    fleet: Option<FleetTab>,
 }
 
 impl LogsentryApp {
@@ -152,6 +157,7 @@ impl LogsentryApp {
         outbound: tokio::sync::mpsc::Sender<ClientMessage>,
         knowledge_graph_config: logsentry_core::config::KnowledgeGraphConfig,
         network_map_config: logsentry_core::config::NetworkMapConfig,
+        fleet_config: logsentry_core::config::FleetConfig,
         ctx: &egui::Context,
     ) -> Self {
         let knowledge_graph = knowledge_graph_config
@@ -160,6 +166,9 @@ impl LogsentryApp {
         let network_map = network_map_config
             .enabled
             .then(|| NetworkMapPanel::new(&network_map_config, ctx));
+        let fleet = fleet_config
+            .enabled
+            .then(|| FleetTab::new(&fleet_config, ctx));
         Self {
             state,
             outbound,
@@ -179,6 +188,7 @@ impl LogsentryApp {
             active_tab: ActiveTab::Dashboard,
             knowledge_graph,
             network_map,
+            fleet,
         }
     }
 
@@ -371,6 +381,7 @@ impl eframe::App for LogsentryApp {
                 self.draw_central(ctx);
             }
             ActiveTab::KnowledgeGraph => self.draw_knowledge_graph_tab(ctx),
+            ActiveTab::Fleet => self.draw_fleet_tab(ctx),
         }
         self.draw_confirmation_dialog(ctx);
     }
@@ -463,6 +474,20 @@ impl LogsentryApp {
                                 ActiveTab::KnowledgeGraph,
                                 "Wissensgraph",
                             );
+                            ui.selectable_value(
+                                &mut self.active_tab,
+                                ActiveTab::Dashboard,
+                                "Dashboard",
+                            );
+                        }
+
+                        // Ebenso: Fleet-Tab nur anbieten, wenn in der
+                        // Konfiguration mindestens ein entfernter Host
+                        // eingetragen und aktiviert ist.
+                        if self.fleet.is_some() {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.selectable_value(&mut self.active_tab, ActiveTab::Fleet, "Fleet");
                             ui.selectable_value(
                                 &mut self.active_tab,
                                 ActiveTab::Dashboard,
@@ -975,6 +1000,18 @@ impl LogsentryApp {
     fn draw_knowledge_graph_tab(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(tab) = &mut self.knowledge_graph {
+                tab.show(ui);
+            }
+        });
+    }
+
+    /// Zeigt den Fleet-Tab (Phase 13) als eigenes, alleiniges `CentralPanel`
+    /// -- wie beim Wissensgraph-Tab wären die Dashboard-Seitenpanele hier
+    /// nur ablenkende Leerfläche, da sie sich auf die lokale Anomalie-Liste
+    /// beziehen.
+    fn draw_fleet_tab(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(tab) = &mut self.fleet {
                 tab.show(ui);
             }
         });
