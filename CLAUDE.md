@@ -45,9 +45,10 @@ Heimserver (Haswell-Klasse, headless, später per TUI oder SSH).
 | Systemmetriken | `sysinfo` |
 | systemd-Status & -Aktionen | `zbus` (org.freedesktop.systemd1), Autorisierung über polkit |
 | Serialisierung | `serde`, `serde_json` |
-| Persistenz | `redb` oder SQLite via `rusqlite` (Entscheidung in Phase 4 begründen) |
+| Persistenz | `redb` (Entscheidung in Phase 4 begründet, siehe `docs/phase4-baselines.md` Abschnitt 6.1 -- reines Rust ohne C-Toolchain, kein `rusqlite`) |
 | Logging (eigenes) | `tracing` + `tracing-subscriber` |
 | Fehler | `anyhow` (Binary), `thiserror` (Bibliotheksteile) |
+| Fritz!Box-Paketmitschnitt (Phase-12-Erweiterung) | `reqwest` (ohne TLS-Backend, reines LAN-HTTP), `md-5` (AVM-Challenge-Response verlangt zwingend MD5), `futures-util` (nur `StreamExt` für `reqwest`s Byte-Stream) |
 
 Keine Abhängigkeit aufnehmen, ohne sie zu begründen. `ndarray` und `dashmap` sind
 für diesen Umfang **nicht** nötig.
@@ -284,11 +285,50 @@ Tab ist ein reiner Konsument einer externen, optionalen Datei.
       `camera::apply_drag`/`project_point` auf Ebene der reinen
       Mathematik unit-getestet.
 
-**Phase 12 – Netzwerkkarte:** existiert bereits im Code
-(`gui/src/network_map/`, `NetworkMapConfig`) und wird dort selbst als
-"Phase 12" referenziert, war aber nie in dieser Phasenliste aufgeführt --
-wird bei der geplanten Erweiterung um LAN-Geräte-Erkennung und
-Fritz!Box-Paketmitschnitt nachgetragen.
+**Phase 12 – Netzwerkkarte (nachträglich dokumentiert + erweitert um
+LAN-Geräte und Fritz!Box-Traffic)**
+
+Grundfunktion (3D-Weltkugel mit den eigenen ausgehenden Verbindungen dieser
+Maschine, GeoIP-Auflösung, Traceroute-Routen) existierte bereits im Code
+(`gui/src/network_map/`, `NetworkMapConfig`) und wurde dort selbst als
+"Phase 12" referenziert, stand aber nie in dieser Phasenliste. Nachträglich
+erweitert (Erweiterung außerhalb des ursprünglichen v1.0-Scopes) um: die
+Verbindungen anderer Geräte im Heimnetz zusätzlich zur eigenen Weltkugel
+zeigen, pro Gerät farbcodiert. Reine ARP-Anwesenheitserkennung liefert dafür
+keine Zielverbindungen -- deshalb zusätzlich der Fritz!Box-Paketmitschnitt
+als Traffic-Quelle. Läuft im **Daemon**, nicht wie der Rest von
+`network_map` GUI-seitig: die gewünschte Persistenz/Historie muss auch ohne
+offene GUI weiterlaufen (Daemon ist der 24/7-Teil, GUI nur ein Client,
+Abschnitt 4: "Diese Trennung ist verpflichtend").
+
+- [x] `LanDevicesConfig`/`FritzboxConfig` (`core/src/config.rs`): beide
+      `enabled`-gated, Passwort bewusst nicht inline in der TOML sondern in
+      einer separaten Datei mit restriktiven Rechten (`password_file`)
+- [x] LAN-Geräte-Erkennung (`daemon/src/lan_devices.rs`): periodischer
+      `ip neigh show`-Scan, optionaler `nmap -sn`-Sweep davor, best-effort
+      mDNS-Namensauflösung (`avahi-resolve-address`), Bestand über MAC
+      identifiziert (DHCP-Lease-stabil), Regel-18-Obergrenze + Pruning
+- [x] Fritz!Box-Paketmitschnitt (`daemon/src/fritzbox_capture.rs`):
+      `login_sid.lua`-Login (MD5-Challenge-Response; PBKDF2/Fritz!OS 7.25+
+      erkannt und klar gemeldet statt falsch berechnet, siehe `# ponytail`
+      im Modul), `/cgi-bin/capture_notimeout`-Stream, handgeschriebener
+      pcap-Parser (nur IPv4, dieselbe bewusste Grenze wie beim bestehenden
+      GeoIP-Modul), Flows nur für bekannte LAN-Geräte und nur mit
+      öffentlichem Ziel (kein internes Netzwerk-Rauschen)
+- [x] Protokollerweiterung (`proto/src/wire.rs`): additive
+      `ServerMessage::LanDevices`/`LanFlow`, `Subscription.lan` (Fleet-Tab-
+      Verbindungen setzen das bewusst nie), Golden-Fixture
+      (`wire_v1.jsonl`) um beide neuen Varianten ergänzt
+- [x] Farbcodierung + Legende (`gui/src/network_map/mod.rs`):
+      `ConnectionPoint` um `color` erweitert, eigene Verbindungen bleiben
+      `theme::ACCENT` ("Dieser PC"), LAN-Geräte bekommen eine deterministische
+      Farbe aus einer festen Palette (Seed: MAC-Adresse); Legende unterhalb
+      der Verbindungsliste
+- [ ] Manuell verifiziert: Fritz!Box-Zugangsdaten + Interface-Kennung
+      eingerichtet, Daemon-Log zeigt erfolgreichen Login und laufenden
+      Mitschnitt, GUI zeigt mindestens ein zweites Gerät farbig auf der
+      Weltkugel, falsches Passwort führt zu klarer Fehlermeldung statt
+      Absturz
 
 **Phase 13 – Fleet-Tab (Multi-Host-Übersicht, read-only, außerhalb des
 ursprünglichen v1.0-Scopes)**
