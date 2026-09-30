@@ -30,7 +30,14 @@ use crate::now_us;
 use crate::state::SharedState;
 
 const BASE_BACKOFF_MS: u64 = 1_000;
-const MAX_BACKOFF_MS: u64 = 30_000;
+/// Deutlich großzügiger als z. B. der journalctl-Reconnect in
+/// `daemon/src/ingestion.rs` (30s) -- empirisch bestätigt (2026-09-29):
+/// wiederholte Login-/Mitschnitt-Versuche im 30s-Takt gegen eine echte
+/// Fritz!Box drückten den gemessenen Durchsatz von ~100 Mbit/s auf
+/// ~22 Mbit/s, vermutlich durch CPU-Last auf der Box. Ein Ziel, das
+/// Consumer-Router-Hardware ist statt eines lokalen Subprozesses, verdient
+/// einen spürbar zurückhaltenderen Backoff-Deckel.
+const MAX_BACKOFF_MS: u64 = 300_000;
 /// Mindestlaufzeit einer Mitschnitt-Session, ab der der Backoff nach ihrem
 /// Ende zurückgesetzt wird (dieselbe Idee wie `MIN_STABLE_RUN` in
 /// `daemon/src/ingestion.rs`).
