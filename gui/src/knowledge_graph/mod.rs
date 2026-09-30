@@ -34,9 +34,14 @@ use layout::{layout_3d, LayoutParams, Vec3};
 
 use logsentry_core::config::KnowledgeGraphConfig;
 
-/// Zielrate für die automatische Rotation (Regel 20: reaktiv statt
-/// Continuous-Modus, aber genug für eine ruckelfreie Drehung).
-const REPAINT_INTERVAL: Duration = Duration::from_millis(120);
+/// Zielrate für die automatische Rotation (Regel 20: reaktiv über
+/// `request_repaint_after` statt Continuous-Modus). Der Tab zeichnet nur,
+/// solange er sichtbar ist -- dann aber dauerhaft eine Drehung/einen Puls,
+/// also kein "Idle"-Zustand im Sinne von Regel 20/der Phase-7-CPU-Vorgabe.
+/// 120 ms (8.3 Hz) sahen bei stetiger Rotation sichtbar ruckelig aus (unter
+/// der für flüssig wahrgenommene Bewegung nötigen Bildrate); 16 ms (~60 Hz)
+/// behebt das, ohne den Idle-Zustand des restlichen Dashboards zu berühren.
+const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Tableau-10-artige Palette, identisch zur Farbwahl in graphify's
 /// `graph.html` (`COMMUNITY_COLORS`), damit dieselbe Community in Tab und
