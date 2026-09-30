@@ -53,6 +53,32 @@ struct PendingConfirmation {
 /// weiter (`context_max_lines`); `truncated` in der Antwort zeigt das an.
 const CONTEXT_LINES_EACH_SIDE: u16 = 25;
 
+/// Fenstergröße des gleitenden Mittelwerts für die Entropie-Kurve im
+/// Live-Graph. Die Entropie selbst schwankt von Snapshot zu Snapshot
+/// spürbar (60-Sekunden-Fenster über eine sich ständig ändernde
+/// Template-Verteilung), was die Linie roh gezeichnet zackig statt flüssig
+/// wirken lässt. Geglättet wird ausschließlich für diese Darstellung --
+/// Anomalie-Erkennung und Score-Breakdown (`b.entropy_z` u. a.) nutzen
+/// weiterhin die rohen Werte aus dem Snapshot, nur die Kurve hier ist
+/// betroffen.
+const ENTROPY_SMOOTHING_WINDOW: usize = 5;
+
+/// Gleitender Mittelwert über die Y-Werte (Entropie in Bit) von `history`,
+/// X-Werte (Sekunden) bleiben unverändert. Reine Funktion ohne
+/// `egui`-Abhängigkeit, damit sie ohne Plot-Kontext testbar ist.
+fn smoothed_history(history: &[HistoryPoint]) -> Vec<HistoryPoint> {
+    history
+        .iter()
+        .enumerate()
+        .map(|(i, point)| {
+            let start = i.saturating_sub(ENTROPY_SMOOTHING_WINDOW - 1);
+            let window = &history[start..=i];
+            let avg = window.iter().map(|p| p[1]).sum::<f64>() / window.len() as f64;
+            [point[0], avg]
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LevelFilter {
     All,
@@ -1062,7 +1088,7 @@ impl LogsentryApp {
             theme::card(ui, |ui| {
                 theme::section_heading(ui, "Verlauf (Entropie)");
                 ui.add_space(4.0);
-                let points: PlotPoints = self.render.history.iter().copied().collect();
+                let points: PlotPoints = smoothed_history(&self.render.history).into_iter().collect();
                 Plot::new("entropy_plot")
                     .height(160.0)
                     .allow_scroll(false)
@@ -1194,5 +1220,25 @@ impl LogsentryApp {
                 self.pending_context_request = None;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn smoothed_history_glaettet_ausreisser_ohne_x_werte_zu_veraendern() {
+        let history: Vec<HistoryPoint> = vec![[0.0, 1.0], [1.0, 1.0], [2.0, 5.0], [3.0, 1.0]];
+        let smoothed = smoothed_history(&history);
+        assert_eq!(smoothed.iter().map(|p| p[0]).collect::<Vec<_>>(), vec![0.0, 1.0, 2.0, 3.0]);
+        assert!(smoothed[2][1] < 5.0, "Ausreißer muss durch Mittelung abgeschwächt werden");
+    }
+
+    #[test]
+    fn smoothed_history_leer_oder_ein_punkt_bleibt_unveraendert() {
+        assert!(smoothed_history(&[]).is_empty());
+        let single = [[0.0, 3.0]];
+        assert_eq!(smoothed_history(&single), vec![[0.0, 3.0]]);
     }
 }
