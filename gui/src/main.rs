@@ -13,6 +13,7 @@
 
 mod app;
 mod client;
+mod devices;
 mod export;
 mod fleet;
 mod knowledge_graph;
@@ -68,6 +69,7 @@ fn main() -> anyhow::Result<()> {
     let knowledge_graph_config = config.knowledge_graph.clone();
     let network_map_config = config.network_map.clone();
     let fleet_config = config.fleet.clone();
+    let lan_devices_enabled = config.lan_devices.enabled;
 
     // Eigenständige Runtime statt `#[tokio::main]`: `eframe::run_native`
     // übernimmt den aufrufenden Thread mit seiner eigenen Event-Loop, die
@@ -87,12 +89,16 @@ fn main() -> anyhow::Result<()> {
         native_options,
         Box::new(move |cc| {
             let (state, outbound) = client::spawn_bridge(socket_path, cc.egui_ctx.clone());
+            let tabs = app::TabConfigs {
+                knowledge_graph: knowledge_graph_config,
+                network_map: network_map_config,
+                fleet: fleet_config,
+                lan_devices_enabled,
+            };
             Ok(Box::new(app::LogsentryApp::new(
                 state,
                 outbound,
-                knowledge_graph_config,
-                network_map_config,
-                fleet_config,
+                tabs,
                 &cc.egui_ctx,
             )))
         }),

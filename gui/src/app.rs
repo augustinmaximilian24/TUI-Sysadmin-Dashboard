@@ -23,6 +23,7 @@ use crate::client::{
     action_kind_label, connection_label, format_action_outcome, is_connected, GuiState,
     HistoryPoint,
 };
+use crate::devices::DevicesTab;
 use crate::fleet::FleetTab;
 use crate::knowledge_graph::KnowledgeGraphTab;
 use crate::network_map::NetworkMapPanel;
@@ -35,6 +36,7 @@ enum ActiveTab {
     Dashboard,
     KnowledgeGraph,
     Fleet,
+    Devices,
 }
 
 /// Eine per Button ausgelöste, aber noch nicht bestätigte Aktion (Regel 12:
@@ -149,26 +151,41 @@ pub struct LogsentryApp {
     /// `None`, wenn `fleet.enabled = false` in der Konfiguration steht --
     /// dann wird der Tab im Header gar nicht erst angeboten.
     fleet: Option<FleetTab>,
+    /// `None`, wenn `lan_devices.enabled = false` in der Konfiguration
+    /// steht -- dann wird der Tab im Header gar nicht erst angeboten.
+    devices: Option<DevicesTab>,
+}
+
+/// Bündelt die Konfiguration aller optionalen Tabs für `LogsentryApp::new`,
+/// damit die Funktion unter der in `clippy.toml` konfigurierten
+/// Argumentzahl-Obergrenze bleibt (dasselbe Muster wie `ConnectionContext`
+/// in `daemon/src/client_task.rs`).
+pub struct TabConfigs {
+    pub knowledge_graph: logsentry_core::config::KnowledgeGraphConfig,
+    pub network_map: logsentry_core::config::NetworkMapConfig,
+    pub fleet: logsentry_core::config::FleetConfig,
+    pub lan_devices_enabled: bool,
 }
 
 impl LogsentryApp {
     pub fn new(
         state: Arc<Mutex<GuiState>>,
         outbound: tokio::sync::mpsc::Sender<ClientMessage>,
-        knowledge_graph_config: logsentry_core::config::KnowledgeGraphConfig,
-        network_map_config: logsentry_core::config::NetworkMapConfig,
-        fleet_config: logsentry_core::config::FleetConfig,
+        tabs: TabConfigs,
         ctx: &egui::Context,
     ) -> Self {
-        let knowledge_graph = knowledge_graph_config
+        let knowledge_graph = tabs
+            .knowledge_graph
             .enabled
-            .then(|| KnowledgeGraphTab::new(&knowledge_graph_config, ctx));
-        let network_map = network_map_config
+            .then(|| KnowledgeGraphTab::new(&tabs.knowledge_graph, ctx));
+        let network_map = tabs
+            .network_map
             .enabled
-            .then(|| NetworkMapPanel::new(&network_map_config, Arc::clone(&state), ctx));
-        let fleet = fleet_config
-            .enabled
-            .then(|| FleetTab::new(&fleet_config, ctx));
+            .then(|| NetworkMapPanel::new(&tabs.network_map, ctx));
+        let fleet = tabs.fleet.enabled.then(|| FleetTab::new(&tabs.fleet, ctx));
+        let devices = tabs
+            .lan_devices_enabled
+            .then(|| DevicesTab::new(Arc::clone(&state)));
         Self {
             state,
             outbound,
@@ -189,6 +206,7 @@ impl LogsentryApp {
             knowledge_graph,
             network_map,
             fleet,
+            devices,
         }
     }
 
@@ -382,6 +400,7 @@ impl eframe::App for LogsentryApp {
             }
             ActiveTab::KnowledgeGraph => self.draw_knowledge_graph_tab(ctx),
             ActiveTab::Fleet => self.draw_fleet_tab(ctx),
+            ActiveTab::Devices => self.draw_devices_tab(ctx),
         }
         self.draw_confirmation_dialog(ctx);
     }
@@ -488,6 +507,24 @@ impl LogsentryApp {
                             ui.add_space(8.0);
                             ui.separator();
                             ui.selectable_value(&mut self.active_tab, ActiveTab::Fleet, "Fleet");
+                            ui.selectable_value(
+                                &mut self.active_tab,
+                                ActiveTab::Dashboard,
+                                "Dashboard",
+                            );
+                        }
+
+                        // Ebenso: Geräte-Tab nur anbieten, wenn die
+                        // LAN-Geräte-Erkennung in der Konfiguration
+                        // aktiviert ist.
+                        if self.devices.is_some() {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.selectable_value(
+                                &mut self.active_tab,
+                                ActiveTab::Devices,
+                                "Geräte",
+                            );
                             ui.selectable_value(
                                 &mut self.active_tab,
                                 ActiveTab::Dashboard,
@@ -1012,6 +1049,17 @@ impl LogsentryApp {
     fn draw_fleet_tab(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(tab) = &mut self.fleet {
+                tab.show(ui);
+            }
+        });
+    }
+
+    /// Zeigt den Geräte-Tab als eigenes, alleiniges `CentralPanel` -- wie
+    /// bei Fleet/Wissensgraph wären die Dashboard-Seitenpanele hier nur
+    /// ablenkende Leerfläche.
+    fn draw_devices_tab(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(tab) = &mut self.devices {
                 tab.show(ui);
             }
         });
