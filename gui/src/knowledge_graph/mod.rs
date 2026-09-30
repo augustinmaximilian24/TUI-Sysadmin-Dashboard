@@ -117,6 +117,9 @@ struct ResolvedEdge {
 struct LoadedGraph {
     nodes: Vec<GraphNode>,
     positions: Vec<Vec3>,
+    /// Aufgefächerte Positionen je Knoten relativ zum Gruppenschwerpunkt
+    /// (eigenes Layout pro Gruppe, nur im Fokus verwendet).
+    local_positions: Vec<Vec3>,
     edges: Vec<ResolvedEdge>,
     degree: Vec<u32>,
     max_degree: u32,
@@ -138,6 +141,8 @@ struct Group {
     members: Vec<usize>,
     centroid: Vec3,
     radius: f32,
+    /// Radius der aufgefächerten Ansicht (`LoadedGraph::local_positions`).
+    focus_radius: f32,
 }
 
 /// Kürzt Pfad-/Langnamen für Beschriftungen: letzter Pfadteil, max. 26 Zeichen.
@@ -167,6 +172,44 @@ fn spread_groups(positions: &mut [Vec3], group_of: &[usize], group_count: usize)
             .scale(GROUP_SPREAD)
             .add(p.sub(centroid).scale(GROUP_COMPACT));
     }
+}
+
+/// Eigenes, weit aufgefächertes Layout je Gruppe für die Fokus-Ansicht:
+/// nur Kanten innerhalb der Gruppe, große Federlänge und starke Abstoßung,
+/// danach auf einen zur Mitgliederzahl passenden Radius skaliert. Setzt
+/// `Group::focus_radius` und liefert die Positionen relativ zum
+/// Gruppenschwerpunkt (Index = Knoten-Index).
+fn layout_locals(node_count: usize, edges: &[(usize, usize)], groups: &mut [Group]) -> Vec<Vec3> {
+    let mut local = vec![Vec3::ZERO; node_count];
+    let params = LayoutParams {
+        iterations: 250,
+        repulsion: 9_000.0,
+        spring_length: 75.0,
+        initial_radius: 150.0,
+        ..LayoutParams::default()
+    };
+    for group in groups.iter_mut() {
+        let index_of: HashMap<usize, usize> =
+            group.members.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+        let inner: Vec<(usize, usize)> = edges
+            .iter()
+            .filter_map(|&(a, b)| Some((*index_of.get(&a)?, *index_of.get(&b)?)))
+            .collect();
+        let mut pos = layout_3d_grouped(group.members.len(), &inner, None, &params);
+        let n = pos.len().max(1) as f32;
+        let center = pos.iter().fold(Vec3::ZERO, |acc, p| acc.add(*p)).scale(1.0 / n);
+        let mut dists: Vec<f32> = pos.iter().map(|p| p.sub(center).length()).collect();
+        dists.sort_unstable_by(f32::total_cmp);
+        let p90 = dists.get(dists.len().saturating_sub(1) * 9 / 10).copied().unwrap_or(1.0).max(1.0);
+        let target = 80.0 + 14.0 * n.sqrt();
+        let factor = target / p90;
+        for (k, &i) in group.members.iter().enumerate() {
+            pos[k] = pos[k].sub(center).scale(factor);
+            local[i] = pos[k];
+        }
+        group.focus_radius = (target * 1.15).max(40.0);
+    }
+    local
 }
 
 /// Faktor, um den die Gruppen-Schwerpunkte auseinandergezogen werden.
@@ -208,6 +251,7 @@ fn build_groups(
                 members,
                 centroid,
                 radius,
+                focus_radius: radius,
             }
         })
         .collect()
@@ -284,7 +328,8 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
     spread_groups(&mut positions, &group_of, community_ids.len());
 
     let community_labels = path.parent().map(load_community_labels).unwrap_or_default();
-    let groups = build_groups(&raw.nodes, &community_ids, &group_of, &positions, &community_labels);
+    let mut groups = build_groups(&raw.nodes, &community_ids, &group_of, &positions, &community_labels);
+    let local_positions = layout_locals(raw.nodes.len(), &edge_pairs, &mut groups);
     let extent = groups
         .iter()
         .map(|g| g.centroid.length() + g.radius)
@@ -303,6 +348,7 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
     Ok(LoadedGraph {
         nodes: raw.nodes,
         positions,
+        local_positions,
         edges,
         degree,
         max_degree,
@@ -419,7 +465,8 @@ impl KnowledgeGraphTab {
                 self.camera.pan_x += (-p.x * zoom - self.camera.pan_x) * ease;
                 self.camera.pan_y += (p.y * zoom - self.camera.pan_y) * ease;
                 if animating {
-                    let rad_px = (group.radius * self.camera.distance / p.depth).max(8.0);
+                    // Weltradius -> Pixel bei Zoom 1: Brennweite / Tiefe.
+                    let rad_px = (group.focus_radius * self.camera.focal_length / p.depth).max(8.0);
                     let target = (0.40 * rect.width().min(rect.height()) / rad_px).clamp(1.2, 9.0);
                     self.camera.zoom += (target - self.camera.zoom) * ease;
                 }
@@ -640,6 +687,22 @@ mod tests {
         assert_eq!(loaded.groups.len(), 2);
         assert_eq!(loaded.group_edges, vec![(0, 1, 1)]);
         assert_eq!(loaded.groups[1].members, vec![1, 2]);
+    }
+
+    #[test]
+    fn layout_locals_faecher_gruppe_auf_und_zentriert_sie() {
+        let mut groups = vec![Group {
+            label: "g".into(),
+            members: vec![0, 1, 2, 3],
+            centroid: Vec3::ZERO,
+            radius: 12.0,
+            focus_radius: 12.0,
+        }];
+        let local = layout_locals(4, &[(0, 1), (1, 2), (2, 3)], &mut groups);
+        let mean = local.iter().fold(Vec3::ZERO, |a, p| a.add(*p)).scale(0.25);
+        assert!(mean.length() < 1.0, "Gruppe muss um 0 zentriert sein: {mean:?}");
+        assert!(groups[0].focus_radius > 80.0, "Radius: {}", groups[0].focus_radius);
+        assert!(local[0].sub(local[3]).length() > 20.0, "Knoten dürfen nicht aufeinander liegen");
     }
 
     #[test]

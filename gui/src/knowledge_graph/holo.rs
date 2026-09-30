@@ -122,8 +122,25 @@ impl KnowledgeGraphTab {
         };
         let persp = |p: &Projected| self.camera.distance / p.depth;
 
-        let projected: Vec<Option<Projected>> = graph
-            .positions
+        // Effektive Positionen: im Fokus fahren die Mitglieder der Gruppe aus
+        // der kompakten Wolke in ihr aufgefächertes Eigenlayout.
+        let expand = self.focus.map_or(0.0, |_| {
+            let t = (self.focus_anim / 0.9).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        });
+        let positions: Vec<Vec3> = match self.focus {
+            Some(fg) if expand > 0.0 => {
+                let centroid = graph.groups[fg].centroid;
+                let mut effective = graph.positions.clone();
+                for &i in &graph.groups[fg].members {
+                    let target = centroid.add(graph.local_positions[i]);
+                    effective[i] = graph.positions[i].add(target.sub(graph.positions[i]).scale(expand));
+                }
+                effective
+            }
+            _ => graph.positions.clone(),
+        };
+        let projected: Vec<Option<Projected>> = positions
             .iter()
             .map(|p| project_point(*p, &self.camera))
             .collect();
@@ -182,7 +199,7 @@ impl KnowledgeGraphTab {
             hovered_node = self.draw_focused_members(&scene, graph, fg);
             let group = &graph.groups[fg];
             if let Some((hub, ps, _)) = hubs[fg] {
-                let ring = group.radius * ps * zoom * 1.12;
+                let ring = group.focus_radius * ps * (self.camera.focal_length / self.camera.distance) * zoom * 1.12;
                 painter.circle_stroke(hub, ring, Stroke::new(1.0_f32, with_alpha(holo_color(fg), 45)));
                 painter.text(
                     hub + Vec2::new(0.0, -ring - 6.0),
@@ -377,6 +394,7 @@ impl KnowledgeGraphTab {
         let threshold = degrees.get(group.members.len() / 5).copied().unwrap_or(0).max(2);
         let is_key = |i: usize| graph.nodes[i].file_type == "dir" || graph.degree[i] >= threshold;
 
+        let mut placed: Vec<egui::Rect> = Vec::new();
         let mut order: Vec<usize> = group.members.clone();
         order.sort_by(|&i, &j| {
             let depth = |n: usize| projected[n].as_ref().map_or(f32::MAX, |p| p.depth);
@@ -390,30 +408,45 @@ impl KnowledgeGraphTab {
             let base = if key {
                 5.0 + 5.0 * (graph.degree[i] as f32 / graph.max_degree as f32)
             } else {
-                2.2
+                3.2
             };
-            let radius = (base * ps * zoom.sqrt()).clamp(1.5, 24.0);
-            if pointer.is_some_and(|ptr| ptr.distance(screen) <= radius + 3.0) {
+            let radius = (base * ps * zoom.sqrt()).clamp(2.0, 26.0);
+            if pointer.is_some_and(|ptr| ptr.distance(screen) <= radius + 5.0) {
                 hovered = Some(i);
             }
             let is_hover = hovered == Some(i);
             let selected = self.selected_node == Some(i);
             if key || is_hover || selected {
-                let strength = 0.22 + if is_hover || selected { 1.3 } else { 0.0 };
-                draw_node_glow(painter, screen, radius, color, strength);
+                let strength = 0.16 + if is_hover || selected { 1.3 } else { 0.0 };
+                draw_node_glow(painter, screen, radius.min(7.0), color, strength);
             }
             painter.circle_filled(screen, radius, if key { color } else { with_alpha(color, 170) });
             if is_hover || selected {
                 painter.circle_stroke(screen, radius + 2.5, Stroke::new(1.6_f32, Color32::WHITE));
             }
             if key || is_hover || selected || zoom > 4.5 {
-                painter.text(
-                    screen + Vec2::new(radius + 4.0, -radius),
-                    egui::Align2::LEFT_BOTTOM,
-                    &graph.nodes[i].label,
-                    egui::FontId::proportional(if key { 12.0 } else { 10.5 }),
-                    with_alpha(TEXT, if is_hover || selected { 255 } else { 210 }),
+                let font = egui::FontId::proportional(if key { 12.0 } else { 10.5 });
+                let anchor = screen + Vec2::new(radius + 5.0, -radius + 1.0);
+                let galley = painter.layout_no_wrap(graph.nodes[i].label.clone(), font, Color32::WHITE);
+                let rect = egui::Rect::from_min_size(
+                    Pos2::new(anchor.x, anchor.y - galley.size().y),
+                    galley.size(),
                 );
+                // Überlappende Beschriftungen weglassen (Hover/Auswahl immer zeigen).
+                let forced = is_hover || selected;
+                if forced || !placed.iter().any(|r| r.intersects(rect.expand(1.0))) {
+                    placed.push(rect);
+                    painter.galley(rect.min + Vec2::new(1.0, 1.0), galley.clone(), Color32::from_rgba_unmultiplied(0, 0, 0, 200));
+                    painter.galley(
+                        rect.min,
+                        painter.layout_no_wrap(
+                            graph.nodes[i].label.clone(),
+                            egui::FontId::proportional(if key { 12.0 } else { 10.5 }),
+                            with_alpha(TEXT, if forced { 255 } else { 220 }),
+                        ),
+                        TEXT,
+                    );
+                }
             }
         }
         hovered
