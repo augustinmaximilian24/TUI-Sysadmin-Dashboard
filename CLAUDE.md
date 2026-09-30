@@ -274,6 +274,18 @@ Tab ist ein reiner Konsument einer externen, optionalen Datei.
       Overlay
 - [x] Tab-Umschalter im Header (Dashboard/Wissensgraph), Tab nur
       sichtbar wenn `knowledge_graph.enabled = true`
+- [x] Holo-Darstellung (2026-10-01, ersetzt die Glow-/Hyperkanten-Optik):
+      schwarzer Hintergrund, Communities als große Gruppen-Knoten
+      ("Ordner", Kugel mit Ring + Orbit-Punkt, Tiefenabdunklung), Mitglieder
+      nur als kleine Punkte; Klick auf eine Gruppe zoomt hinein
+      (`focus`-Zustand, Kamera-Easing in `update_focus_camera`) und zeigt
+      Unterordner/Hubs beschriftet; Esc, Klick ins Leere oder "← Übersicht"
+      zoomt zurück. Glas-Panels (Titel, Gruppenliste, Knoten-Detail) in
+      `gui/src/knowledge_graph/holo.rs`. Zoom geht auf den Mauszeiger,
+      rechte/mittlere Maustaste verschiebt, Doppelklick setzt zurück.
+      Zweite Instanz als Tab "Home-Übersicht" (`[home_overview]`, Quelle
+      `~/.local/share/homegraph/graph.json` aus `homegraph.py`).
+      Hyperkanten werden nicht mehr gezeichnet (Gruppen ersetzen sie).
 - [x] Visuell verifiziert: Tab rendert Knoten/Kanten/Hyperkanten korrekt
       und die automatische Rotation läuft sichtbar (Screenshot-Vergleich
       über zwei Zeitpunkte). Interaktive Maus-Drag-/Klick-Verifikation
