@@ -41,6 +41,12 @@ use logsentry_core::config::KnowledgeGraphConfig;
 /// 120 ms (8.3 Hz) sahen bei stetiger Rotation sichtbar ruckelig aus (unter
 /// der für flüssig wahrgenommene Bewegung nötigen Bildrate); 16 ms (~60 Hz)
 /// behebt das, ohne den Idle-Zustand des restlichen Dashboards zu berühren.
+/// Zoomstärke pro Scroll-Pixel (Faktor = e^(Pixel * Wert)).
+const SCROLL_ZOOM_PER_PIXEL: f32 = 0.003;
+
+/// Anzahl immer beschrifteter Knoten bei Zoom 1.0 (wächst mit Zoom²).
+const LABEL_BASE_COUNT: f32 = 14.0;
+
 const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Tableau-10-artige Palette, identisch zur Farbwahl in graphify's
@@ -347,21 +353,31 @@ impl KnowledgeGraphTab {
 
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
-        if response.dragged() {
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
+            // Rechte/mittlere Maustaste verschiebt die Ansicht.
+            let delta = response.drag_delta();
+            self.camera.pan_by(delta.x, delta.y);
+            self.last_interaction = now;
+        } else if response.dragged() {
             let delta = response.drag_delta();
             self.camera
                 .apply_drag(delta.x, delta.y, self.drag_sensitivity_deg_per_px);
             self.last_interaction = now;
         }
+        if response.double_clicked() {
+            self.camera.reset_view();
+        }
 
-        // Scrollen über dem Graphen zoomt (Kamera-Abstand), begrenzt auf
-        // einen sinnvollen Bereich, damit man weder in den Ursprung
-        // hineinzoomen noch den Graphen zu einem Punkt schrumpfen lassen
-        // kann.
-        if response.hovered() {
+        // Scrollen über dem Graphen zoomt auf die Mausposition (nicht auf
+        // die Mitte); die Grenzen stehen in `camera::MIN_ZOOM/MAX_ZOOM`.
+        if let Some(pointer) = response.hover_pos() {
             let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > f32::EPSILON {
-                self.camera.distance = (self.camera.distance - scroll).clamp(150.0, 2000.0);
+                let rel = pointer - rect.center();
+                self.camera
+                    .zoom_at(rel.x, rel.y, (scroll * SCROLL_ZOOM_PER_PIXEL).exp());
                 self.last_interaction = now;
             }
         }
@@ -395,7 +411,11 @@ impl KnowledgeGraphTab {
             .map(|p| project_point(*p, &self.camera))
             .collect();
 
-        let to_screen = |p: &Projected| Pos2::new(center.x + p.x, center.y - p.y);
+        let zoom = self.camera.zoom;
+        let (pan_x, pan_y) = (self.camera.pan_x, self.camera.pan_y);
+        let to_screen = |p: &Projected| {
+            Pos2::new(center.x + pan_x + p.x * zoom, center.y + pan_y - p.y * zoom)
+        };
 
         // Hyperkanten zuerst als transluzente konvexe Hülle über die
         // aktuell sichtbaren Mitglieder -- dieselbe visuelle Idee wie
@@ -521,7 +541,7 @@ impl KnowledgeGraphTab {
             let screen = to_screen(p);
             let perspective_scale = self.camera.distance / p.depth;
             let base_radius = 4.0 + 8.0 * (graph.degree[idx] as f32 / graph.max_degree as f32);
-            let radius = (base_radius * perspective_scale).clamp(1.5, 26.0);
+            let radius = (base_radius * perspective_scale * zoom.sqrt()).clamp(1.5, 34.0);
 
             if let Some(pointer) = pointer {
                 if pointer.distance(screen) <= radius + 3.0 {
@@ -547,6 +567,28 @@ impl KnowledgeGraphTab {
             painter.circle_filled(screen, radius, color);
             if is_selected || is_hovered_now {
                 painter.circle_stroke(screen, radius + 2.0, Stroke::new(2.0_f32, Color32::WHITE));
+            }
+        }
+
+        // Beschriftung: die am stärksten verbundenen Knoten immer, beim
+        // Hineinzoomen quadratisch mehr -- so bleibt der Überblick lesbar
+        // und Details erscheinen erst, wenn Platz dafür da ist.
+        let mut by_degree: Vec<usize> = (0..graph.nodes.len()).collect();
+        by_degree.sort_by_key(|&i| std::cmp::Reverse(graph.degree[i]));
+        let label_budget = (LABEL_BASE_COUNT * zoom * zoom) as usize;
+        for &idx in by_degree.iter().take(label_budget) {
+            if hovered == Some(idx) {
+                continue;
+            }
+            if let Some(p) = &projected[idx] {
+                let depth_fade = (self.camera.distance / p.depth).clamp(0.35, 1.0);
+                painter.text(
+                    to_screen(p) + egui::vec2(8.0, -8.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    &graph.nodes[idx].label,
+                    egui::FontId::proportional(11.0),
+                    Color32::from_white_alpha((200.0 * depth_fade) as u8),
+                );
             }
         }
 

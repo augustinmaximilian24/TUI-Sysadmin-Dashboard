@@ -39,7 +39,19 @@ pub struct Camera {
     /// Brennweite für die perspektivische Projektion (größer = weniger
     /// Verzerrung/Zoom).
     pub focal_length: f32,
+    /// Gleichmäßiger 2D-Zoomfaktor auf das projizierte Bild (1.0 = Start).
+    /// Getrennt vom Kamera-`distance`, damit das Zoomen auf den Mauszeiger
+    /// zentriert werden kann (siehe [`Camera::zoom_at`]).
+    pub zoom: f32,
+    /// Bildschirm-Verschiebung (Pixel) relativ zur Mitte des Zeichenbereichs.
+    pub pan_x: f32,
+    pub pan_y: f32,
 }
+
+/// Grenzen des 2D-Zooms: weit genug heraus für den ganzen Graphen, weit
+/// genug hinein, um einzelne Knoten zu lesen.
+pub const MIN_ZOOM: f32 = 0.25;
+pub const MAX_ZOOM: f32 = 12.0;
 
 impl Camera {
     pub fn new(distance: f32, focal_length: f32) -> Self {
@@ -48,7 +60,34 @@ impl Camera {
             pitch: 0.0,
             distance,
             focal_length,
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
         }
+    }
+
+    /// Zoomt um `factor` und hält dabei den Bildpunkt unter dem Mauszeiger
+    /// (`rel_x`/`rel_y` in Pixeln relativ zur Mitte des Zeichenbereichs)
+    /// an derselben Stelle.
+    pub fn zoom_at(&mut self, rel_x: f32, rel_y: f32, factor: f32) {
+        let new_zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+        let ratio = new_zoom / self.zoom;
+        self.pan_x = rel_x - (rel_x - self.pan_x) * ratio;
+        self.pan_y = rel_y - (rel_y - self.pan_y) * ratio;
+        self.zoom = new_zoom;
+    }
+
+    /// Verschiebt die Ansicht um `dx`/`dy` Pixel.
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        self.pan_x += dx;
+        self.pan_y += dy;
+    }
+
+    /// Setzt Zoom und Verschiebung zurück.
+    pub fn reset_view(&mut self) {
+        self.zoom = 1.0;
+        self.pan_x = 0.0;
+        self.pan_y = 0.0;
     }
 
     /// Führt die automatische horizontale Rotation um `degrees_per_sec *
@@ -153,6 +192,31 @@ mod tests {
             near.x.abs() > far.x.abs(),
             "naeherer Punkt sollte weiter aussen liegen"
         );
+    }
+
+    #[test]
+    fn zoom_at_haelt_punkt_unter_dem_mauszeiger_fest() {
+        let mut camera = Camera::new(500.0, 800.0);
+        camera.pan_by(30.0, -20.0);
+        // Bildschirmposition eines projizierten Punktes v vor/nach dem Zoom.
+        let v = (40.0_f32, 25.0_f32);
+        let screen = |c: &Camera| (c.pan_x + c.zoom * v.0, c.pan_y + c.zoom * v.1);
+        let (sx, sy) = screen(&camera);
+        camera.zoom_at(sx, sy, 2.5);
+        let (nx, ny) = screen(&camera);
+        assert!((nx - sx).abs() < 1e-3 && (ny - sy).abs() < 1e-3, "{nx},{ny} vs {sx},{sy}");
+        assert!((camera.zoom - 2.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn zoom_wird_begrenzt_und_reset_stellt_ursprung_her() {
+        let mut camera = Camera::new(500.0, 800.0);
+        camera.zoom_at(10.0, 10.0, 1000.0);
+        assert!((camera.zoom - MAX_ZOOM).abs() < 1e-5);
+        camera.zoom_at(10.0, 10.0, 1e-6);
+        assert!((camera.zoom - MIN_ZOOM).abs() < 1e-5);
+        camera.reset_view();
+        assert_eq!((camera.zoom, camera.pan_x, camera.pan_y), (1.0, 0.0, 0.0));
     }
 
     #[test]
