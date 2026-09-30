@@ -35,6 +35,7 @@ use crate::theme;
 enum ActiveTab {
     Dashboard,
     KnowledgeGraph,
+    HomeOverview,
     Fleet,
     Devices,
 }
@@ -171,6 +172,9 @@ pub struct LogsentryApp {
     /// `None`, wenn `knowledge_graph.enabled = false` in der Konfiguration
     /// steht -- dann wird der Tab im Header gar nicht erst angeboten.
     knowledge_graph: Option<KnowledgeGraphTab>,
+    /// Zweite Graph-Ansicht "Home-Übersicht" (gleiche Darstellung, andere
+    /// `graph.json`); `None`, wenn `home_overview.enabled = false`.
+    home_overview: Option<KnowledgeGraphTab>,
     /// `None`, wenn `network_map.enabled = false` in der Konfiguration
     /// steht -- dann bleibt die Karte im Systemzustands-Panel einfach weg.
     network_map: Option<NetworkMapPanel>,
@@ -188,6 +192,7 @@ pub struct LogsentryApp {
 /// in `daemon/src/client_task.rs`).
 pub struct TabConfigs {
     pub knowledge_graph: logsentry_core::config::KnowledgeGraphConfig,
+    pub home_overview: logsentry_core::config::KnowledgeGraphConfig,
     pub network_map: logsentry_core::config::NetworkMapConfig,
     pub fleet: logsentry_core::config::FleetConfig,
     pub lan_devices_enabled: bool,
@@ -204,6 +209,10 @@ impl LogsentryApp {
             .knowledge_graph
             .enabled
             .then(|| KnowledgeGraphTab::new(&tabs.knowledge_graph, ctx));
+        let home_overview = tabs
+            .home_overview
+            .enabled
+            .then(|| KnowledgeGraphTab::new(&tabs.home_overview, ctx));
         let network_map = tabs
             .network_map
             .enabled
@@ -230,6 +239,7 @@ impl LogsentryApp {
             render: RenderSnapshot::default(),
             active_tab: ActiveTab::Dashboard,
             knowledge_graph,
+            home_overview,
             network_map,
             fleet,
             devices,
@@ -425,6 +435,7 @@ impl eframe::App for LogsentryApp {
                 self.draw_central(ctx);
             }
             ActiveTab::KnowledgeGraph => self.draw_knowledge_graph_tab(ctx),
+            ActiveTab::HomeOverview => self.draw_home_overview_tab(ctx),
             ActiveTab::Fleet => self.draw_fleet_tab(ctx),
             ActiveTab::Devices => self.draw_devices_tab(ctx),
         }
@@ -517,6 +528,7 @@ impl LogsentryApp {
                         // mit, was bei z. B. Wissensgraph + Geräte
                         // gleichzeitig doppelt sichtbar war.
                         if self.knowledge_graph.is_some()
+                            || self.home_overview.is_some()
                             || self.fleet.is_some()
                             || self.devices.is_some()
                         {
@@ -532,6 +544,13 @@ impl LogsentryApp {
                                     &mut self.active_tab,
                                     ActiveTab::KnowledgeGraph,
                                     "Wissensgraph",
+                                );
+                            }
+                            if self.home_overview.is_some() {
+                                ui.selectable_value(
+                                    &mut self.active_tab,
+                                    ActiveTab::HomeOverview,
+                                    "Home-Übersicht",
                                 );
                             }
                             if self.fleet.is_some() {
@@ -1055,6 +1074,15 @@ impl LogsentryApp {
     fn draw_knowledge_graph_tab(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default().show(ctx, |ui| {
             if let Some(tab) = &mut self.knowledge_graph {
+                tab.show(ui);
+            }
+        });
+    }
+
+    /// Zeigt die Home-Übersicht (zweiter Graph) wie den Wissensgraph-Tab.
+    fn draw_home_overview_tab(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if let Some(tab) = &mut self.home_overview {
                 tab.show(ui);
             }
         });

@@ -51,6 +51,9 @@ pub struct Config {
     pub quiet: QuietConfig,
     /// Darstellung des `graphify`-Wissensgraphen im eigenen GUI-Tab (Phase 11, optional).
     pub knowledge_graph: KnowledgeGraphConfig,
+    /// Zweite Graph-Ansicht "Home-Übersicht" (regelbasierter Graph von `~`,
+    /// erzeugt von `homegraph.py`), gleiche Darstellung wie der Wissensgraph.
+    pub home_overview: HomeOverviewConfig,
     /// Weltkarte mit den aktiven ausgehenden Verbindungen im
     /// Systemzustands-Panel (Phase 12, optional).
     pub network_map: NetworkMapConfig,
@@ -527,6 +530,27 @@ impl Default for KnowledgeGraphConfig {
     }
 }
 
+/// Quelle der zweiten Graph-Ansicht "Home-Übersicht". Darstellungs-
+/// parameter (Rotation, Layout) werden vom [`KnowledgeGraphConfig`]
+/// übernommen, damit beide Ansichten sich gleich anfühlen.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HomeOverviewConfig {
+    /// Schaltet die Ansicht ein/aus.
+    pub enabled: bool,
+    /// Pfad zur `graph.json` (`~` wird durch `$HOME` ersetzt).
+    pub graph_json_path: String,
+}
+
+impl Default for HomeOverviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            graph_json_path: "~/.local/share/homegraph/graph.json".to_string(),
+        }
+    }
+}
+
 /// Einstellungen für die Weltkarte im Systemzustands-Panel (Phase 12,
 /// optional): zeigt, in welche Länder gerade aktive ausgehende
 /// TCP-Verbindungen bestehen, per Länder-Zuordnung über die lokal
@@ -859,6 +883,16 @@ mod tests {
         assert_eq!(config.knowledge_graph.rotation_degrees_per_sec, 4.0);
         assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
         assert_eq!(config.knowledge_graph.layout_iterations, 300);
+    }
+
+    #[test]
+    fn home_overview_default_zeigt_auf_homegraph() {
+        let config = Config::default();
+        assert!(config.home_overview.enabled);
+        assert_eq!(
+            config.home_overview.graph_json_path,
+            "~/.local/share/homegraph/graph.json"
+        );
     }
 
     #[test]

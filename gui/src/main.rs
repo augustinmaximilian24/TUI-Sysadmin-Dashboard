@@ -67,6 +67,11 @@ fn main() -> anyhow::Result<()> {
     let config = load_config(&args);
     let socket_path = resolve_socket_path(&args, &config);
     let knowledge_graph_config = config.knowledge_graph.clone();
+    let home_overview_config = logsentry_core::config::KnowledgeGraphConfig {
+        enabled: config.home_overview.enabled,
+        graph_json_path: config.home_overview.graph_json_path.clone(),
+        ..config.knowledge_graph.clone()
+    };
     let network_map_config = config.network_map.clone();
     let fleet_config = config.fleet.clone();
     let lan_devices_enabled = config.lan_devices.enabled;
@@ -91,6 +96,7 @@ fn main() -> anyhow::Result<()> {
             let (state, outbound) = client::spawn_bridge(socket_path, cc.egui_ctx.clone());
             let tabs = app::TabConfigs {
                 knowledge_graph: knowledge_graph_config,
+                home_overview: home_overview_config,
                 network_map: network_map_config,
                 fleet: fleet_config,
                 lan_devices_enabled,
