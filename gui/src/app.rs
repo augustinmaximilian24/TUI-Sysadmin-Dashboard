@@ -481,55 +481,47 @@ impl LogsentryApp {
                             self.paused = !self.paused;
                         }
 
-                        // Tab-Umschalter nur anbieten, wenn der
-                        // Wissensgraph-Tab in der Konfiguration aktiviert
-                        // ist (Regel 16: kein leerer/kaputter Tab ohne
+                        // Tab-Umschalter nur anbieten, wenn mindestens ein
+                        // optionaler Tab in der Konfiguration aktiviert ist
+                        // (Regel 16: kein leerer/kaputter Tab ohne
                         // Datenquelle in der Standard-Konfiguration).
-                        if self.knowledge_graph.is_some() {
+                        // "Dashboard" erscheint dabei genau einmal, nicht
+                        // einmal pro optionalem Tab -- vorher brachte jeder
+                        // aktivierte Tab seinen eigenen Dashboard-Button
+                        // mit, was bei z. B. Wissensgraph + Geräte
+                        // gleichzeitig doppelt sichtbar war.
+                        if self.knowledge_graph.is_some()
+                            || self.fleet.is_some()
+                            || self.devices.is_some()
+                        {
                             ui.add_space(8.0);
                             ui.separator();
-                            ui.selectable_value(
-                                &mut self.active_tab,
-                                ActiveTab::KnowledgeGraph,
-                                "Wissensgraph",
-                            );
                             ui.selectable_value(
                                 &mut self.active_tab,
                                 ActiveTab::Dashboard,
                                 "Dashboard",
                             );
-                        }
-
-                        // Ebenso: Fleet-Tab nur anbieten, wenn in der
-                        // Konfiguration mindestens ein entfernter Host
-                        // eingetragen und aktiviert ist.
-                        if self.fleet.is_some() {
-                            ui.add_space(8.0);
-                            ui.separator();
-                            ui.selectable_value(&mut self.active_tab, ActiveTab::Fleet, "Fleet");
-                            ui.selectable_value(
-                                &mut self.active_tab,
-                                ActiveTab::Dashboard,
-                                "Dashboard",
-                            );
-                        }
-
-                        // Ebenso: Geräte-Tab nur anbieten, wenn die
-                        // LAN-Geräte-Erkennung in der Konfiguration
-                        // aktiviert ist.
-                        if self.devices.is_some() {
-                            ui.add_space(8.0);
-                            ui.separator();
-                            ui.selectable_value(
-                                &mut self.active_tab,
-                                ActiveTab::Devices,
-                                "Geräte",
-                            );
-                            ui.selectable_value(
-                                &mut self.active_tab,
-                                ActiveTab::Dashboard,
-                                "Dashboard",
-                            );
+                            if self.knowledge_graph.is_some() {
+                                ui.selectable_value(
+                                    &mut self.active_tab,
+                                    ActiveTab::KnowledgeGraph,
+                                    "Wissensgraph",
+                                );
+                            }
+                            if self.fleet.is_some() {
+                                ui.selectable_value(
+                                    &mut self.active_tab,
+                                    ActiveTab::Fleet,
+                                    "Fleet",
+                                );
+                            }
+                            if self.devices.is_some() {
+                                ui.selectable_value(
+                                    &mut self.active_tab,
+                                    ActiveTab::Devices,
+                                    "Geräte",
+                                );
+                            }
                         }
                     });
                 });
