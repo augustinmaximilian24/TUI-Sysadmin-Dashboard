@@ -16,7 +16,6 @@
 
 mod actions;
 mod client_task;
-mod fritzbox_capture;
 mod ingestion;
 mod lan_devices;
 mod pipeline;
@@ -327,13 +326,6 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&state),
     ));
 
-    // Ebenso ohne zu sicherenden Zustand; `run_fritzbox_capture` kehrt
-    // sofort zurück, wenn `fritzbox.enabled = false`.
-    let fritzbox_task = tokio::spawn(fritzbox_capture::run_fritzbox_capture(
-        config.fritzbox.clone(),
-        Arc::clone(&state),
-    ));
-
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let server_task = tokio::spawn(server::run(
         listener,
@@ -371,7 +363,6 @@ async fn main() -> anyhow::Result<()> {
 
     system_monitor.abort();
     lan_devices_task.abort();
-    fritzbox_task.abort();
     // Signalisiert dem Socket-Server das Herunterfahren (Goodbye(Shutdown)
     // an verbundene Clients, danach Entfernen der Socket-Datei -- Abschnitt
     // 4, Regel 6). `send` schlägt nur fehl, wenn `server_task` bereits

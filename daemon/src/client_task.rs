@@ -279,7 +279,6 @@ async fn run_session<R, W>(
     // (siehe Doc-Kommentar von `FrameReader`).
     let mut reader = logsentry_proto::FrameReader::new(reader);
     let mut anomaly_rx = state.subscribe_anomalies();
-    let mut lan_flow_rx = state.subscribe_lan_flows();
     let mut lan_devices_rx = state.subscribe_lan_devices();
     let mut snapshot_interval = make_snapshot_interval(&subscription, config);
     // Direkt nach dem Handshake den zuletzt bekannten Geräte-Bestand senden,
@@ -331,23 +330,6 @@ async fn run_session<R, W>(
                 }
                 let devices = (**lan_devices_rx.borrow_and_update()).clone();
                 send_message(&mut writer, &ServerMessage::LanDevices { devices }).await;
-            }
-            received = lan_flow_rx.recv(), if subscription.lan => {
-                match received {
-                    Ok(event) => {
-                        send_message(&mut writer, &ServerMessage::LanFlow((*event).clone())).await;
-                    }
-                    Err(broadcast::error::RecvError::Lagged(missed)) => {
-                        send_error(
-                            &mut writer,
-                            ErrorCode::Lagged { missed },
-                            "LAN-Verbindungen wurden verpasst, der Client hinkt hinterher",
-                            None,
-                        )
-                        .await;
-                    }
-                    Err(broadcast::error::RecvError::Closed) => return,
-                }
             }
             frame = reader.read_frame(MAX_CLIENT_LINE_BYTES) => {
                 match frame {

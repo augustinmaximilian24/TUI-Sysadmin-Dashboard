@@ -36,7 +36,6 @@ fn round_trip(raw: &str) -> String {
         "error",
         "goodbye",
         "lan_devices",
-        "lan_flow",
     ];
 
     if SERVER_ONLY_TAGS.contains(&tag) {

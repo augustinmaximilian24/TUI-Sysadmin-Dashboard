@@ -20,5 +20,4 @@
 {"type":"pong","nonce":123}
 {"type":"error","code":{"code":"lagged","missed":4},"message":"Broadcast-Puffer übergelaufen","request_id":null}
 {"type":"lan_devices","devices":[{"mac":"aa:bb:cc:dd:ee:ff","ip":"192.168.178.20","display_name":"iPhone von Max","first_seen_us":1726000000000000,"last_seen_us":1726000005000000}]}
-{"type":"lan_flow","src_mac":"aa:bb:cc:dd:ee:ff","dst_ip":"140.82.121.3","dst_port":443,"protocol":"tcp","timestamp_us":1726000006000000}
 {"type":"goodbye","reason":{"reason":"version_mismatch","expected":1,"got":2}}

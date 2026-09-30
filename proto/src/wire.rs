@@ -17,7 +17,12 @@ use serde::{Deserialize, Serialize};
 use crate::error::ProtoError;
 
 /// Aktuelle Protokollversion. Muss im Handshake exakt übereinstimmen.
-pub const PROTOCOL_VERSION: u16 = 1;
+///
+/// v1 -> v2 (2026-09-30): `ServerMessage::LanFlow`/`LanFlowEvent`/
+/// `LanProtocol` wieder entfernt (Fritz!Box-Paketmitschnitt verworfen,
+/// siehe `LanDeviceInfo`-Doku) -- Entfernen einer bestehenden Variante ist
+/// keine additive Änderung.
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Maximale Länge einer Zeile Client → Daemon in Bytes. Überschreitung:
 /// Verbindung trennen (siehe Abschnitt 4, Regel 3).
@@ -148,15 +153,18 @@ pub enum ServerMessage {
     LanDevices {
         devices: Vec<LanDeviceInfo>,
     },
-    /// Eine einzelne beobachtete ausgehende Verbindung eines LAN-Geräts
-    /// (Phase 12-Erweiterung), nur an Clients mit `Subscription::lan ==
-    /// true` gesendet.
-    LanFlow(LanFlowEvent),
 }
 
 /// Ein per ARP erkanntes Gerät im Heimnetz (Phase-12-Erweiterung um
-/// LAN-Geräte und Fritz!Box-Traffic). `mac` identifiziert das Gerät stabil
+/// LAN-Geräte-Anwesenheitserkennung). `mac` identifiziert das Gerät stabil
 /// auch über DHCP-Lease-Wechsel hinweg -- `ip` allein würde das nicht tun.
+///
+/// Ein Fritz!Box-Paketmitschnitt zur Zuordnung ausgehender Verbindungen
+/// wurde ausprobiert und wieder verworfen (siehe Commit-Historie
+/// 2026-09-29/30): die dauerhafte Vollspiegelung des LAN-Verkehrs drückte
+/// auf einer echten Box den Durchsatz von ~100 auf ~22 Mbit/s -- zu teuer
+/// für Consumer-Router-Hardware. Es gibt deshalb bewusst kein
+/// `LanFlowEvent`/`LanProtocol` (mehr): nur Anwesenheit, keine Ziele.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct LanDeviceInfo {
@@ -167,29 +175,6 @@ pub struct LanDeviceInfo {
     pub display_name: String,
     pub first_seen_us: u64,
     pub last_seen_us: u64,
-}
-
-/// Layer-4-Protokoll einer beobachteten Verbindung. Bewusst nur die zwei
-/// tatsächlich im Heimnetz relevanten Fälle (YAGNI) -- IPv6 ist wie beim
-/// bestehenden GeoIP-Modul bewusst out of scope für diesen ersten Wurf.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LanProtocol {
-    Tcp,
-    Udp,
-}
-
-/// Eine beobachtete ausgehende Verbindung eines LAN-Geräts ins Internet
-/// (Quelle: Fritz!Box-Paketmitschnitt). Nur Header-Felder (Ziel-IP/Port,
-/// Protokoll) -- keine Nutzdaten, kein DPI.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct LanFlowEvent {
-    pub src_mac: String,
-    pub dst_ip: String,
-    pub dst_port: u16,
-    pub protocol: LanProtocol,
-    pub timestamp_us: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
