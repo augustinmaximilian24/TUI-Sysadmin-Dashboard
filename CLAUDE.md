@@ -48,7 +48,6 @@ Heimserver (Haswell-Klasse, headless, später per TUI oder SSH).
 | Persistenz | `redb` (Entscheidung in Phase 4 begründet, siehe `docs/phase4-baselines.md` Abschnitt 6.1 -- reines Rust ohne C-Toolchain, kein `rusqlite`) |
 | Logging (eigenes) | `tracing` + `tracing-subscriber` |
 | Fehler | `anyhow` (Binary), `thiserror` (Bibliotheksteile) |
-| Fritz!Box-Paketmitschnitt (Phase-12-Erweiterung) | `reqwest` (ohne TLS-Backend, reines LAN-HTTP), `md-5` (AVM-Challenge-Response verlangt zwingend MD5), `futures-util` (nur `StreamExt` für `reqwest`s Byte-Stream) |
 
 Keine Abhängigkeit aufnehmen, ohne sie zu begründen. `ndarray` und `dashmap` sind
 für diesen Umfang **nicht** nötig.
@@ -285,50 +284,51 @@ Tab ist ein reiner Konsument einer externen, optionalen Datei.
       `camera::apply_drag`/`project_point` auf Ebene der reinen
       Mathematik unit-getestet.
 
-**Phase 12 – Netzwerkkarte (nachträglich dokumentiert + erweitert um
-LAN-Geräte und Fritz!Box-Traffic)**
+**Phase 12 – Netzwerkkarte (nachträglich dokumentiert) + LAN-Geräte-
+Anwesenheitserkennung**
 
 Grundfunktion (3D-Weltkugel mit den eigenen ausgehenden Verbindungen dieser
 Maschine, GeoIP-Auflösung, Traceroute-Routen) existierte bereits im Code
 (`gui/src/network_map/`, `NetworkMapConfig`) und wurde dort selbst als
-"Phase 12" referenziert, stand aber nie in dieser Phasenliste. Nachträglich
-erweitert (Erweiterung außerhalb des ursprünglichen v1.0-Scopes) um: die
-Verbindungen anderer Geräte im Heimnetz zusätzlich zur eigenen Weltkugel
-zeigen, pro Gerät farbcodiert. Reine ARP-Anwesenheitserkennung liefert dafür
-keine Zielverbindungen -- deshalb zusätzlich der Fritz!Box-Paketmitschnitt
-als Traffic-Quelle. Läuft im **Daemon**, nicht wie der Rest von
-`network_map` GUI-seitig: die gewünschte Persistenz/Historie muss auch ohne
-offene GUI weiterlaufen (Daemon ist der 24/7-Teil, GUI nur ein Client,
-Abschnitt 4: "Diese Trennung ist verpflichtend").
+"Phase 12" referenziert, stand aber nie in dieser Phasenliste.
 
-- [x] `LanDevicesConfig`/`FritzboxConfig` (`core/src/config.rs`): beide
-      `enabled`-gated, Passwort bewusst nicht inline in der TOML sondern in
-      einer separaten Datei mit restriktiven Rechten (`password_file`)
+Erweitert (außerhalb des ursprünglichen v1.0-Scopes) um reine
+LAN-Geräte-Anwesenheitserkennung. **Ein Fritz!Box-Paketmitschnitt zur
+Zuordnung von Zielverbindungen wurde gebaut, gegen eine echte Box getestet
+und wieder vollständig verworfen** (2026-09-29/30): die dauerhafte
+Vollspiegelung des kompletten LAN-Verkehrs über die eingebaute
+Diagnose-Funktion der Box drückte den gemessenen Durchsatz von ~100 Mbit/s
+auf ~22 Mbit/s (reproduzierbar durch Deaktivieren/Reaktivieren im
+Live-Betrieb bestätigt) -- vermutlich CPU-Last auf der Box durch die
+Pflicht, jedes Paket zusätzlich zu spiegeln. Zu teuer für Consumer-Router-
+Hardware, kein Software-Bug auf unserer Seite. Es gibt deshalb bewusst kein
+`FritzboxConfig`/`fritzbox_capture.rs`/`LanFlowEvent`/`LanProtocol` (mehr) --
+nur Anwesenheit (`LanDeviceInfo`), keine Ziele. `PROTOCOL_VERSION` deshalb
+auf 2 erhöht (Entfernen einer bestehenden Wire-Variante ist keine additive
+Änderung).
+
+Läuft im **Daemon**, nicht wie der Rest von `network_map` GUI-seitig: die
+gewünschte Historie soll auch ohne offene GUI weiterlaufen (Daemon ist der
+24/7-Teil, GUI nur ein Client, Abschnitt 4: "Diese Trennung ist
+verpflichtend").
+
+- [x] `LanDevicesConfig` (`core/src/config.rs`): `enabled`-gated,
+      ARP-Scan-Intervall, optionaler `nmap`-Ping-Sweep
 - [x] LAN-Geräte-Erkennung (`daemon/src/lan_devices.rs`): periodischer
       `ip neigh show`-Scan, optionaler `nmap -sn`-Sweep davor, best-effort
       mDNS-Namensauflösung (`avahi-resolve-address`), Bestand über MAC
       identifiziert (DHCP-Lease-stabil), Regel-18-Obergrenze + Pruning
-- [x] Fritz!Box-Paketmitschnitt (`daemon/src/fritzbox_capture.rs`):
-      `login_sid.lua`-Login (MD5-Challenge-Response; PBKDF2/Fritz!OS 7.25+
-      erkannt und klar gemeldet statt falsch berechnet, siehe `# ponytail`
-      im Modul), `/cgi-bin/capture_notimeout`-Stream, handgeschriebener
-      pcap-Parser (nur IPv4, dieselbe bewusste Grenze wie beim bestehenden
-      GeoIP-Modul), Flows nur für bekannte LAN-Geräte und nur mit
-      öffentlichem Ziel (kein internes Netzwerk-Rauschen)
 - [x] Protokollerweiterung (`proto/src/wire.rs`): additive
-      `ServerMessage::LanDevices`/`LanFlow`, `Subscription.lan` (Fleet-Tab-
+      `ServerMessage::LanDevices`, `Subscription.lan` (Fleet-Tab-
       Verbindungen setzen das bewusst nie), Golden-Fixture
-      (`wire_v1.jsonl`) um beide neuen Varianten ergänzt
-- [x] Farbcodierung + Legende (`gui/src/network_map/mod.rs`):
-      `ConnectionPoint` um `color` erweitert, eigene Verbindungen bleiben
-      `theme::ACCENT` ("Dieser PC"), LAN-Geräte bekommen eine deterministische
-      Farbe aus einer festen Palette (Seed: MAC-Adresse); Legende unterhalb
-      der Verbindungsliste
-- [ ] Manuell verifiziert: Fritz!Box-Zugangsdaten + Interface-Kennung
-      eingerichtet, Daemon-Log zeigt erfolgreichen Login und laufenden
-      Mitschnitt, GUI zeigt mindestens ein zweites Gerät farbig auf der
-      Weltkugel, falsches Passwort führt zu klarer Fehlermeldung statt
-      Absturz
+      (`wire_v1.jsonl`) ergänzt
+- [x] Eigener **Geräte-Tab** (`gui/src/devices.rs`, Header-Button "Geräte"
+      in `app.rs`): Liste bekannter LAN-Geräte (Name, IP, MAC, zuletzt
+      gesehen), nur sichtbar wenn `lan_devices.enabled = true`. Bewusst
+      kein Bezug zur Weltkugel -- Anwesenheit hat keine Zielverbindung, die
+      sich dort sinnvoll einzeichnen ließe.
+- [x] Manuell verifiziert: ARP-Erkennung läuft im Live-Betrieb, Geräte-Tab
+      zeigt Geräte mit Namen/IP/MAC an.
 
 **Phase 13 – Fleet-Tab (Multi-Host-Übersicht, read-only, außerhalb des
 ursprünglichen v1.0-Scopes)**
