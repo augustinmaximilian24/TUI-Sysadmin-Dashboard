@@ -38,10 +38,17 @@ fn parse_ip_neigh(output: &str) -> Vec<(String, String)> {
         .lines()
         .filter_map(|line| {
             let tokens: Vec<&str> = line.split_whitespace().collect();
-            let ip = (*tokens.first()?).to_string();
+            let ip_text = *tokens.first()?;
+            // Nur IPv4 (dieselbe bewusste Grenze wie beim GeoIP-Modul) --
+            // `ip neigh show` listet IPv6-Nachbarn (fe80::.../globale
+            // Adressen) in eigenen Zeilen mit derselben MAC wie ihr
+            // IPv4-Gegenstück. Ohne diesen Filter überschreibt je nach
+            // Zeilenreihenfolge eine IPv6-Zeile die zuvor gemerkte
+            // IPv4-Adresse desselben Geräts in `DeviceRegistry::observe`.
+            ip_text.parse::<std::net::Ipv4Addr>().ok()?;
             let mac_idx = tokens.iter().position(|&t| t == "lladdr")? + 1;
             let mac = (*tokens.get(mac_idx)?).to_lowercase();
-            Some((ip, mac))
+            Some((ip_text.to_string(), mac))
         })
         .collect()
 }
@@ -221,6 +228,22 @@ mod tests {
         assert_eq!(
             parse_ip_neigh(output),
             vec![("192.168.178.20".to_string(), "aa:bb:cc:dd:ee:ff".to_string())]
+        );
+    }
+
+    #[test]
+    fn parse_ip_neigh_ignoriert_ipv6_zeilen_desselben_geraets() {
+        // Reales Beispiel aus `ip neigh show`: dieselbe MAC taucht für ihre
+        // IPv4- und IPv6-Adressen in getrennten Zeilen auf. Ohne
+        // IPv4-Filter würde die IPv6-Zeile je nach Reihenfolge die zuvor
+        // gemerkte IPv4-Adresse überschreiben (siehe Moduldoc an der
+        // Filterstelle).
+        let output = "192.168.178.53 dev wlp13s0 lladdr d8:49:2f:ce:1f:b9 STALE\n\
+                       fe80::da49:2fff:fece:1fb9 dev wlp13s0 lladdr d8:49:2f:ce:1f:b9 STALE\n\
+                       2003:e9:5703:e00:da49:2fff:fece:1fb9 dev wlp13s0 lladdr d8:49:2f:ce:1f:b9 STALE\n";
+        assert_eq!(
+            parse_ip_neigh(output),
+            vec![("192.168.178.53".to_string(), "d8:49:2f:ce:1f:b9".to_string())]
         );
     }
 
