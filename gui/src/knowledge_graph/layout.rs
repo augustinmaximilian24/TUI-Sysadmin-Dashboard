@@ -80,6 +80,11 @@ pub fn fibonacci_sphere_point(i: usize, n: usize, radius: f32) -> Vec3 {
     )
 }
 
+/// Zusatzfaktor für die Abstoßung zwischen Knoten verschiedener Gruppen.
+const CROSS_GROUP_REPULSION: f32 = 4.0;
+/// Stärke, mit der ein Knoten zum Schwerpunkt seiner Gruppe gezogen wird.
+const CLUSTER_PULL: f32 = 0.05;
+
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutParams {
     pub iterations: usize,
@@ -127,10 +132,28 @@ impl LayoutParams {
 /// übersprungen statt zu einem Absturz zu führen (Regel 16) -- der Aufrufer
 /// filtert Kanten mit unbekannter Knoten-ID bereits vorher heraus, das ist
 /// hier nur eine zweite Absicherung.
-pub fn layout_3d(node_count: usize, edges: &[(usize, usize)], params: &LayoutParams) -> Vec<Vec3> {
-    let mut positions: Vec<Vec3> = (0..node_count)
-        .map(|i| fibonacci_sphere_point(i, node_count, params.initial_radius))
-        .collect();
+/// Berechnet 3D-Positionen mit optionaler Gruppenzugehörigkeit je Knoten
+/// (`group_of[i]` = Gruppen-Index): Knoten einer Gruppe werden zum
+/// Gruppenschwerpunkt gezogen, Knoten verschiedener Gruppen stoßen sich
+/// stärker ab -- dadurch entstehen klar getrennte "Ordner"-Wolken.
+pub fn layout_3d_grouped(
+    node_count: usize,
+    edges: &[(usize, usize)],
+    group_of: Option<&[usize]>,
+    params: &LayoutParams,
+) -> Vec<Vec3> {
+    // Startpositionen: bei Gruppen nach Gruppe sortiert auf der Kugel
+    // verteilt, damit Gruppenmitglieder schon am Anfang beieinander liegen.
+    let mut order: Vec<usize> = (0..node_count).collect();
+    if let Some(groups) = group_of.filter(|g| g.len() == node_count) {
+        order.sort_by_key(|&i| groups[i]);
+    }
+    let mut positions = vec![Vec3::ZERO; node_count];
+    for (rank, &i) in order.iter().enumerate() {
+        positions[i] = fibonacci_sphere_point(rank, node_count, params.initial_radius);
+    }
+    let group_of = group_of.filter(|g| g.len() == node_count);
+    let group_count = group_of.map_or(0, |g| g.iter().copied().max().map_or(0, |m| m + 1));
 
     if node_count < 2 {
         return positions;
@@ -144,9 +167,25 @@ pub fn layout_3d(node_count: usize, edges: &[(usize, usize)], params: &LayoutPar
                 let delta = positions[i].sub(positions[j]);
                 let dist_sq = delta.length_squared().max(1.0);
                 let dir = delta.normalized();
-                let magnitude = params.repulsion / dist_sq;
+                let mut magnitude = params.repulsion / dist_sq;
+                if group_of.is_some_and(|g| g[i] != g[j]) {
+                    magnitude *= CROSS_GROUP_REPULSION;
+                }
                 forces[i] = forces[i].add(dir.scale(magnitude));
                 forces[j] = forces[j].sub(dir.scale(magnitude));
+            }
+        }
+
+        if let Some(groups) = group_of {
+            let mut sums = vec![Vec3::ZERO; group_count];
+            let mut counts = vec![0usize; group_count];
+            for (i, &g) in groups.iter().enumerate() {
+                sums[g] = sums[g].add(positions[i]);
+                counts[g] += 1;
+            }
+            for (i, &g) in groups.iter().enumerate() {
+                let centroid = sums[g].scale(1.0 / counts[g].max(1) as f32);
+                forces[i] = forces[i].add(centroid.sub(positions[i]).scale(CLUSTER_PULL));
             }
         }
 
@@ -179,6 +218,22 @@ pub fn layout_3d(node_count: usize, edges: &[(usize, usize)], params: &LayoutPar
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn layout_3d(node_count: usize, edges: &[(usize, usize)], params: &LayoutParams) -> Vec<Vec3> {
+        layout_3d_grouped(node_count, edges, None, params)
+    }
+
+    #[test]
+    fn gruppiertes_layout_haelt_gruppen_naeher_zusammen_als_getrennt() {
+        // Zwei Dreiergruppen ohne Kanten dazwischen.
+        let edges = [(0, 1), (1, 2), (3, 4), (4, 5)];
+        let groups = [0, 0, 0, 1, 1, 1];
+        let positions =
+            layout_3d_grouped(6, &edges, Some(&groups), &LayoutParams::with_iterations(200));
+        let within = positions[0].sub(positions[2]).length();
+        let between = positions[0].sub(positions[5]).length();
+        assert!(between > within, "zwischen {between} <= innerhalb {within}");
+    }
 
     #[test]
     fn fibonacci_sphere_liegt_auf_erwartetem_radius() {

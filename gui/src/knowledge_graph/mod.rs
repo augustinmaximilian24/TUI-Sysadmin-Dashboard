@@ -19,6 +19,7 @@
 
 mod camera;
 mod data;
+mod holo;
 mod layout;
 
 use std::collections::HashMap;
@@ -26,11 +27,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use eframe::egui::{self, Color32, Pos2, Sense, Stroke};
+use eframe::egui::{self, Color32, Pos2, Sense};
 
-use camera::{project_point, Camera, Projected};
-use data::{GraphHyperedge, GraphJson, GraphNode};
-use layout::{layout_3d, LayoutParams, Vec3};
+use camera::{project_point, Camera};
+use data::{GraphJson, GraphNode};
+use layout::{layout_3d_grouped, LayoutParams, Vec3};
 
 use logsentry_core::config::KnowledgeGraphConfig;
 
@@ -44,38 +45,22 @@ use logsentry_core::config::KnowledgeGraphConfig;
 /// Zoomstärke pro Scroll-Pixel (Faktor = e^(Pixel * Wert)).
 const SCROLL_ZOOM_PER_PIXEL: f32 = 0.003;
 
-/// Anzahl immer beschrifteter Knoten bei Zoom 1.0 (wächst mit Zoom²).
-const LABEL_BASE_COUNT: f32 = 14.0;
+/// Dauer der Zoom-Animation beim Hineinzoomen in eine Gruppe (Sekunden).
+const FOCUS_ANIM_SECS: f32 = 1.2;
+
+/// Grundgeschwindigkeit der Drehphase (rad/s).
+const SPIN_SPEED_RAD_PER_SEC: f32 = 0.4;
+
+/// Wrap der Drehphase: 12 volle Umdrehungen. Alle Drehfaktoren (0,25 / 0,5 / 1,0)
+/// ergeben darauf ganzzahlige Vielfache von 2π -> kein sichtbarer Sprung.
+const SPIN_WRAP: f32 = std::f32::consts::TAU * 12.0;
 
 const REPAINT_INTERVAL: Duration = Duration::from_millis(16);
-
-/// Tableau-10-artige Palette, identisch zur Farbwahl in graphify's
-/// `graph.html` (`COMMUNITY_COLORS`), damit dieselbe Community in Tab und
-/// Browser-Ansicht dieselbe Farbe hat.
-const COMMUNITY_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0x4E, 0x79, 0xA7),
-    Color32::from_rgb(0xF2, 0x8E, 0x2B),
-    Color32::from_rgb(0xE1, 0x57, 0x59),
-    Color32::from_rgb(0x76, 0xB7, 0xB2),
-    Color32::from_rgb(0x59, 0xA1, 0x4F),
-    Color32::from_rgb(0xED, 0xC9, 0x48),
-    Color32::from_rgb(0xB0, 0x7A, 0xA1),
-    Color32::from_rgb(0xFF, 0x9D, 0xA7),
-];
-
-fn community_color(community: i64) -> Color32 {
-    let idx = community.rem_euclid(COMMUNITY_COLORS.len() as i64) as usize;
-    COMMUNITY_COLORS[idx]
-}
 
 /// Wie viele konzentrische Ringe ein Knoten-Glow benutzt. Mehr Ringe ergeben
 /// einen weicheren Verlauf, kosten aber mehr gezeichnete Shapes pro Frame --
 /// bei den paar Dutzend Knoten eines persönlichen Wissensgraphen unkritisch.
 const NODE_GLOW_RINGS: usize = 7;
-
-/// Wie viele zusätzliche, breiter werdende Passes eine "starke" Kante für
-/// ihren Glow bekommt.
-const EDGE_GLOW_PASSES: usize = 3;
 
 /// Geschwindigkeit des leichten Leucht-Pulses (rad/s). Bewusst langsam und
 /// dezent -- soll wie ein ruhig atmendes Leuchten wirken, nicht blinken.
@@ -126,11 +111,6 @@ struct ResolvedEdge {
     confidence: String,
 }
 
-struct ResolvedHyperedge {
-    label: String,
-    members: Vec<usize>,
-}
-
 /// Vollständig geladener und layouteter Graph -- alles, was `show()` zum
 /// Zeichnen eines Frames braucht, ohne erneut JSON zu parsen oder das
 /// Layout neu zu berechnen.
@@ -138,10 +118,99 @@ struct LoadedGraph {
     nodes: Vec<GraphNode>,
     positions: Vec<Vec3>,
     edges: Vec<ResolvedEdge>,
-    hyperedges: Vec<ResolvedHyperedge>,
     degree: Vec<u32>,
     max_degree: u32,
-    community_labels: HashMap<i64, String>,
+    /// Gruppen (= Communities, z. B. Projektordner) mit Schwerpunkt.
+    groups: Vec<Group>,
+    /// Gruppen-Index je Knoten.
+    group_of: Vec<usize>,
+    /// Zusammengefasste Kanten zwischen verschiedenen Gruppen
+    /// `(gruppe_a, gruppe_b, anzahl)` mit `gruppe_a < gruppe_b`.
+    group_edges: Vec<(usize, usize, u32)>,
+    /// Grobe Ausdehnung des Graphen (größter Abstand Schwerpunkt + Radius).
+    extent: f32,
+}
+
+/// Eine Community als "Ordner": Mitglieder, Schwerpunkt im Layout-Raum
+/// und Radius der Wolke.
+struct Group {
+    label: String,
+    members: Vec<usize>,
+    centroid: Vec3,
+    radius: f32,
+}
+
+/// Kürzt Pfad-/Langnamen für Beschriftungen: letzter Pfadteil, max. 26 Zeichen.
+fn short_label(raw: &str) -> String {
+    let last = raw.rsplit('/').next().unwrap_or(raw);
+    if last.chars().count() > 26 {
+        last.chars().take(25).collect::<String>() + "…"
+    } else {
+        last.to_string()
+    }
+}
+
+/// Zieht die Gruppen-Wolken auseinander und macht sie kompakter: Schwerpunkte
+/// um `GROUP_SPREAD` weiter auseinander, Mitglieder näher an ihrem
+/// Schwerpunkt (`GROUP_COMPACT`) -- so bleiben die "Ordner" in der
+/// Übersicht klar getrennt und lesbar.
+fn spread_groups(positions: &mut [Vec3], group_of: &[usize], group_count: usize) {
+    let mut sums = vec![Vec3::ZERO; group_count];
+    let mut counts = vec![0usize; group_count];
+    for (p, &g) in positions.iter().zip(group_of) {
+        sums[g] = sums[g].add(*p);
+        counts[g] += 1;
+    }
+    for (p, &g) in positions.iter_mut().zip(group_of) {
+        let centroid = sums[g].scale(1.0 / counts[g].max(1) as f32);
+        *p = centroid
+            .scale(GROUP_SPREAD)
+            .add(p.sub(centroid).scale(GROUP_COMPACT));
+    }
+}
+
+/// Faktor, um den die Gruppen-Schwerpunkte auseinandergezogen werden.
+const GROUP_SPREAD: f32 = 1.8;
+/// Faktor, um den die Mitglieder zum eigenen Gruppenschwerpunkt rücken.
+const GROUP_COMPACT: f32 = 0.7;
+
+fn build_groups(
+    nodes: &[GraphNode],
+    community_ids: &[i64],
+    group_of: &[usize],
+    positions: &[Vec3],
+    labels: &HashMap<i64, String>,
+) -> Vec<Group> {
+    community_ids
+        .iter()
+        .enumerate()
+        .map(|(g, &community)| {
+            let members: Vec<usize> = (0..nodes.len()).filter(|&i| group_of[i] == g).collect();
+            let sum = members.iter().fold(Vec3::ZERO, |acc, &i| acc.add(positions[i]));
+            let centroid = sum.scale(1.0 / members.len().max(1) as f32);
+            // 90. Perzentil statt Maximum: einzelne Ausreißer sollen weder den
+            // Ring noch den Fokus-Zoom bestimmen.
+            let mut distances: Vec<f32> = members
+                .iter()
+                .map(|&i| positions[i].sub(centroid).length())
+                .collect();
+            distances.sort_unstable_by(f32::total_cmp);
+            let radius = distances
+                .get(distances.len().saturating_sub(1) * 9 / 10)
+                .map_or(12.0, |d| (d * 1.15).max(12.0));
+            let label = labels
+                .get(&community)
+                .cloned()
+                .or_else(|| members.iter().find_map(|&i| nodes[i].community_name.clone()))
+                .map_or_else(|| format!("Community {community}"), |l| short_label(&l));
+            Group {
+                label,
+                members,
+                centroid,
+                radius,
+            }
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -203,45 +272,45 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
 
     let edge_pairs: Vec<(usize, usize)> = edges.iter().map(|e| (e.a, e.b)).collect();
     let params = LayoutParams::with_iterations(iterations);
-    let positions = layout_3d(raw.nodes.len(), &edge_pairs, &params);
-
-    let hyperedges: Vec<ResolvedHyperedge> = raw
-        .hyperedges
+    let mut community_ids: Vec<i64> = raw.nodes.iter().map(|n| n.community).collect();
+    community_ids.sort_unstable();
+    community_ids.dedup();
+    let group_of: Vec<usize> = raw
+        .nodes
         .iter()
-        .filter_map(resolve_hyperedge(&id_to_index))
+        .map(|n| community_ids.binary_search(&n.community).unwrap_or(0))
         .collect();
+    let mut positions = layout_3d_grouped(raw.nodes.len(), &edge_pairs, Some(&group_of), &params);
+    spread_groups(&mut positions, &group_of, community_ids.len());
 
     let community_labels = path.parent().map(load_community_labels).unwrap_or_default();
+    let groups = build_groups(&raw.nodes, &community_ids, &group_of, &positions, &community_labels);
+    let extent = groups
+        .iter()
+        .map(|g| g.centroid.length() + g.radius)
+        .fold(60.0_f32, f32::max);
+    let mut aggregated: HashMap<(usize, usize), u32> = HashMap::new();
+    for edge in &edges {
+        let (ga, gb) = (group_of[edge.a], group_of[edge.b]);
+        if ga != gb {
+            *aggregated.entry((ga.min(gb), ga.max(gb))).or_insert(0) += 1;
+        }
+    }
+    let mut group_edges: Vec<(usize, usize, u32)> =
+        aggregated.into_iter().map(|((a, b), n)| (a, b, n)).collect();
+    group_edges.sort_unstable();
 
     Ok(LoadedGraph {
         nodes: raw.nodes,
         positions,
         edges,
-        hyperedges,
         degree,
         max_degree,
-        community_labels,
+        groups,
+        group_of,
+        group_edges,
+        extent,
     })
-}
-
-fn resolve_hyperedge<'a>(
-    id_to_index: &'a HashMap<&'a str, usize>,
-) -> impl Fn(&GraphHyperedge) -> Option<ResolvedHyperedge> + 'a {
-    |h: &GraphHyperedge| {
-        let members: Vec<usize> = h
-            .nodes
-            .iter()
-            .filter_map(|id| id_to_index.get(id.as_str()).copied())
-            .collect();
-        if members.len() >= 3 {
-            Some(ResolvedHyperedge {
-                label: h.label.clone(),
-                members,
-            })
-        } else {
-            None
-        }
-    }
 }
 
 fn spawn_watcher(
@@ -292,9 +361,77 @@ pub struct KnowledgeGraphTab {
     /// gekoppelt statt an die Wanduhr, damit sie sich an dieselbe reaktive
     /// Repaint-Rate hält wie die Auto-Rotation.
     pulse_phase: f32,
+    /// Kontinuierliche Drehphase für Dekoration und Ringe. Läuft nahtlos:
+    /// der Wrap liegt bei einem ganzzahligen Vielfachen aller verwendeten
+    /// Drehfaktoren (siehe `SPIN_WRAP`), damit es keinen Sprung gibt.
+    spin_phase: f32,
+    /// Überschrift im Holo-Panel ("WISSENSGRAPH" / "HOME-ÜBERSICHT").
+    title: String,
+    /// Aktuell hineingezoomte Gruppe (Index in `LoadedGraph::groups`).
+    focus: Option<usize>,
+    /// Sekunden seit dem Fokussieren (steuert die Zoom-Animation).
+    focus_anim: f32,
+    /// Restdauer der Rückkehr-Animation nach dem Verlassen einer Gruppe.
+    return_anim: f32,
+    /// `extent` des Graphen, auf den Kamera-Abstand und Start-Zoom zuletzt
+    /// angepasst wurden (0 = noch nicht).
+    fitted_extent: f32,
+    /// Start-Zoom, bei dem der ganze Graph sichtbar ist (Ziel der Rückkehr).
+    fit_zoom: f32,
 }
 
 impl KnowledgeGraphTab {
+    /// Setzt die Überschrift des Holo-Panels.
+    pub fn with_title(mut self, title: &str) -> Self {
+        self.title = title.to_string();
+        self
+    }
+
+    fn focus_group(&mut self, group: usize) {
+        self.focus = Some(group);
+        self.focus_anim = 0.0;
+        self.selected_node = None;
+    }
+
+    fn unfocus(&mut self) {
+        if self.focus.take().is_some() {
+            self.return_anim = 1.2;
+        }
+        self.selected_node = None;
+    }
+
+    /// Fährt die Kamera weich auf die fokussierte Gruppe (Mitte + Zoom) bzw.
+    /// nach dem Verlassen zurück auf die Übersicht.
+    fn update_focus_camera(&mut self, graph: &LoadedGraph, rect: egui::Rect, dt: f32, idle: bool) {
+        let ease = 1.0 - (-dt * 6.0).exp();
+        if let Some(g) = self.focus {
+            self.focus_anim += dt;
+            let animating = self.focus_anim < FOCUS_ANIM_SECS;
+            // Nach der Animation nur nachführen, solange die Ansicht von
+            // selbst rotiert -- bei manuellem Zoomen/Verschieben bleibt sie
+            // wo der Benutzer sie hingelegt hat.
+            if !animating && !idle {
+                return;
+            }
+            let group = &graph.groups[g];
+            if let Some(p) = project_point(group.centroid, &self.camera) {
+                let zoom = self.camera.zoom;
+                self.camera.pan_x += (-p.x * zoom - self.camera.pan_x) * ease;
+                self.camera.pan_y += (p.y * zoom - self.camera.pan_y) * ease;
+                if animating {
+                    let rad_px = (group.radius * self.camera.distance / p.depth).max(8.0);
+                    let target = (0.40 * rect.width().min(rect.height()) / rad_px).clamp(1.2, 9.0);
+                    self.camera.zoom += (target - self.camera.zoom) * ease;
+                }
+            }
+        } else if self.return_anim > 0.0 {
+            self.return_anim -= dt;
+            self.camera.zoom += (self.fit_zoom - self.camera.zoom) * ease;
+            self.camera.pan_x -= self.camera.pan_x * ease;
+            self.camera.pan_y -= self.camera.pan_y * ease;
+        }
+    }
+
     /// Startet den Hintergrund-Watcher und liefert den Tab-Zustand.
     /// `~` in `config.graph_json_path` wird über `$HOME` aufgelöst (siehe
     /// [`data::expand_home`]) -- fehlt `$HOME`, bleibt der Pfad wörtlich
@@ -313,7 +450,12 @@ impl KnowledgeGraphTab {
         );
         Self {
             shared,
-            camera: Camera::new(420.0, 700.0),
+            camera: {
+                let mut camera = Camera::new(420.0, 700.0);
+                // Leicht von oben geneigt, damit die Drehung räumlich wirkt.
+                camera.pitch = 0.3;
+                camera
+            },
             last_interaction: Instant::now(),
             last_frame: Instant::now(),
             selected_node: None,
@@ -321,6 +463,13 @@ impl KnowledgeGraphTab {
             idle_resume_secs: config.idle_resume_secs.max(0.0),
             drag_sensitivity_deg_per_px: config.drag_sensitivity_deg_per_px,
             pulse_phase: 0.0,
+            spin_phase: 0.0,
+            title: "WISSENSGRAPH".to_string(),
+            focus: None,
+            focus_anim: 0.0,
+            return_anim: 0.0,
+            fitted_extent: 0.0,
+            fit_zoom: 1.0,
         }
     }
 
@@ -330,6 +479,7 @@ impl KnowledgeGraphTab {
         self.last_frame = now;
         self.pulse_phase = (self.pulse_phase + dt * PULSE_SPEED_RAD_PER_SEC)
             % (std::f32::consts::TAU);
+        self.spin_phase = (self.spin_phase + dt * SPIN_SPEED_RAD_PER_SEC) % SPIN_WRAP;
 
         let (error, current) = {
             let guard = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
@@ -353,6 +503,18 @@ impl KnowledgeGraphTab {
 
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
+        // Kamera einmalig (und nach Graph-Änderungen) so einstellen, dass der
+        // ganze Graph in den Zeichenbereich passt.
+        if (graph.extent - self.fitted_extent).abs() > 1.0 {
+            self.fitted_extent = graph.extent;
+            self.camera.distance = (graph.extent * 2.4).max(300.0);
+            let projected_extent = graph.extent * self.camera.focal_length / self.camera.distance;
+            self.fit_zoom = (0.55 * rect.width().min(rect.height()) / projected_extent).clamp(0.5, 3.0);
+            self.camera.zoom = self.fit_zoom;
+            self.camera.pan_x = 0.0;
+            self.camera.pan_y = 0.0;
+        }
+
         if response.dragged_by(egui::PointerButton::Secondary)
             || response.dragged_by(egui::PointerButton::Middle)
         {
@@ -368,7 +530,25 @@ impl KnowledgeGraphTab {
         }
         if response.double_clicked() {
             self.camera.reset_view();
+            self.fitted_extent = 0.0; // beim nächsten Frame neu einpassen
+            self.focus = None;
+            self.return_anim = 0.0;
         }
+        if self.focus.is_some_and(|g| g >= graph.groups.len()) {
+            self.focus = None;
+        }
+        if self.selected_node.is_some_and(|n| n >= graph.nodes.len()) {
+            self.selected_node = None;
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if self.selected_node.is_some() {
+                self.selected_node = None;
+            } else {
+                self.unfocus();
+            }
+        }
+        let idle = now.duration_since(self.last_interaction).as_secs_f32() >= self.idle_resume_secs;
+        self.update_focus_camera(&graph, rect, dt, idle);
 
         // Scrollen über dem Graphen zoomt auf die Mausposition (nicht auf
         // die Mitte); die Grenzen stehen in `camera::MIN_ZOOM/MAX_ZOOM`.
@@ -395,357 +575,11 @@ impl KnowledgeGraphTab {
         ui.ctx().request_repaint_after(REPAINT_INTERVAL);
     }
 
-    fn draw_graph(
-        &mut self,
-        ui: &mut egui::Ui,
-        rect: egui::Rect,
-        response: &egui::Response,
-        graph: &LoadedGraph,
-    ) {
-        let painter = ui.painter_at(rect);
-        let center = rect.center();
-
-        let projected: Vec<Option<Projected>> = graph
-            .positions
-            .iter()
-            .map(|p| project_point(*p, &self.camera))
-            .collect();
-
-        let zoom = self.camera.zoom;
-        let (pan_x, pan_y) = (self.camera.pan_x, self.camera.pan_y);
-        let to_screen = |p: &Projected| {
-            Pos2::new(center.x + pan_x + p.x * zoom, center.y + pan_y - p.y * zoom)
-        };
-
-        // Hyperkanten zuerst als transluzente konvexe Hülle über die
-        // aktuell sichtbaren Mitglieder -- dieselbe visuelle Idee wie
-        // graphify's `graph.html` (dort per Canvas-Overlay über die
-        // Live-Pixelpositionen).
-        for hyperedge in &graph.hyperedges {
-            let points: Vec<Pos2> = hyperedge
-                .members
-                .iter()
-                .filter_map(|&idx| projected.get(idx).and_then(|p| p.as_ref()))
-                .map(to_screen)
-                .collect();
-            if points.len() < 3 {
-                continue;
-            }
-            let hull = convex_hull(&points);
-            if hull.len() >= 3 {
-                let centroid =
-                    hull.iter().fold(Pos2::ZERO, |acc, p| acc + p.to_vec2()) / hull.len() as f32;
-                // Weicher Außenrand: dieselbe Hülle mehrfach mit
-                // wachsender Breite und schwindender Deckkraft nachziehen,
-                // bevor die eigentliche Füllung darübergezeichnet wird.
-                for pass in (1..=3).rev() {
-                    let alpha = (26 / pass) as u8;
-                    painter.add(egui::Shape::closed_line(
-                        hull.clone(),
-                        Stroke::new(
-                            pass as f32 * 2.5,
-                            Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, alpha),
-                        ),
-                    ));
-                }
-                painter.add(egui::Shape::convex_polygon(
-                    hull,
-                    Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, 24),
-                    Stroke::new(
-                        1.0_f32,
-                        Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, 90),
-                    ),
-                ));
-                painter.text(
-                    centroid,
-                    egui::Align2::CENTER_CENTER,
-                    &hyperedge.label,
-                    egui::FontId::proportional(11.0),
-                    Color32::from_rgba_unmultiplied(0xC7, 0xC9, 0xFF, 180),
-                );
-            }
-        }
-
-        // Kanten nach Tiefe sortiert (grob, per Mittelpunkt) zeichnen,
-        // damit nähere Kanten weiter entfernte optisch überdecken.
-        let mut edge_order: Vec<usize> = (0..graph.edges.len()).collect();
-        edge_order.sort_by(|&i, &j| {
-            let depth = |idx: usize| -> f32 {
-                let e = &graph.edges[idx];
-                let da = projected[e.a].as_ref().map_or(f32::MAX, |p| p.depth);
-                let db = projected[e.b].as_ref().map_or(f32::MAX, |p| p.depth);
-                (da + db) / 2.0
-            };
-            depth(j)
-                .partial_cmp(&depth(i))
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for idx in edge_order {
-            let edge = &graph.edges[idx];
-            let (Some(pa), Some(pb)) = (&projected[edge.a], &projected[edge.b]) else {
-                continue;
-            };
-            let extracted = edge.confidence == "EXTRACTED";
-            let alpha = if extracted { 140 } else { 60 };
-            let width: f32 = if extracted { 1.6 } else { 1.0 };
-            let a = to_screen(pa);
-            let b = to_screen(pb);
-
-            // Nur verlässlich extrahierte Kanten bekommen einen Glow --
-            // sonst verschwimmt der Graph bei vielen schwachen Kanten zu
-            // einem einzigen Nebel.
-            if extracted {
-                let glow_color = blend_color(
-                    community_color(graph.nodes[edge.a].community),
-                    community_color(graph.nodes[edge.b].community),
-                );
-                let pulse = 0.75 + 0.25 * self.pulse_phase.sin();
-                for pass in (1..=EDGE_GLOW_PASSES).rev() {
-                    let t = pass as f32 / EDGE_GLOW_PASSES as f32;
-                    let glow_alpha = (55.0 * pulse * (1.0 - t)).clamp(0.0, 255.0) as u8;
-                    painter.line_segment(
-                        [a, b],
-                        Stroke::new(
-                            width + pass as f32 * 3.0,
-                            Color32::from_rgba_unmultiplied(
-                                glow_color.r(),
-                                glow_color.g(),
-                                glow_color.b(),
-                                glow_alpha,
-                            ),
-                        ),
-                    );
-                }
-            }
-
-            painter.line_segment(
-                [a, b],
-                Stroke::new(width, Color32::from_rgba_unmultiplied(150, 156, 165, alpha)),
-            );
-        }
-
-        // Knoten nach Tiefe sortiert (fern -> nah) für einfaches
-        // Malerprinzip, damit nähere Knoten weiter entfernte verdecken.
-        let mut node_order: Vec<usize> = (0..graph.nodes.len()).collect();
-        node_order.sort_by(|&i, &j| {
-            let da = projected[i].as_ref().map_or(f32::MAX, |p| p.depth);
-            let db = projected[j].as_ref().map_or(f32::MAX, |p| p.depth);
-            db.partial_cmp(&da).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        let pointer = response.hover_pos();
-        let mut hovered: Option<usize> = None;
-
-        for &idx in &node_order {
-            let Some(p) = &projected[idx] else { continue };
-            let screen = to_screen(p);
-            let perspective_scale = self.camera.distance / p.depth;
-            let base_radius = 4.0 + 8.0 * (graph.degree[idx] as f32 / graph.max_degree as f32);
-            let radius = (base_radius * perspective_scale * zoom.sqrt()).clamp(1.5, 34.0);
-
-            if let Some(pointer) = pointer {
-                if pointer.distance(screen) <= radius + 3.0 {
-                    hovered = Some(idx);
-                }
-            }
-
-            let color = community_color(graph.nodes[idx].community);
-            let is_selected = self.selected_node == Some(idx);
-            let is_hovered_now = hovered == Some(idx);
-
-            // Basis-Glow: Hub-Knoten (hoher Grad) leuchten stärker, dazu
-            // ein leises, gleichmäßiges Pulsieren; Hover/Auswahl geben
-            // einen deutlichen zusätzlichen Flare.
-            let hub_boost = 0.5 + 0.9 * (graph.degree[idx] as f32 / graph.max_degree as f32);
-            let pulse = 0.85 + 0.15 * (self.pulse_phase + idx as f32 * 0.6).sin();
-            let mut glow_strength = hub_boost * pulse;
-            if is_selected || is_hovered_now {
-                glow_strength += 1.6;
-            }
-            draw_node_glow(&painter, screen, radius, color, glow_strength);
-
-            painter.circle_filled(screen, radius, color);
-            if is_selected || is_hovered_now {
-                painter.circle_stroke(screen, radius + 2.0, Stroke::new(2.0_f32, Color32::WHITE));
-            }
-        }
-
-        // Beschriftung: die am stärksten verbundenen Knoten immer, beim
-        // Hineinzoomen quadratisch mehr -- so bleibt der Überblick lesbar
-        // und Details erscheinen erst, wenn Platz dafür da ist.
-        let mut by_degree: Vec<usize> = (0..graph.nodes.len()).collect();
-        by_degree.sort_by_key(|&i| std::cmp::Reverse(graph.degree[i]));
-        let label_budget = (LABEL_BASE_COUNT * zoom * zoom) as usize;
-        for &idx in by_degree.iter().take(label_budget) {
-            if hovered == Some(idx) {
-                continue;
-            }
-            if let Some(p) = &projected[idx] {
-                let depth_fade = (self.camera.distance / p.depth).clamp(0.35, 1.0);
-                painter.text(
-                    to_screen(p) + egui::vec2(8.0, -8.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    &graph.nodes[idx].label,
-                    egui::FontId::proportional(11.0),
-                    Color32::from_white_alpha((200.0 * depth_fade) as u8),
-                );
-            }
-        }
-
-        if let Some(idx) = hovered {
-            if let Some(p) = &projected[idx] {
-                let screen = to_screen(p);
-                painter.text(
-                    screen + egui::vec2(10.0, -10.0),
-                    egui::Align2::LEFT_BOTTOM,
-                    &graph.nodes[idx].label,
-                    egui::FontId::proportional(13.0),
-                    Color32::WHITE,
-                );
-            }
-        }
-
-        if response.clicked() {
-            self.selected_node = hovered.or(None);
-        }
-
-        if let Some(idx) = self.selected_node {
-            self.draw_detail_overlay(ui, rect, graph, idx);
-        }
-    }
-
-    fn draw_detail_overlay(
-        &mut self,
-        ui: &mut egui::Ui,
-        rect: egui::Rect,
-        graph: &LoadedGraph,
-        idx: usize,
-    ) {
-        let node = &graph.nodes[idx];
-        let mut close = false;
-        egui::Area::new(egui::Id::new("knowledge_graph_detail"))
-            .fixed_pos(rect.left_bottom() + egui::vec2(12.0, -220.0))
-            .show(ui.ctx(), |ui| {
-                crate::theme::card(ui, |ui| {
-                    ui.set_max_width(320.0);
-                    ui.horizontal(|ui| {
-                        crate::theme::section_heading(ui, &node.label);
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                            if ui.small_button("×").clicked() {
-                                close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(4.0);
-                    let community_label = graph
-                        .community_labels
-                        .get(&node.community)
-                        .cloned()
-                        .unwrap_or_else(|| format!("Community {}", node.community));
-                    ui.label(
-                        egui::RichText::new(community_label).color(community_color(node.community)),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("Typ: {}", node.file_type))
-                            .color(crate::theme::TEXT_MUTED)
-                            .size(11.0),
-                    );
-                    if let Some(source) = &node.source_file {
-                        ui.label(
-                            egui::RichText::new(format!("Quelle: {source}"))
-                                .color(crate::theme::TEXT_MUTED)
-                                .size(11.0),
-                        );
-                    }
-                    if let Some(rationale) = &node.rationale {
-                        ui.add_space(6.0);
-                        ui.label(rationale);
-                    }
-
-                    let connections: Vec<(bool, &str, &GraphNode)> = graph
-                        .edges
-                        .iter()
-                        .filter_map(|edge| {
-                            if edge.a == idx {
-                                Some((true, edge.relation.as_str(), &graph.nodes[edge.b]))
-                            } else if edge.b == idx {
-                                Some((false, edge.relation.as_str(), &graph.nodes[edge.a]))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
-                    if !connections.is_empty() {
-                        ui.add_space(6.0);
-                        crate::theme::section_heading(ui, "Verbindungen");
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt("knowledge_graph_connections")
-                            .max_height(140.0)
-                            .show(ui, |ui| {
-                                for (outgoing, relation, other) in &connections {
-                                    let arrow = if *outgoing { "→" } else { "←" };
-                                    ui.label(format!("{arrow} {relation} {arrow} {}", other.label));
-                                }
-                            });
-                    }
-                });
-            });
-        if close {
-            self.selected_node = None;
-        }
-    }
-}
-
-/// Konvexe Hülle einer Punktmenge (Andrew's Monotone-Chain, wie im
-/// graphify-`graph.html`-Overlay für Hyperkanten). Liefert die Hülle im
-/// Uhrzeigersinn; bei weniger als 3 unterschiedlichen Punkten die
-/// Eingabe unverändert.
-fn convex_hull(points: &[Pos2]) -> Vec<Pos2> {
-    let mut pts: Vec<Pos2> = points.to_vec();
-    pts.sort_by(|a, b| {
-        a.x.partial_cmp(&b.x)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal))
-    });
-    pts.dedup_by(|a, b| (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4);
-    if pts.len() < 3 {
-        return pts;
-    }
-
-    fn cross(o: Pos2, a: Pos2, b: Pos2) -> f32 {
-        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
-    }
-
-    let mut lower: Vec<Pos2> = Vec::new();
-    for &p in &pts {
-        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
-            lower.pop();
-        }
-        lower.push(p);
-    }
-    let mut upper: Vec<Pos2> = Vec::new();
-    for &p in pts.iter().rev() {
-        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
-            upper.pop();
-        }
-        upper.push(p);
-    }
-    lower.pop();
-    upper.pop();
-    lower.extend(upper);
-    lower
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn community_color_wrappt_bei_vielen_communities() {
-        assert_eq!(community_color(0), community_color(8));
-        assert_eq!(community_color(3), COMMUNITY_COLORS[3]);
-    }
 
     #[test]
     fn glow_ring_wird_nach_aussen_schwaecher_und_groesser() {
@@ -803,8 +637,24 @@ mod tests {
         assert_eq!(loaded.edges.len(), 2);
         assert_eq!(loaded.degree, vec![1, 2, 1]);
         assert_eq!(loaded.max_degree, 2);
-        assert_eq!(loaded.hyperedges.len(), 1);
-        assert_eq!(loaded.hyperedges[0].members.len(), 3);
+        assert_eq!(loaded.groups.len(), 2);
+        assert_eq!(loaded.group_edges, vec![(0, 1, 1)]);
+        assert_eq!(loaded.groups[1].members, vec![1, 2]);
+    }
+
+    #[test]
+    fn spread_groups_vergroessert_gruppenabstand_und_verkleinert_wolken() {
+        let mut positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(100.0, 0.0, 0.0),
+            Vec3::new(110.0, 0.0, 0.0),
+        ];
+        spread_groups(&mut positions, &[0, 0, 1, 1], 2);
+        let inside = positions[1].sub(positions[0]).length();
+        let between = positions[2].sub(positions[0]).length();
+        assert!(inside < 10.0, "Wolke muss kompakter werden: {inside}");
+        assert!(between > 100.0, "Gruppen müssen weiter auseinander: {between}");
     }
 
     #[test]
@@ -824,25 +674,5 @@ mod tests {
         let loaded = load_and_layout(&path, 5).expect("laden trotz kaputter Kante");
         assert_eq!(loaded.nodes.len(), 1);
         assert!(loaded.edges.is_empty());
-    }
-
-    #[test]
-    fn convex_hull_von_quadrat_liefert_vier_ecken() {
-        let points = vec![
-            Pos2::new(0.0, 0.0),
-            Pos2::new(10.0, 0.0),
-            Pos2::new(10.0, 10.0),
-            Pos2::new(0.0, 10.0),
-            Pos2::new(5.0, 5.0), // innerer Punkt, darf nicht auf der Hülle landen
-        ];
-        let hull = convex_hull(&points);
-        assert_eq!(hull.len(), 4);
-        assert!(!hull.contains(&Pos2::new(5.0, 5.0)));
-    }
-
-    #[test]
-    fn convex_hull_mit_weniger_als_drei_punkten_gibt_eingabe_zurueck() {
-        let points = vec![Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)];
-        assert_eq!(convex_hull(&points), points);
     }
 }

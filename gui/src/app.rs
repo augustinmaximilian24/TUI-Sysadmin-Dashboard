@@ -208,11 +208,11 @@ impl LogsentryApp {
         let knowledge_graph = tabs
             .knowledge_graph
             .enabled
-            .then(|| KnowledgeGraphTab::new(&tabs.knowledge_graph, ctx));
+            .then(|| KnowledgeGraphTab::new(&tabs.knowledge_graph, ctx).with_title("WISSENSGRAPH"));
         let home_overview = tabs
             .home_overview
             .enabled
-            .then(|| KnowledgeGraphTab::new(&tabs.home_overview, ctx));
+            .then(|| KnowledgeGraphTab::new(&tabs.home_overview, ctx).with_title("HOME-ÜBERSICHT"));
         let network_map = tabs
             .network_map
             .enabled

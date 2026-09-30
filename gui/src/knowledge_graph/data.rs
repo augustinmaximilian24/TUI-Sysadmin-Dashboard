@@ -31,6 +31,9 @@ pub struct GraphNode {
     pub file_type: String,
     #[serde(default)]
     pub community: i64,
+    /// Klartextname der Community (von `homegraph.py`/graphify geliefert).
+    #[serde(default)]
+    pub community_name: Option<String>,
     #[serde(default)]
     pub rationale: Option<String>,
     #[serde(default)]
@@ -47,13 +50,6 @@ pub struct GraphEdge {
     pub confidence: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct GraphHyperedge {
-    #[serde(default)]
-    pub label: String,
-    pub nodes: Vec<String>,
-}
-
 /// Entspricht dem Wurzelobjekt von `graph.json`. `directed`, `multigraph`
 /// und das verschachtelte `graph`-Objekt (dessen `hyperedges` laut
 /// graphify-Quellcode byte-identisch zum Top-Level-Feld ist) werden nicht
@@ -64,8 +60,6 @@ pub struct GraphJson {
     pub nodes: Vec<GraphNode>,
     #[serde(default, rename = "links")]
     pub edges: Vec<GraphEdge>,
-    #[serde(default)]
-    pub hyperedges: Vec<GraphHyperedge>,
 }
 
 impl GraphJson {
