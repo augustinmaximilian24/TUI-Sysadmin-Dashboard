@@ -18,6 +18,7 @@ mod export;
 mod fleet;
 mod knowledge_graph;
 mod network_map;
+mod services;
 mod theme;
 
 use std::path::PathBuf;
@@ -75,6 +76,7 @@ fn main() -> anyhow::Result<()> {
         ..config.knowledge_graph.clone()
     };
     let network_map_config = config.network_map.clone();
+    let services_config = config.services.clone();
     let fleet_config = config.fleet.clone();
     let lan_devices_enabled = config.lan_devices.enabled;
 
@@ -100,6 +102,7 @@ fn main() -> anyhow::Result<()> {
                 knowledge_graph: knowledge_graph_config,
                 home_overview: home_overview_config,
                 network_map: network_map_config,
+                services: services_config,
                 fleet: fleet_config,
                 lan_devices_enabled,
             };

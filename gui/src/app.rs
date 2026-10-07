@@ -27,6 +27,7 @@ use crate::devices::DevicesTab;
 use crate::fleet::FleetTab;
 use crate::knowledge_graph::KnowledgeGraphTab;
 use crate::network_map::NetworkMapPanel;
+use crate::services::{self, ServicesMonitor, Status};
 use crate::theme;
 
 /// Welcher Tab gerade im Hauptbereich angezeigt wird (Phase 11: bisher gab
@@ -178,6 +179,11 @@ pub struct LogsentryApp {
     /// `None`, wenn `network_map.enabled = false` in der Konfiguration
     /// steht -- dann bleibt die Karte im Systemzustands-Panel einfach weg.
     network_map: Option<NetworkMapPanel>,
+    /// `None`, wenn `services.enabled = false` -- dann entfällt die Karte
+    /// "Eigene Dienste & Autostart" unter den Units.
+    services: Option<(ServicesMonitor, Vec<String>)>,
+    /// Schalter der Karte: auch Desktop-Infrastruktur zeigen.
+    services_show_all: bool,
     /// `None`, wenn `fleet.enabled = false` in der Konfiguration steht --
     /// dann wird der Tab im Header gar nicht erst angeboten.
     fleet: Option<FleetTab>,
@@ -194,6 +200,7 @@ pub struct TabConfigs {
     pub knowledge_graph: logsentry_core::config::KnowledgeGraphConfig,
     pub home_overview: logsentry_core::config::KnowledgeGraphConfig,
     pub network_map: logsentry_core::config::NetworkMapConfig,
+    pub services: logsentry_core::config::ServicesConfig,
     pub fleet: logsentry_core::config::FleetConfig,
     pub lan_devices_enabled: bool,
 }
@@ -217,6 +224,12 @@ impl LogsentryApp {
             .network_map
             .enabled
             .then(|| NetworkMapPanel::new(&tabs.network_map, ctx));
+        let services = tabs.services.enabled.then(|| {
+            (
+                ServicesMonitor::start(&tabs.services, ctx),
+                tabs.services.hide_prefixes.clone(),
+            )
+        });
         let fleet = tabs.fleet.enabled.then(|| FleetTab::new(&tabs.fleet, ctx));
         let devices = tabs
             .lan_devices_enabled
@@ -241,6 +254,8 @@ impl LogsentryApp {
             knowledge_graph,
             home_overview,
             network_map,
+            services,
+            services_show_all: false,
             fleet,
             devices,
         }
@@ -677,6 +692,45 @@ impl LogsentryApp {
                                             egui::RichText::new(format!(
                                                 "{}/{}",
                                                 unit.active_state, unit.sub_state
+                                            ))
+                                            .color(theme::TEXT_MUTED),
+                                        );
+                                    });
+                                }
+                            });
+                        }
+
+                        if let Some((monitor, hide_prefixes)) = &self.services {
+                            let snap = monitor.snapshot();
+                            ui.add_space(6.0);
+                            theme::card(ui, |ui| {
+                                theme::section_heading(ui, "Eigene Dienste & Autostart");
+                                ui.checkbox(
+                                    &mut self.services_show_all,
+                                    "Desktop-Infrastruktur zeigen",
+                                );
+                                ui.add_space(4.0);
+                                if let Some(error) = &snap.error {
+                                    ui.colored_label(theme::LEVEL_CRITICAL, error);
+                                }
+                                for entry in services::visible(
+                                    &snap.entries,
+                                    hide_prefixes,
+                                    self.services_show_all,
+                                ) {
+                                    let color = match entry.status {
+                                        Status::Running => theme::OK,
+                                        Status::Failed => theme::LEVEL_CRITICAL,
+                                        Status::NotRunning => theme::LEVEL_WARN,
+                                        Status::Idle => theme::TEXT_MUTED,
+                                    };
+                                    ui.horizontal(|ui| {
+                                        ui.colored_label(color, "●");
+                                        ui.label(&entry.name);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "{:?} · {}",
+                                                entry.kind, entry.detail
                                             ))
                                             .color(theme::TEXT_MUTED),
                                         );

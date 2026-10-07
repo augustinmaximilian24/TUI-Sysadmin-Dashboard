@@ -57,6 +57,9 @@ pub struct Config {
     /// Weltkarte mit den aktiven ausgehenden Verbindungen im
     /// Systemzustands-Panel (Phase 12, optional).
     pub network_map: NetworkMapConfig,
+    /// Karte "Eigene Dienste & Autostart" unter den Units im
+    /// Systemzustands-Panel (User-Services, Timer, Autostart; optional).
+    pub services: ServicesConfig,
     /// Read-only Übersicht mehrerer logsentry-Daemon-Instanzen im eigenen
     /// GUI-Tab (Phase 13, optional).
     pub fleet: FleetConfig,
@@ -578,6 +581,50 @@ impl Default for HomeOverviewConfig {
     }
 }
 
+/// Karte "Eigene Dienste & Autostart": zeigt die User-Services und -Timer
+/// (`systemctl --user`) sowie die Autostart-Einträge des Benutzers mit
+/// Laufstatus. Die GUI liest das selbst unter dem Benutzerkonto (Regel 7),
+/// der Daemon ist nicht beteiligt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ServicesConfig {
+    /// Schaltet die Karte ein/aus.
+    pub enabled: bool,
+    /// Abstand zwischen zwei Abfragen in Sekunden.
+    pub poll_interval_seconds: u64,
+    /// Namenspräfixe von Desktop-Infrastruktur, die standardmäßig
+    /// ausgeblendet wird (in der GUI per Schalter einblendbar).
+    pub hide_prefixes: Vec<String>,
+}
+
+impl Default for ServicesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            poll_interval_seconds: 5,
+            hide_prefixes: [
+                "gvfs-",
+                "xdg-",
+                "evolution-",
+                "dbus",
+                "dconf",
+                "gnome-",
+                "gcr-",
+                "gpg-agent",
+                "dirmngr",
+                "keyboxd",
+                "flatpak-",
+                "pk-",
+                "speech-dispatcher",
+                "obex",
+            ]
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        }
+    }
+}
+
 /// Default-Ausgabepfad von `logsentry-graphsync`, zugleich Default-Overlay
 /// beider Graph-Ansichten.
 pub const DEFAULT_GRAPH_SYNC_OUTPUT: &str = "~/.local/share/logsentry/graphsync/links.json";
@@ -1071,6 +1118,15 @@ mod tests {
         assert_eq!(config.knowledge_graph.rotation_degrees_per_sec, 4.0);
         assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
         assert_eq!(config.knowledge_graph.layout_iterations, 300);
+    }
+
+    #[test]
+    fn dienste_default_blendet_desktop_infrastruktur_aus() {
+        let config = Config::default();
+        assert!(config.services.enabled);
+        assert_eq!(config.services.poll_interval_seconds, 5);
+        assert!(config.services.hide_prefixes.contains(&"gvfs-".to_string()));
+        assert!(!config.services.hide_prefixes.iter().any(|p| "logsentry-graphsync.service".starts_with(p.as_str())));
     }
 
     #[test]
