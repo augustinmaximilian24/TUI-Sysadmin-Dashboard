@@ -279,6 +279,7 @@ struct GraphSources {
     base: PathBuf,
     overlay: Option<PathBuf>,
     overlay_adds_nodes: bool,
+    overlay_max_added_nodes: usize,
 }
 
 impl GraphSources {
@@ -312,7 +313,13 @@ fn load_sources(sources: &GraphSources, iterations: usize) -> Result<LoadedGraph
         (Err(err), false) => return Err(err),
     };
     if let Some(overlay) = overlay {
-        data::merge_overlay(&mut raw, overlay, sources.overlay_adds_nodes);
+        let max_added = if sources.overlay_adds_nodes {
+            sources.overlay_max_added_nodes
+        } else {
+            0
+        };
+        let stats = data::merge_overlay(&mut raw, overlay, max_added);
+        tracing::debug!(?stats, "Overlay eingemischt");
     }
     layout_graph(raw, sources.base.parent(), iterations)
 }
@@ -537,6 +544,7 @@ impl KnowledgeGraphTab {
             base: data::expand_home(&config.graph_json_path, home.as_deref()),
             overlay: (!overlay.is_empty()).then(|| data::expand_home(overlay, home.as_deref())),
             overlay_adds_nodes: config.overlay_adds_nodes,
+            overlay_max_added_nodes: config.overlay_max_added_nodes,
         };
         let shared = Arc::new(Mutex::new(Shared::default()));
         spawn_watcher(
@@ -793,6 +801,7 @@ mod tests {
             base: base.clone(),
             overlay: Some(overlay.clone()),
             overlay_adds_nodes: true,
+            overlay_max_added_nodes: 100,
         };
         // Beides fehlt -> Fehler der Basis.
         assert!(load_sources(&sources, 5).is_err());
@@ -835,6 +844,7 @@ mod tests {
             base: dir.path().join("fehlt.json"),
             overlay: Some(overlay),
             overlay_adds_nodes: false,
+            overlay_max_added_nodes: 100,
         };
         // Home-Übersicht ohne eigene graph.json: nicht stillschweigend
         // durch Notizen ersetzen, sondern den Fehler der Basis zeigen.

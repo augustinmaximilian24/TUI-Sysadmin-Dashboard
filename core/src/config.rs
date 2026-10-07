@@ -526,6 +526,10 @@ pub struct KnowledgeGraphConfig {
     /// als neue Knoten hinzugefügt werden (`false` = nur bestehende Knoten
     /// verbinden).
     pub overlay_adds_nodes: bool,
+    /// Obergrenze für neu hinzugefügte Overlay-Knoten (Regel 18): das
+    /// 3D-Layout wächst quadratisch mit der Knotenzahl (2000 Knoten ≈
+    /// 2,5 s im Release-Build). Vernetzte Dateien haben Vorrang.
+    pub overlay_max_added_nodes: usize,
 }
 
 impl Default for KnowledgeGraphConfig {
@@ -540,6 +544,7 @@ impl Default for KnowledgeGraphConfig {
             layout_iterations: 300,
             links_overlay_path: DEFAULT_GRAPH_SYNC_OUTPUT.to_string(),
             overlay_adds_nodes: true,
+            overlay_max_added_nodes: 1_500,
         }
     }
 }

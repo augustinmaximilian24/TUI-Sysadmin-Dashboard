@@ -34,3 +34,39 @@ allowed_units = []
 # innerhalb von 10 Minuten, danach Denied(RateLimited).
 rate_limit_max_actions = 3
 rate_limit_window_minutes = 10
+
+[graph_sync]
+# logsentry-graphsync (eigene User-Unit, siehe README): erkennt geänderte
+# Markdown-Dateien per Hash und hält die Verknüpfungen der Graph-Ansichten
+# (Wissensgraph, Home-Übersicht) automatisch aktuell.
+enabled = true
+# Welche Ordner durchsucht werden (rekursiv, ~ = eigenes Home).
+source_dirs = ["~/.claude/activity-log"]
+# Abstand zwischen zwei Prüfläufen. Ungeänderte Dateien kosten nur ein stat().
+scan_interval_secs = 30
+# Begriffe/Tags, die in mehr Dateien vorkommen, sind zu allgemein.
+max_term_docs = 20
+
+[graph_sync.llm]
+# Semantische Verknüpfungen über `claude -p` (ohne Werkzeuge). Läuft
+# automatisch, aber hart begrenzt; ohne Netz wird nur später erneut versucht.
+enabled = true
+max_runs_per_day = 6
+max_usd_per_day = 0.5
+max_files_per_run = 10
+# Datei erst analysieren, wenn sie 10 Minuten nicht mehr bearbeitet wurde.
+min_stable_secs = 600
+# Mindestens 30 Minuten zwischen zwei Aufrufen.
+min_interval_secs = 1800
+
+[knowledge_graph]
+# Overlay von graphsync; Notizen ohne passenden Knoten werden ergänzt.
+links_overlay_path = "~/.local/share/logsentry/graphsync/links.json"
+overlay_adds_nodes = true
+# Obergrenze neuer Knoten (Layout-Aufwand wächst quadratisch).
+overlay_max_added_nodes = 1500
+
+[home_overview]
+# Hier nur vorhandene Knoten verbinden, keine einzelnen Notizen ergänzen.
+links_overlay_path = "~/.local/share/logsentry/graphsync/links.json"
+overlay_adds_nodes = false

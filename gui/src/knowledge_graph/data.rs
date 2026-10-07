@@ -89,13 +89,15 @@ pub struct MergeStats {
 /// Basisknoten zugeordnet: gleicher Pfad, oder ein relativer Basispfad,
 /// auf den der Overlay-Pfad endet. Bei mehreren Treffern (graphify legt
 /// mehrere Konzepte pro Datei an) gewinnt der Knoten, dessen Label dem
-/// Dateinamen entspricht. Nicht zugeordnete Knoten werden nur bei
-/// `add_missing_nodes` übernommen, mit eigenen Community-IDs oberhalb der
+/// Dateinamen entspricht. Nicht zugeordnete Knoten werden höchstens
+/// `max_added_nodes` mal übernommen (0 = keine; das 3D-Layout ist
+/// quadratisch in der Knotenzahl, Regel 18) -- bevorzugt die mit den
+/// meisten Overlay-Kanten -- mit eigenen Community-IDs oberhalb der
 /// bestehenden. Pro Knotenpaar bleibt die Kante des Basisgraphen erhalten.
 pub fn merge_overlay(
     base: &mut GraphJson,
     overlay: GraphJson,
-    add_missing_nodes: bool,
+    max_added_nodes: usize,
 ) -> MergeStats {
     let mut stats = MergeStats::default();
     let mut by_file_name: HashMap<String, Vec<usize>> = HashMap::new();
@@ -120,13 +122,30 @@ pub fn merge_overlay(
         .map_or(0, |m| m + 1);
     let mut known_ids: HashSet<String> = base.nodes.iter().map(|n| n.id.clone()).collect();
 
+    let mut overlay_degree: HashMap<&str, usize> = HashMap::new();
+    for edge in &overlay.edges {
+        *overlay_degree.entry(edge.source.as_str()).or_default() += 1;
+        *overlay_degree.entry(edge.target.as_str()).or_default() += 1;
+    }
     let mut id_map: HashMap<String, String> = HashMap::new();
+    let mut unmatched: Vec<(usize, GraphNode)> = Vec::new();
     for node in overlay.nodes {
         let path = node.source_file.clone().unwrap_or_else(|| node.id.clone());
         if let Some(i) = match_base_node(base, &by_file_name, &path) {
             id_map.insert(node.id, base.nodes[i].id.clone());
             stats.matched += 1;
-        } else if add_missing_nodes && known_ids.insert(node.id.clone()) {
+        } else {
+            let degree = overlay_degree.get(node.id.as_str()).copied().unwrap_or(0);
+            unmatched.push((degree, node));
+        }
+    }
+    // Stabil sortiert: bei gleichem Grad bleibt die Overlay-Reihenfolge.
+    unmatched.sort_by_key(|(degree, _)| std::cmp::Reverse(*degree));
+    for (_, node) in unmatched {
+        if stats.added >= max_added_nodes {
+            break;
+        }
+        if known_ids.insert(node.id.clone()) {
             id_map.insert(node.id.clone(), node.id.clone());
             base.nodes.push(GraphNode {
                 community: community_offset + node.community,
@@ -298,7 +317,7 @@ mod tests {
                 edge("gs:c", "gs:fehlt", "INFERRED"),
             ],
         };
-        let stats = merge_overlay(&mut base, overlay, true);
+        let stats = merge_overlay(&mut base, overlay, 10);
         assert_eq!(
             stats,
             MergeStats {
@@ -335,7 +354,7 @@ mod tests {
                 edge("gs:b", "gs:c", "INFERRED"),
             ],
         };
-        let stats = merge_overlay(&mut base, overlay, false);
+        let stats = merge_overlay(&mut base, overlay, 0);
         assert_eq!(
             stats,
             MergeStats {
@@ -345,6 +364,30 @@ mod tests {
             }
         );
         assert_eq!(base.nodes.len(), 2);
+    }
+
+    #[test]
+    fn neue_knoten_sind_begrenzt_und_vernetzte_haben_vorrang() {
+        let mut base = GraphJson::default();
+        let overlay = GraphJson {
+            nodes: vec![
+                node("einsam", "E", 0, Some("/n/e.md")),
+                node("x", "X", 0, Some("/n/x.md")),
+                node("y", "Y", 0, Some("/n/y.md")),
+            ],
+            edges: vec![edge("x", "y", "EXTRACTED")],
+        };
+        let stats = merge_overlay(&mut base, overlay, 2);
+        assert_eq!(
+            stats,
+            MergeStats {
+                matched: 0,
+                added: 2,
+                edges: 1
+            }
+        );
+        let ids: Vec<&str> = base.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["x", "y"]);
     }
 
     #[test]

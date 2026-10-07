@@ -1,0 +1,30 @@
+# systemd-USER-Unit (nicht systemweit als root!): hält die Verknüpfungen
+# der Graph-Ansichten automatisch aktuell. Läuft unter dem eigenen
+# Benutzerkonto, weil die Notizen im Home-Verzeichnis liegen und die
+# KI-Stufe die eigene Claude-Code-Anmeldung nutzt.
+#
+# Installation: sudo ./packaging/install.sh, danach als normaler Benutzer:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now logsentry-graphsync.service
+[Unit]
+Description=logsentry graphsync – automatische Verknüpfungen für den Wissensgraphen
+Documentation=https://github.com/augustinmaximilian24/TUI-Sysadmin-Dashboard
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/logsentry-graphsync --config /etc/logsentry/logsentry.toml
+Restart=on-failure
+RestartSec=30
+
+# `claude` liegt je nach Installationsart in ~/.local/bin oder einem
+# npm-Prefix; die User-Instanz von systemd kennt diese Pfade sonst nicht.
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:/usr/local/bin:/usr/bin:/bin
+
+# Hintergrundarbeit: nie mit dem Desktop um CPU/IO konkurrieren.
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
