@@ -9,7 +9,33 @@ eine GUI unter dem eigenen Benutzerkonto zeigt Live-Daten an und kann
 (mit ausdrücklicher Bestätigung) reagieren: Unit neu starten/stoppen,
 Prozess beenden, IP befristet sperren, Anomalie stummschalten.
 
-![Übersicht der GUI: Kopfbereich, Entropie-Verlauf, Detail- und Systemzustands-Panel](docs/screenshots/gui-overview.png)
+![Dashboard: Entropie-Verlauf, Anomalie-Liste, Netzwerk-Weltkarte, Systemzustand, Units sowie eigene Dienste und Autostart](docs/screenshots/gui-dashboard.png)
+
+## Funktionen
+
+- **Dashboard:** Entropie-Verlauf, filter- und sortierbare Anomalie-Liste
+  mit Detail-Panel, Systemzustand (CPU, RAM, Load, Temperaturen, Speicher).
+- **Netzwerk-Weltkarte:** 3D-Kugel mit den aktiven ausgehenden
+  Verbindungen dieser Maschine, GeoIP-Auflösung und echten
+  Traceroute-Routen (rein lokal, ohne Cloud-Abfrage).
+- **Units und eigene Dienste:** Status ausgewählter System-Units sowie
+  eine Karte „Eigene Dienste & Autostart“ mit User-Services, Timern und
+  Autostart-Einträgen. Grün = läuft, rot = fehlgeschlagen, bernstein =
+  sollte laufen, tut es aber nicht, grau = einmalig bzw. gerade nicht
+  aktiv. Desktop-Infrastruktur ist ausgeblendet (`[services]`).
+- **Aktionen:** Unit neu starten/stoppen, Prozess beenden, IP sperren,
+  Anomalie stummschalten, immer mit Bestätigung, Allow-List, Dry-Run und
+  Audit-Log (siehe unten).
+- **Wissensgraph und Home-Übersicht:** zwei Graph-Ansichten im Holo-Stil
+  mit Gruppen, die sich per Klick aufklappen. Grüne Kanten sind
+  eindeutig extrahiert, amberfarbene abgeleitet. `logsentry-graphsync`
+  hält die Verknüpfungen automatisch aktuell (siehe unten).
+- **Geräte und Fleet (optional):** Anwesenheit von LAN-Geräten sowie eine
+  rein lesende Übersicht mehrerer Hosts über SSH-Tunnel.
+
+| Wissensgraph | Home-Übersicht |
+|---|---|
+| ![Wissensgraph mit Gruppen-Knoten und farbigen Kanten](docs/screenshots/gui-wissensgraph.png) | ![Home-Übersicht: Ordnerstruktur des Home-Verzeichnisses als Graph](docs/screenshots/gui-home-uebersicht.png) |
 
 ## Architektur
 
