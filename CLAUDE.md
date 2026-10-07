@@ -34,6 +34,9 @@ Heimserver (Haswell-Klasse, headless, später per TUI oder SSH).
 - ML-Modelle (Isolation Forest, TF-IDF)
 - Windows-/macOS-Support
 - LLM-Integration außer als explizit ausgelöste „Erkläre diese Anomalie"-Funktion
+  (Ausnahme, auf ausdrücklichen Wunsch ergänzt: die automatische, hart
+  budgetierte KI-Stufe von `logsentry-graphsync` in Phase 14 -- außerhalb
+  des Analyse-Hot-Paths, eigener Benutzerprozess)
 
 ## 3. Tech-Stack
 
@@ -378,6 +381,40 @@ an entfernte Hosts geschickt, das bleibt lokal wie bisher.
       Configs/Sockets), Tunnel via `ssh localhost` auf die zweite Instanz,
       Fleet-Tab zeigt beide Hosts; zweite Instanz beendet -> Fleet zeigt
       klaren getrennten Zustand statt Absturz
+
+**Phase 14 – graphsync: automatische Delta- und Verknüpfungserkennung
+(optional, außerhalb des ursprünglichen v1.0-Scopes)**
+
+Die Verknüpfungen im Wissensgraphen entstanden bisher nur, wenn Claude
+manuell beauftragt wurde. `logsentry-graphsync` übernimmt das selbst.
+Eigener Crate `graphsync/`, läuft als systemd-**User**-Unit (Notizen
+liegen im Home, der Daemon ist davon bewusst abgeschottet; Abschnitt 4).
+Entwurf und Abwägungen: `docs/phase14-graphsync.md`.
+
+- [x] `GraphSyncConfig`/`GraphSyncLlmConfig` (`core/src/config.rs`),
+      Overlay-Pfade für beide Graph-Ansichten (Regel 22)
+- [x] Delta: Größe/mtime-Vorfilter, FNV-1a-Inhaltshash
+      (`core::hash`), Zustand als atomar geschriebene JSON-Datei mit
+      Schema-Version und Sicherung bei unlesbarem Zustand
+- [x] Offline-Extraktion: Wikilinks, Markdown-Links, Frontmatter-Tags,
+      `#tags`, Überschriftenbegriffe; Code-Blöcke ignoriert
+      (`graphsync/src/extract.rs`)
+- [x] Kanten: explizit -> `EXTRACTED`; gemeinsame seltene Begriffe und
+      KI -> `INFERRED`; Obergrenzen pro Datei und gesamt (Regel 18)
+- [x] KI-Stufe automatisch mit Limit: `claude -p --tools ""` ohne Shell,
+      Prompt via stdin, Tagesbudget (Läufe + USD aus `total_cost_usd`),
+      Mindestabstand, Backoff, Zeitlimit, Ausgabegrenze, Antwort nur
+      über Prompt-IDs validiert (`graphsync/src/llm.rs`)
+- [x] GUI mischt das Overlay in beide Ansichten (Zuordnung über
+      Dateipfad), beobachtet Basis und Overlay per mtime, begrenzt neue
+      Knoten (`overlay_max_added_nodes`, Layout ist O(n²))
+- [x] Tests mit Fixtures (`graphsync/tests/fixtures/notes`), KI nur über
+      Test-Runner; einmal Ende-zu-Ende mit echter `claude`-CLI gegen die
+      Fixtures (1 Aufruf, ≈ 0,02 USD)
+- [x] Leerlast gemessen (5000 Dateien, Intervall 5 s): ≈ 0,4 % CPU,
+      18 MB RSS; Default-Intervall 30 s entsprechend ≈ 0,07 %
+- [ ] Auf dem Desktop mit echten Notizen verifiziert (Quellordner
+      eintragen, User-Unit aktivieren, Tabs ansehen)
 
 ## 7. Definition of Done (v1.0)
 
