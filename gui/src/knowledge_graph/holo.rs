@@ -7,13 +7,38 @@ use eframe::egui::{self, Color32, Pos2, Stroke, Vec2};
 
 use super::camera::{project_point, Projected};
 use super::layout::Vec3;
-use super::{blend_color, draw_node_glow, Group, KnowledgeGraphTab, LoadedGraph};
+use super::{draw_node_glow, Group, KnowledgeGraphTab, LoadedGraph};
 
 /// Fast-schwarzer Hintergrund der Graph-Ansicht.
 const BG: Color32 = Color32::from_rgb(3, 6, 10);
 /// Grundton für Linien, Ringe und Panel-Rahmen.
 const CYAN: Color32 = Color32::from_rgb(90, 214, 236);
 const TEXT: Color32 = Color32::from_rgb(190, 235, 245);
+/// Kante, die direkt aus den Quellen extrahiert wurde (verlässlich).
+const EXTRACTED_COLOR: Color32 = Color32::from_rgb(90, 235, 150);
+/// Kante, die nur erschlossen/vermutet wurde.
+const INFERRED_COLOR: Color32 = Color32::from_rgb(255, 176, 64);
+
+/// Linienfarbe einer Kante nach `confidence`; unbekannte Werte bleiben
+/// neutral, damit neues graphify-Vokabular nicht falsch eingefärbt wird.
+fn edge_color(confidence: &str) -> Color32 {
+    match confidence {
+        "EXTRACTED" => EXTRACTED_COLOR,
+        "INFERRED" => INFERRED_COLOR,
+        _ => Color32::from_rgb(120, 150, 165),
+    }
+}
+
+/// Mischfarbe einer Gruppenverbindung aus dem Anteil verlässlicher Kanten.
+fn group_edge_color(total: u32, extracted: u32) -> Color32 {
+    let t = if total == 0 { 0.0 } else { extracted as f32 / total as f32 };
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * t) as u8;
+    Color32::from_rgb(
+        mix(INFERRED_COLOR.r(), EXTRACTED_COLOR.r()),
+        mix(INFERRED_COLOR.g(), EXTRACTED_COLOR.g()),
+        mix(INFERRED_COLOR.b(), EXTRACTED_COLOR.b()),
+    )
+}
 
 /// Farbton einer Gruppe: Variationen von Cyan/Türkis/Blau, damit das Bild
 /// einheitlich "holografisch" bleibt, Gruppen sich aber unterscheiden.
@@ -170,7 +195,7 @@ impl KnowledgeGraphTab {
         self.draw_decor(&painter, graph, &to_screen, focus.is_some());
 
         // --- Verbindungen zwischen Gruppen (zusammengefasst) ---
-        for (k, &(a, b, count)) in graph.group_edges.iter().enumerate() {
+        for (k, &(a, b, count, extracted)) in graph.group_edges.iter().enumerate() {
             if focus.is_some_and(|f| f != a && f != b) {
                 continue;
             }
@@ -179,7 +204,7 @@ impl KnowledgeGraphTab {
             };
             let depth_fade = 0.35 + 0.65 * (da + db) / 2.0;
             let share = count as f32 / max_shared;
-            let color = blend_color(holo_color(a), holo_color(b));
+            let color = group_edge_color(count, extracted);
             let alpha = (if focus.is_some() { 55.0 } else { 60.0 + 90.0 * share } * depth_fade) as u8;
             painter.line_segment([pa, pb], Stroke::new(3.0 + 3.0 * share, with_alpha(color, 14)));
             painter.line_segment([pa, pb], Stroke::new(0.7 + 1.6 * share, with_alpha(color, alpha)));
@@ -382,10 +407,11 @@ impl KnowledgeGraphTab {
             };
             let (a, b) = (to_screen(pa), to_screen(pb));
             let strong = edge.confidence == "EXTRACTED";
+            let line_color = edge_color(&edge.confidence);
             if strong {
-                painter.line_segment([a, b], Stroke::new(3.5_f32, with_alpha(color, 14)));
+                painter.line_segment([a, b], Stroke::new(3.5_f32, with_alpha(line_color, 18)));
             }
-            painter.line_segment([a, b], Stroke::new(0.9_f32, with_alpha(color, if strong { 120 } else { 55 })));
+            painter.line_segment([a, b], Stroke::new(1.1_f32, with_alpha(line_color, if strong { 150 } else { 120 })));
         }
 
         // Wichtige Knoten: Unterordner + obere 20 % nach Verbindungsgrad.
@@ -472,6 +498,12 @@ impl KnowledgeGraphTab {
                     graph.nodes.len(),
                     graph.edges.len()
                 ));
+                let extracted = graph.edges.iter().filter(|e| e.confidence == "EXTRACTED").count();
+                let inferred = graph.edges.iter().filter(|e| e.confidence == "INFERRED").count();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("━ EXTRACTED {extracted}")).color(EXTRACTED_COLOR));
+                    ui.label(egui::RichText::new(format!("━ INFERRED {inferred}")).color(INFERRED_COLOR));
+                });
                 let hint = if focus.is_some() {
                     "Esc / Klick ins Leere: zurück"
                 } else {
@@ -558,14 +590,14 @@ impl KnowledgeGraphTab {
                     ui.add_space(4.0);
                     ui.label(rationale);
                 }
-                let connections: Vec<(bool, &str, &str)> = graph
+                let connections: Vec<(bool, &str, &str, &str)> = graph
                     .edges
                     .iter()
                     .filter_map(|e| {
                         if e.a == idx {
-                            Some((true, e.relation.as_str(), graph.nodes[e.b].label.as_str()))
+                            Some((true, e.relation.as_str(), graph.nodes[e.b].label.as_str(), e.confidence.as_str()))
                         } else if e.b == idx {
-                            Some((false, e.relation.as_str(), graph.nodes[e.a].label.as_str()))
+                            Some((false, e.relation.as_str(), graph.nodes[e.a].label.as_str(), e.confidence.as_str()))
                         } else {
                             None
                         }
@@ -578,9 +610,12 @@ impl KnowledgeGraphTab {
                         .id_salt("holo_connections")
                         .max_height(140.0)
                         .show(ui, |ui| {
-                            for (out, relation, other) in &connections {
+                            for (out, relation, other, confidence) in &connections {
                                 let arrow = if *out { "→" } else { "←" };
-                                ui.label(format!("{arrow} {relation} {arrow} {other}"));
+                                ui.label(
+                                    egui::RichText::new(format!("{arrow} {relation} {arrow} {other}"))
+                                        .color(edge_color(confidence)),
+                                );
                             }
                         });
                 }
@@ -602,6 +637,21 @@ mod tests {
             let c = holo_color(g);
             assert!(c.b() > c.r(), "Gruppe {g}: Blauanteil muss überwiegen ({c:?})");
         }
+    }
+
+    #[test]
+    fn kantenfarbe_unterscheidet_extracted_und_inferred() {
+        assert_eq!(edge_color("EXTRACTED"), EXTRACTED_COLOR);
+        assert_eq!(edge_color("INFERRED"), INFERRED_COLOR);
+        assert_ne!(edge_color("EXTRACTED"), edge_color("INFERRED"));
+        assert_ne!(edge_color("AMBIGUOUS"), edge_color("INFERRED"));
+    }
+
+    #[test]
+    fn gruppenverbindung_mischt_nach_extracted_anteil() {
+        assert_eq!(group_edge_color(4, 0), INFERRED_COLOR);
+        assert_eq!(group_edge_color(4, 4), EXTRACTED_COLOR);
+        assert_eq!(group_edge_color(0, 0), INFERRED_COLOR);
     }
 
     #[test]

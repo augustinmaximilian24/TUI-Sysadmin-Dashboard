@@ -94,16 +94,6 @@ fn draw_node_glow(painter: &egui::Painter, center: Pos2, radius: f32, color: Col
     }
 }
 
-/// Mischt zwei Farben zu gleichen Teilen -- für den Kanten-Glow zwischen
-/// zwei unterschiedlich gefärbten Communities.
-fn blend_color(a: Color32, b: Color32) -> Color32 {
-    Color32::from_rgb(
-        ((a.r() as u16 + b.r() as u16) / 2) as u8,
-        ((a.g() as u16 + b.g() as u16) / 2) as u8,
-        ((a.b() as u16 + b.b() as u16) / 2) as u8,
-    )
-}
-
 struct ResolvedEdge {
     a: usize,
     b: usize,
@@ -128,8 +118,8 @@ struct LoadedGraph {
     /// Gruppen-Index je Knoten.
     group_of: Vec<usize>,
     /// Zusammengefasste Kanten zwischen verschiedenen Gruppen
-    /// `(gruppe_a, gruppe_b, anzahl)` mit `gruppe_a < gruppe_b`.
-    group_edges: Vec<(usize, usize, u32)>,
+    /// `(gruppe_a, gruppe_b, anzahl, davon_extracted)` mit `gruppe_a < gruppe_b`.
+    group_edges: Vec<(usize, usize, u32, u32)>,
     /// Grobe Ausdehnung des Graphen (größter Abstand Schwerpunkt + Radius).
     extent: f32,
 }
@@ -334,15 +324,17 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
         .iter()
         .map(|g| g.centroid.length() + g.radius)
         .fold(60.0_f32, f32::max);
-    let mut aggregated: HashMap<(usize, usize), u32> = HashMap::new();
+    let mut aggregated: HashMap<(usize, usize), (u32, u32)> = HashMap::new();
     for edge in &edges {
         let (ga, gb) = (group_of[edge.a], group_of[edge.b]);
         if ga != gb {
-            *aggregated.entry((ga.min(gb), ga.max(gb))).or_insert(0) += 1;
+            let entry = aggregated.entry((ga.min(gb), ga.max(gb))).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += u32::from(edge.confidence == "EXTRACTED");
         }
     }
-    let mut group_edges: Vec<(usize, usize, u32)> =
-        aggregated.into_iter().map(|((a, b), n)| (a, b, n)).collect();
+    let mut group_edges: Vec<(usize, usize, u32, u32)> =
+        aggregated.into_iter().map(|((a, b), (n, ex))| (a, b, n, ex)).collect();
     group_edges.sort_unstable();
 
     Ok(LoadedGraph {
@@ -650,12 +642,6 @@ mod tests {
     }
 
     #[test]
-    fn blend_color_mischt_zu_gleichen_teilen() {
-        let mixed = blend_color(Color32::from_rgb(0, 0, 0), Color32::from_rgb(200, 100, 40));
-        assert_eq!(mixed, Color32::from_rgb(100, 50, 20));
-    }
-
-    #[test]
     fn load_and_layout_parst_und_layoutet_kleinen_graphen() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("graph.json");
@@ -685,7 +671,7 @@ mod tests {
         assert_eq!(loaded.degree, vec![1, 2, 1]);
         assert_eq!(loaded.max_degree, 2);
         assert_eq!(loaded.groups.len(), 2);
-        assert_eq!(loaded.group_edges, vec![(0, 1, 1)]);
+        assert_eq!(loaded.group_edges, vec![(0, 1, 1, 1)]);
         assert_eq!(loaded.groups[1].members, vec![1, 2]);
     }
 
