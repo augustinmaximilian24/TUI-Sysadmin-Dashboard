@@ -70,6 +70,8 @@ fn main() -> anyhow::Result<()> {
     let home_overview_config = logsentry_core::config::KnowledgeGraphConfig {
         enabled: config.home_overview.enabled,
         graph_json_path: config.home_overview.graph_json_path.clone(),
+        links_overlay_path: config.home_overview.links_overlay_path.clone(),
+        overlay_adds_nodes: config.home_overview.overlay_adds_nodes,
         ..config.knowledge_graph.clone()
     };
     let network_map_config = config.network_map.clone();
