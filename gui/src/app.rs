@@ -597,188 +597,193 @@ impl LogsentryApp {
                 ui.heading("Systemzustand");
                 ui.add_space(4.0);
 
-                match self
-                    .render
-                    .snapshot
-                    .as_ref()
-                    .and_then(|s| s.system.as_ref())
-                {
-                    None => {
-                        ui.label(egui::RichText::new("noch keine Messung").color(theme::TEXT_MUTED));
-                    }
-                    Some(system) => {
-                        let core_count = system.cpu.per_core_usage_percent.len().max(1) as f64;
+                egui::ScrollArea::vertical()
+                    .id_salt("system_panel_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                    match self
+                        .render
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.system.as_ref())
+                    {
+                        None => {
+                            ui.label(egui::RichText::new("noch keine Messung").color(theme::TEXT_MUTED));
+                        }
+                        Some(system) => {
+                            let core_count = system.cpu.per_core_usage_percent.len().max(1) as f64;
 
-                        theme::card(ui, |ui| {
-                            theme::section_heading(ui, "Auslastung");
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.columns(3, |columns| {
-                                    theme::radial_gauge(
-                                        &mut columns[0],
-                                        "CPU",
-                                        system.cpu.global_usage_percent / 100.0,
-                                        &format!("{:.0}%", system.cpu.global_usage_percent),
-                                    );
-                                    theme::radial_gauge(
-                                        &mut columns[1],
-                                        "RAM",
-                                        system.memory.used_percent / 100.0,
-                                        &format!("{:.0}%", system.memory.used_percent),
-                                    );
-                                    theme::radial_gauge(
-                                        &mut columns[2],
-                                        "LOAD 1m",
-                                        (system.load.one / core_count) as f32,
-                                        &format!("{:.2}", system.load.one),
-                                    );
+                            theme::card(ui, |ui| {
+                                theme::section_heading(ui, "Auslastung");
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.columns(3, |columns| {
+                                        theme::radial_gauge(
+                                            &mut columns[0],
+                                            "CPU",
+                                            system.cpu.global_usage_percent / 100.0,
+                                            &format!("{:.0}%", system.cpu.global_usage_percent),
+                                        );
+                                        theme::radial_gauge(
+                                            &mut columns[1],
+                                            "RAM",
+                                            system.memory.used_percent / 100.0,
+                                            &format!("{:.0}%", system.memory.used_percent),
+                                        );
+                                        theme::radial_gauge(
+                                            &mut columns[2],
+                                            "LOAD 1m",
+                                            (system.load.one / core_count) as f32,
+                                            &format!("{:.2}", system.load.one),
+                                        );
+                                    });
                                 });
-                            });
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "Load {:.2} / {:.2} / {:.2}",
-                                    system.load.one, system.load.five, system.load.fifteen
-                                ))
-                                .color(theme::TEXT_MUTED)
-                                .size(11.0),
-                            );
-                        });
-
-                        if !system.temperatures.is_empty() {
-                            ui.add_space(6.0);
-                            theme::card(ui, |ui| {
-                                theme::section_heading(ui, "Temperaturen");
                                 ui.add_space(4.0);
-                                for temp in &system.temperatures {
-                                    theme::usage_bar(
-                                        ui,
-                                        &temp.label,
-                                        temp.celsius / 100.0,
-                                        format!("{:.1} °C", temp.celsius),
-                                    );
-                                }
-                            });
-                        }
-
-                        if !system.disks.is_empty() {
-                            ui.add_space(6.0);
-                            theme::card(ui, |ui| {
-                                theme::section_heading(ui, "Speicher");
-                                ui.add_space(4.0);
-                                for disk in &system.disks {
-                                    theme::usage_bar(
-                                        ui,
-                                        &disk.mount_point,
-                                        disk.used_percent / 100.0,
-                                        format!("{:.0} %", disk.used_percent),
-                                    );
-                                }
-                            });
-                        }
-
-                        if !system.units.is_empty() {
-                            ui.add_space(6.0);
-                            theme::card(ui, |ui| {
-                                theme::section_heading(ui, "Units");
-                                ui.add_space(4.0);
-                                for unit in &system.units {
-                                    let active = unit.active_state == "active";
-                                    let dot_color = if active { theme::OK } else { theme::TEXT_MUTED };
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(dot_color, "●");
-                                        ui.label(&unit.name);
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{}/{}",
-                                                unit.active_state, unit.sub_state
-                                            ))
-                                            .color(theme::TEXT_MUTED),
-                                        );
-                                    });
-                                }
-                            });
-                        }
-
-                        if let Some((monitor, hide_prefixes)) = &self.services {
-                            let snap = monitor.snapshot();
-                            ui.add_space(6.0);
-                            theme::card(ui, |ui| {
-                                theme::section_heading(ui, "Eigene Dienste & Autostart");
-                                ui.checkbox(
-                                    &mut self.services_show_all,
-                                    "Desktop-Infrastruktur zeigen",
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Load {:.2} / {:.2} / {:.2}",
+                                        system.load.one, system.load.five, system.load.fifteen
+                                    ))
+                                    .color(theme::TEXT_MUTED)
+                                    .size(11.0),
                                 );
-                                ui.add_space(4.0);
-                                if let Some(error) = &snap.error {
-                                    ui.colored_label(theme::LEVEL_CRITICAL, error);
-                                }
-                                for entry in services::visible(
-                                    &snap.entries,
-                                    hide_prefixes,
-                                    self.services_show_all,
-                                ) {
-                                    let color = match entry.status {
-                                        Status::Running => theme::OK,
-                                        Status::Failed => theme::LEVEL_CRITICAL,
-                                        Status::NotRunning => theme::LEVEL_WARN,
-                                        Status::Idle => theme::TEXT_MUTED,
-                                    };
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(color, "●");
-                                        ui.label(&entry.name);
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{:?} · {}",
-                                                entry.kind, entry.detail
-                                            ))
-                                            .color(theme::TEXT_MUTED),
-                                        );
-                                    });
-                                }
                             });
+
+                            if !system.temperatures.is_empty() {
+                                ui.add_space(6.0);
+                                theme::card(ui, |ui| {
+                                    theme::section_heading(ui, "Temperaturen");
+                                    ui.add_space(4.0);
+                                    for temp in &system.temperatures {
+                                        theme::usage_bar(
+                                            ui,
+                                            &temp.label,
+                                            temp.celsius / 100.0,
+                                            format!("{:.1} °C", temp.celsius),
+                                        );
+                                    }
+                                });
+                            }
+
+                            if !system.disks.is_empty() {
+                                ui.add_space(6.0);
+                                theme::card(ui, |ui| {
+                                    theme::section_heading(ui, "Speicher");
+                                    ui.add_space(4.0);
+                                    for disk in &system.disks {
+                                        theme::usage_bar(
+                                            ui,
+                                            &disk.mount_point,
+                                            disk.used_percent / 100.0,
+                                            format!("{:.0} %", disk.used_percent),
+                                        );
+                                    }
+                                });
+                            }
+
+                            if !system.units.is_empty() {
+                                ui.add_space(6.0);
+                                theme::card(ui, |ui| {
+                                    theme::section_heading(ui, "Units");
+                                    ui.add_space(4.0);
+                                    for unit in &system.units {
+                                        let active = unit.active_state == "active";
+                                        let dot_color = if active { theme::OK } else { theme::TEXT_MUTED };
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(dot_color, "●");
+                                            ui.label(&unit.name);
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}/{}",
+                                                    unit.active_state, unit.sub_state
+                                                ))
+                                                .color(theme::TEXT_MUTED),
+                                            );
+                                        });
+                                    }
+                                });
+                            }
+
+                            if let Some((monitor, hide_prefixes)) = &self.services {
+                                let snap = monitor.snapshot();
+                                ui.add_space(6.0);
+                                theme::card(ui, |ui| {
+                                    theme::section_heading(ui, "Eigene Dienste & Autostart");
+                                    ui.checkbox(
+                                        &mut self.services_show_all,
+                                        "Desktop-Infrastruktur zeigen",
+                                    );
+                                    ui.add_space(4.0);
+                                    if let Some(error) = &snap.error {
+                                        ui.colored_label(theme::LEVEL_CRITICAL, error);
+                                    }
+                                    for entry in services::visible(
+                                        &snap.entries,
+                                        hide_prefixes,
+                                        self.services_show_all,
+                                    ) {
+                                        let color = match entry.status {
+                                            Status::Running => theme::OK,
+                                            Status::Failed => theme::LEVEL_CRITICAL,
+                                            Status::NotRunning => theme::LEVEL_WARN,
+                                            Status::Idle => theme::TEXT_MUTED,
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(color, "●");
+                                            ui.label(&entry.name);
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{:?} · {}",
+                                                    entry.kind, entry.detail
+                                                ))
+                                                .color(theme::TEXT_MUTED),
+                                            );
+                                        });
+                                    }
+                                });
+                            }
                         }
                     }
-                }
 
-                if !self.render.log.is_empty() {
-                    ui.add_space(6.0);
-                    theme::card(ui, |ui| {
-                        theme::section_heading(ui, "Meldungen");
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt("log_scroll")
-                            .max_height(150.0)
-                            .show(ui, |ui| {
-                                for line in self.render.log.iter().rev() {
-                                    ui.label(line);
-                                }
-                            });
-                    });
-                }
+                    if !self.render.log.is_empty() {
+                        ui.add_space(6.0);
+                        theme::card(ui, |ui| {
+                            theme::section_heading(ui, "Meldungen");
+                            ui.add_space(4.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("log_scroll")
+                                .max_height(150.0)
+                                .show(ui, |ui| {
+                                    for line in self.render.log.iter().rev() {
+                                        ui.label(line);
+                                    }
+                                });
+                        });
+                    }
 
-                // Audit-Ansicht (Phase 8, Schritt 9): das Protokoll bietet
-                // keinen Abruf historischer Einträge aus der serverseitigen
-                // Audit-Datei -- diese Liste zeigt nur Ergebnisse von
-                // Aktionen, die diese GUI-Sitzung selbst ausgelöst hat.
-                if !self.render.action_log.is_empty() {
-                    ui.add_space(6.0);
-                    theme::card(ui, |ui| {
-                        theme::section_heading(ui, "Aktionen dieser Sitzung");
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical()
-                            .id_salt("action_log_scroll")
-                            .max_height(150.0)
-                            .show(ui, |ui| {
-                                for (request_id, outcome) in self.render.action_log.iter().rev() {
-                                    ui.label(format!(
-                                        "#{request_id}: {}",
-                                        format_action_outcome(outcome)
-                                    ));
-                                }
-                            });
+                    // Audit-Ansicht (Phase 8, Schritt 9): das Protokoll bietet
+                    // keinen Abruf historischer Einträge aus der serverseitigen
+                    // Audit-Datei -- diese Liste zeigt nur Ergebnisse von
+                    // Aktionen, die diese GUI-Sitzung selbst ausgelöst hat.
+                    if !self.render.action_log.is_empty() {
+                        ui.add_space(6.0);
+                        theme::card(ui, |ui| {
+                            theme::section_heading(ui, "Aktionen dieser Sitzung");
+                            ui.add_space(4.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("action_log_scroll")
+                                .max_height(150.0)
+                                .show(ui, |ui| {
+                                    for (request_id, outcome) in self.render.action_log.iter().rev() {
+                                        ui.label(format!(
+                                            "#{request_id}: {}",
+                                            format_action_outcome(outcome)
+                                        ));
+                                    }
+                                });
+                        });
+                    }
                     });
-                }
             });
     }
 
