@@ -414,8 +414,9 @@ Entwurf und Abwägungen: `docs/phase14-graphsync.md`.
       Fixtures (1 Aufruf, ≈ 0,02 USD)
 - [x] Leerlast gemessen (5000 Dateien, Intervall 5 s): ≈ 0,4 % CPU,
       18 MB RSS; Default-Intervall 30 s entsprechend ≈ 0,07 %
-- [ ] Auf dem Desktop mit echten Notizen verifiziert (Quellordner
-      eintragen, User-Unit aktivieren, Tabs ansehen)
+- [x] Auf dem Desktop mit echten Notizen verifiziert (2026-10-07: Quellen
+      `~/.claude/activity-log` und `~/.remember`, User-Unit aktiv, Tabs
+      zeigen das Overlay)
 
 **Phase 15 – Karte "Eigene Dienste & Autostart" (optional, außerhalb des
 ursprünglichen v1.0-Scopes)**
