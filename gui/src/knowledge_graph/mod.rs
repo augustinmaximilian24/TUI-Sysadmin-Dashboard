@@ -273,8 +273,60 @@ fn load_community_labels(graph_dir: &Path) -> HashMap<i64, String> {
         .collect()
 }
 
+/// Basisgraph plus optionales Overlay (siehe [`data::merge_overlay`]).
+#[derive(Clone)]
+struct GraphSources {
+    base: PathBuf,
+    overlay: Option<PathBuf>,
+    overlay_adds_nodes: bool,
+}
+
+impl GraphSources {
+    fn mtimes(&self) -> (Option<SystemTime>, Option<SystemTime>) {
+        let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        (mtime(&self.base), self.overlay.as_deref().and_then(mtime))
+    }
+}
+
+/// Lädt Basisgraph und Overlay. Ein fehlendes oder kaputtes Overlay ist
+/// kein Fehler (Regel 16). Fehlt der Basisgraph, reicht ein Overlay mit
+/// eigenen Knoten allein; nur wenn beides fehlt, wird der Fehler der
+/// Basis gemeldet.
+fn load_sources(sources: &GraphSources, iterations: usize) -> Result<LoadedGraph, data::LoadError> {
+    let base = GraphJson::load(&sources.base);
+    let overlay = sources
+        .overlay
+        .as_deref()
+        .filter(|_| sources.overlay_adds_nodes || base.is_ok())
+        .and_then(|p| match GraphJson::load(p) {
+            Ok(graph) => Some(graph),
+            Err(data::LoadError::Read(err)) if err.kind() == std::io::ErrorKind::NotFound => None,
+            Err(err) => {
+                tracing::warn!(path = %p.display(), %err, "Overlay nicht lesbar, wird ignoriert");
+                None
+            }
+        });
+    let mut raw = match (base, overlay.is_some()) {
+        (Ok(graph), _) => graph,
+        (Err(_), true) => GraphJson::default(),
+        (Err(err), false) => return Err(err),
+    };
+    if let Some(overlay) = overlay {
+        data::merge_overlay(&mut raw, overlay, sources.overlay_adds_nodes);
+    }
+    layout_graph(raw, sources.base.parent(), iterations)
+}
+
+#[cfg(test)]
 fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::LoadError> {
-    let raw = GraphJson::load(path)?;
+    layout_graph(GraphJson::load(path)?, path.parent(), iterations)
+}
+
+fn layout_graph(
+    raw: GraphJson,
+    labels_dir: Option<&Path>,
+    iterations: usize,
+) -> Result<LoadedGraph, data::LoadError> {
     let id_to_index: HashMap<&str, usize> = raw
         .nodes
         .iter()
@@ -317,7 +369,7 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
     let mut positions = layout_3d_grouped(raw.nodes.len(), &edge_pairs, Some(&group_of), &params);
     spread_groups(&mut positions, &group_of, community_ids.len());
 
-    let community_labels = path.parent().map(load_community_labels).unwrap_or_default();
+    let community_labels = labels_dir.map(load_community_labels).unwrap_or_default();
     let mut groups = build_groups(&raw.nodes, &community_ids, &group_of, &positions, &community_labels);
     let local_positions = layout_locals(raw.nodes.len(), &edge_pairs, &mut groups);
     let extent = groups
@@ -352,22 +404,24 @@ fn load_and_layout(path: &Path, iterations: usize) -> Result<LoadedGraph, data::
 }
 
 fn spawn_watcher(
-    path: PathBuf,
+    sources: GraphSources,
     iterations: usize,
     poll_interval: Duration,
     shared: Arc<Mutex<Shared>>,
     ctx: egui::Context,
 ) {
     std::thread::spawn(move || {
-        let mut last_mtime: Option<SystemTime> = None;
+        let mut last_mtimes = (None, None);
         let mut first = true;
         loop {
-            let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-            if first || mtime != last_mtime {
+            // Basis und Overlay beobachten: graphify und graphsync schreiben
+            // unabhängig voneinander.
+            let mtimes = sources.mtimes();
+            if first || mtimes != last_mtimes {
                 first = false;
-                last_mtime = mtime;
+                last_mtimes = mtimes;
                 let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
-                match load_and_layout(&path, iterations) {
+                match load_sources(&sources, iterations) {
                     Ok(loaded) => {
                         guard.graph = Some(Arc::new(loaded));
                         guard.error = None;
@@ -478,10 +532,15 @@ impl KnowledgeGraphTab {
     /// statt abzustürzen.
     pub fn new(config: &KnowledgeGraphConfig, ctx: &egui::Context) -> Self {
         let home = std::env::var("HOME").ok();
-        let path = data::expand_home(&config.graph_json_path, home.as_deref());
+        let overlay = config.links_overlay_path.trim();
+        let sources = GraphSources {
+            base: data::expand_home(&config.graph_json_path, home.as_deref()),
+            overlay: (!overlay.is_empty()).then(|| data::expand_home(overlay, home.as_deref())),
+            overlay_adds_nodes: config.overlay_adds_nodes,
+        };
         let shared = Arc::new(Mutex::new(Shared::default()));
         spawn_watcher(
-            path,
+            sources,
             config.layout_iterations,
             Duration::from_secs(config.poll_interval_secs.max(1)),
             Arc::clone(&shared),
@@ -723,5 +782,62 @@ mod tests {
         let loaded = load_and_layout(&path, 5).expect("laden trotz kaputter Kante");
         assert_eq!(loaded.nodes.len(), 1);
         assert!(loaded.edges.is_empty());
+    }
+
+    #[test]
+    fn load_sources_mischt_overlay_und_toleriert_fehlende_dateien() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path().join("graph.json");
+        let overlay = dir.path().join("links.json");
+        let sources = GraphSources {
+            base: base.clone(),
+            overlay: Some(overlay.clone()),
+            overlay_adds_nodes: true,
+        };
+        // Beides fehlt -> Fehler der Basis.
+        assert!(load_sources(&sources, 5).is_err());
+
+        std::fs::write(
+            &overlay,
+            r#"{"nodes": [
+                    {"id": "gs:/n/a.md", "label": "A", "community": 0, "source_file": "/n/a.md"},
+                    {"id": "gs:/n/b.md", "label": "B", "community": 0, "source_file": "/n/b.md"}],
+                "links": [{"source": "gs:/n/a.md", "target": "gs:/n/b.md", "relation": "links_to", "confidence": "EXTRACTED"}]}"#,
+        )
+        .expect("schreiben");
+        // Nur Overlay -> eigener Graph.
+        let only_overlay = load_sources(&sources, 5).expect("Overlay allein");
+        assert_eq!(only_overlay.nodes.len(), 2);
+        assert_eq!(only_overlay.edges.len(), 1);
+
+        std::fs::write(
+            &base,
+            r#"{"nodes": [{"id": "/n/a.md", "label": "a", "community": 0}], "links": []}"#,
+        )
+        .expect("schreiben");
+        let merged = load_sources(&sources, 5).expect("Basis + Overlay");
+        assert_eq!(merged.nodes.len(), 2, "a.md zugeordnet, b.md ergänzt");
+        assert_eq!(merged.edges.len(), 1);
+
+        // Kaputtes Overlay -> Basis allein.
+        std::fs::write(&overlay, "{kaputt").expect("schreiben");
+        let base_only = load_sources(&sources, 5).expect("Basis trotz kaputtem Overlay");
+        assert_eq!(base_only.nodes.len(), 1);
+    }
+
+    #[test]
+    fn overlay_ohne_basis_wird_nur_mit_neuen_knoten_genutzt() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let overlay = dir.path().join("links.json");
+        std::fs::write(&overlay, r#"{"nodes": [{"id": "x", "label": "X", "community": 0}], "links": []}"#)
+            .expect("schreiben");
+        let sources = GraphSources {
+            base: dir.path().join("fehlt.json"),
+            overlay: Some(overlay),
+            overlay_adds_nodes: false,
+        };
+        // Home-Übersicht ohne eigene graph.json: nicht stillschweigend
+        // durch Notizen ersetzen, sondern den Fehler der Basis zeigen.
+        assert!(load_sources(&sources, 5).is_err());
     }
 }

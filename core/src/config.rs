@@ -1106,15 +1106,24 @@ mod tests {
         assert_eq!(config.graph_sync.llm.max_runs_per_day, 6);
         // Ohne Werkzeuge: Notizinhalte dürfen nie Aktionen auslösen.
         let args = &config.graph_sync.llm.args;
-        let tools = args.iter().position(|a| a == "--tools").expect("--tools gesetzt");
+        let tools = args
+            .iter()
+            .position(|a| a == "--tools")
+            .expect("--tools gesetzt");
         assert_eq!(args[tools + 1], "");
     }
 
     #[test]
     fn overlay_default_zeigt_auf_graphsync_ausgabe() {
         let config = Config::default();
-        assert_eq!(config.knowledge_graph.links_overlay_path, config.graph_sync.output_path);
-        assert_eq!(config.home_overview.links_overlay_path, config.graph_sync.output_path);
+        assert_eq!(
+            config.knowledge_graph.links_overlay_path,
+            config.graph_sync.output_path
+        );
+        assert_eq!(
+            config.home_overview.links_overlay_path,
+            config.graph_sync.output_path
+        );
         assert!(config.knowledge_graph.overlay_adds_nodes);
         assert!(!config.home_overview.overlay_adds_nodes);
     }

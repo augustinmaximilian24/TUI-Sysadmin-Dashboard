@@ -9,6 +9,7 @@
 //! (dasselbe Prinzip wie `ActionsConfig::allowed_kinds`, siehe
 //! `logsentry_core::config`).
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -54,7 +55,7 @@ pub struct GraphEdge {
 /// und das verschachtelte `graph`-Objekt (dessen `hyperedges` laut
 /// graphify-Quellcode byte-identisch zum Top-Level-Feld ist) werden nicht
 /// gebraucht und von `serde_json` automatisch ignoriert.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct GraphJson {
     #[serde(default)]
     pub nodes: Vec<GraphNode>,
@@ -68,6 +69,132 @@ impl GraphJson {
         let parsed: Self = serde_json::from_str(&raw)?;
         Ok(parsed)
     }
+}
+
+/// Statistik einer Overlay-Zusammenführung.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MergeStats {
+    /// Overlay-Knoten, die einem bestehenden Knoten zugeordnet wurden.
+    pub matched: usize,
+    /// Neu hinzugefügte Knoten.
+    pub added: usize,
+    /// Übernommene Kanten.
+    pub edges: usize,
+}
+
+/// Mischt ein Overlay (z. B. die Ausgabe von `logsentry-graphsync`) in
+/// den Basisgraphen.
+///
+/// Overlay-Knoten werden über ihren Dateipfad (`source_file`) einem
+/// Basisknoten zugeordnet: gleicher Pfad, oder ein relativer Basispfad,
+/// auf den der Overlay-Pfad endet. Bei mehreren Treffern (graphify legt
+/// mehrere Konzepte pro Datei an) gewinnt der Knoten, dessen Label dem
+/// Dateinamen entspricht. Nicht zugeordnete Knoten werden nur bei
+/// `add_missing_nodes` übernommen, mit eigenen Community-IDs oberhalb der
+/// bestehenden. Pro Knotenpaar bleibt die Kante des Basisgraphen erhalten.
+pub fn merge_overlay(
+    base: &mut GraphJson,
+    overlay: GraphJson,
+    add_missing_nodes: bool,
+) -> MergeStats {
+    let mut stats = MergeStats::default();
+    let mut by_file_name: HashMap<String, Vec<usize>> = HashMap::new();
+    for (i, node) in base.nodes.iter().enumerate() {
+        for candidate in [node.source_file.as_deref(), Some(node.id.as_str())]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(name) = Path::new(candidate).file_name().and_then(|n| n.to_str()) {
+                let list = by_file_name.entry(name.to_string()).or_default();
+                if !list.contains(&i) {
+                    list.push(i);
+                }
+            }
+        }
+    }
+    let community_offset = base
+        .nodes
+        .iter()
+        .map(|n| n.community)
+        .max()
+        .map_or(0, |m| m + 1);
+    let mut known_ids: HashSet<String> = base.nodes.iter().map(|n| n.id.clone()).collect();
+
+    let mut id_map: HashMap<String, String> = HashMap::new();
+    for node in overlay.nodes {
+        let path = node.source_file.clone().unwrap_or_else(|| node.id.clone());
+        if let Some(i) = match_base_node(base, &by_file_name, &path) {
+            id_map.insert(node.id, base.nodes[i].id.clone());
+            stats.matched += 1;
+        } else if add_missing_nodes && known_ids.insert(node.id.clone()) {
+            id_map.insert(node.id.clone(), node.id.clone());
+            base.nodes.push(GraphNode {
+                community: community_offset + node.community,
+                ..node
+            });
+            stats.added += 1;
+        }
+    }
+
+    let pair = |a: &str, b: &str| {
+        if a <= b {
+            (a.to_string(), b.to_string())
+        } else {
+            (b.to_string(), a.to_string())
+        }
+    };
+    let mut pairs: HashSet<(String, String)> = base
+        .edges
+        .iter()
+        .map(|e| pair(&e.source, &e.target))
+        .collect();
+    for edge in overlay.edges {
+        let (Some(source), Some(target)) = (id_map.get(&edge.source), id_map.get(&edge.target))
+        else {
+            continue;
+        };
+        if source == target || !pairs.insert(pair(source, target)) {
+            continue;
+        }
+        base.edges.push(GraphEdge {
+            source: source.clone(),
+            target: target.clone(),
+            ..edge
+        });
+        stats.edges += 1;
+    }
+    stats
+}
+
+fn match_base_node(
+    base: &GraphJson,
+    by_file_name: &HashMap<String, Vec<usize>>,
+    path: &str,
+) -> Option<usize> {
+    let file = Path::new(path);
+    let name = file.file_name()?.to_str()?;
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or(name);
+    let matches_path = |candidate: &str| {
+        candidate == path
+            || (!candidate.starts_with('/') && path.ends_with(&format!("/{candidate}")))
+    };
+    let candidates: Vec<usize> = by_file_name
+        .get(name)?
+        .iter()
+        .copied()
+        .filter(|&i| {
+            let node = &base.nodes[i];
+            node.source_file.as_deref().is_some_and(matches_path) || matches_path(&node.id)
+        })
+        .collect();
+    candidates
+        .iter()
+        .copied()
+        .find(|&i| {
+            let label = base.nodes[i].label.to_lowercase();
+            label == name.to_lowercase() || label == stem.to_lowercase()
+        })
+        .or_else(|| candidates.first().copied())
 }
 
 /// Ersetzt ein führendes `~` durch das übergebene Home-Verzeichnis (analog
@@ -125,6 +252,99 @@ mod tests {
         assert_eq!(graph.edges[0].target, "b");
         assert_eq!(graph.nodes[1].community, 1);
         assert!(graph.nodes[1].rationale.is_none());
+    }
+
+    fn node(id: &str, label: &str, community: i64, source: Option<&str>) -> GraphNode {
+        GraphNode {
+            id: id.into(),
+            label: label.into(),
+            file_type: String::new(),
+            community,
+            community_name: None,
+            rationale: None,
+            source_file: source.map(Into::into),
+        }
+    }
+
+    fn edge(a: &str, b: &str, confidence: &str) -> GraphEdge {
+        GraphEdge {
+            source: a.into(),
+            target: b.into(),
+            relation: "r".into(),
+            confidence: confidence.into(),
+        }
+    }
+
+    #[test]
+    fn overlay_ordnet_ueber_pfad_zu_und_ergaenzt_fehlende_knoten() {
+        let mut base = GraphJson {
+            nodes: vec![
+                node("konzept", "Irgendwas", 0, Some("notes/a.md")),
+                node("a_md", "a", 0, Some("notes/a.md")),
+                node("/home/max/notes/b.md", "B", 3, None),
+            ],
+            edges: vec![edge("a_md", "/home/max/notes/b.md", "EXTRACTED")],
+        };
+        let overlay = GraphJson {
+            nodes: vec![
+                node("gs:a", "A", 0, Some("/home/max/notes/a.md")),
+                node("gs:b", "B", 0, Some("/home/max/notes/b.md")),
+                node("gs:c", "C", 1, Some("/home/max/notes/c.md")),
+                node("gs:other", "a", 1, Some("/anders/a.md")),
+            ],
+            edges: vec![
+                edge("gs:a", "gs:b", "INFERRED"),
+                edge("gs:a", "gs:c", "INFERRED"),
+                edge("gs:c", "gs:fehlt", "INFERRED"),
+            ],
+        };
+        let stats = merge_overlay(&mut base, overlay, true);
+        assert_eq!(
+            stats,
+            MergeStats {
+                matched: 2,
+                added: 2,
+                edges: 1
+            }
+        );
+        // a.md -> Knoten mit passendem Label, nicht das erste Konzept.
+        assert_eq!(base.edges[1].source, "a_md");
+        assert_eq!(base.edges[1].target, "gs:c");
+        assert_eq!(base.edges[1].confidence, "INFERRED");
+        // Basis-Kante a<->b bleibt EXTRACTED, keine Doppelung.
+        assert_eq!(base.edges.len(), 2);
+        // Neue Communities liegen oberhalb der bestehenden (max 3).
+        let c = base.nodes.iter().find(|n| n.id == "gs:c").expect("c");
+        assert_eq!(c.community, 5);
+    }
+
+    #[test]
+    fn overlay_ohne_neue_knoten_verbindet_nur_bestehende() {
+        let mut base = GraphJson {
+            nodes: vec![node("/n/a.md", "a", 0, None), node("/n/b.md", "b", 0, None)],
+            edges: vec![],
+        };
+        let overlay = GraphJson {
+            nodes: vec![
+                node("gs:a", "a", 0, Some("/n/a.md")),
+                node("gs:b", "b", 0, Some("/n/b.md")),
+                node("gs:c", "c", 0, Some("/n/c.md")),
+            ],
+            edges: vec![
+                edge("gs:a", "gs:b", "EXTRACTED"),
+                edge("gs:b", "gs:c", "INFERRED"),
+            ],
+        };
+        let stats = merge_overlay(&mut base, overlay, false);
+        assert_eq!(
+            stats,
+            MergeStats {
+                matched: 2,
+                added: 0,
+                edges: 1
+            }
+        );
+        assert_eq!(base.nodes.len(), 2);
     }
 
     #[test]
