@@ -455,6 +455,8 @@ mod tests {
             output_path: state_dir.join("links.json").display().to_string(),
             ..GraphSyncConfig::default()
         };
+        // Tests nutzen nur den FakeRunner, nie die echte CLI.
+        config.llm.enabled = true;
         config.llm.min_stable_secs = 0;
         config.llm.min_interval_secs = 100;
         config.llm.failure_backoff_secs = 1000;

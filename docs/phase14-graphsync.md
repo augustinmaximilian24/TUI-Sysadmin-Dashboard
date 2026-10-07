@@ -90,6 +90,11 @@ mit der installierten CLI (2.1.x):
 
 ## 7. KI-Stufe: Budget
 
+**Default: aus** (`[graph_sync.llm] enabled = false`). Auf Wunsch des
+Nutzers soll kein Guthaben verbraucht werden; ohne ausdrückliches
+Einschalten startet graphsync nie einen KI-Prozess. Die folgenden Grenzen
+gelten erst nach dem Einschalten.
+
 | Grenze | Default | Bedeutung |
 |---|---|---|
 | `max_runs_per_day` | 6 | Aufrufe pro lokalem Kalendertag, fehlgeschlagene zählen mit |

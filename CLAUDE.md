@@ -34,9 +34,10 @@ Heimserver (Haswell-Klasse, headless, später per TUI oder SSH).
 - ML-Modelle (Isolation Forest, TF-IDF)
 - Windows-/macOS-Support
 - LLM-Integration außer als explizit ausgelöste „Erkläre diese Anomalie"-Funktion
-  (Ausnahme, auf ausdrücklichen Wunsch ergänzt: die automatische, hart
-  budgetierte KI-Stufe von `logsentry-graphsync` in Phase 14 -- außerhalb
-  des Analyse-Hot-Paths, eigener Benutzerprozess)
+  (Ausnahme: die optionale, hart budgetierte KI-Stufe von
+  `logsentry-graphsync` in Phase 14 -- standardmäßig AUS, kein
+  Guthabenverbrauch ohne ausdrückliches Einschalten; außerhalb des
+  Analyse-Hot-Paths, eigener Benutzerprozess)
 
 ## 3. Tech-Stack
 
@@ -401,7 +402,7 @@ Entwurf und Abwägungen: `docs/phase14-graphsync.md`.
       (`graphsync/src/extract.rs`)
 - [x] Kanten: explizit -> `EXTRACTED`; gemeinsame seltene Begriffe und
       KI -> `INFERRED`; Obergrenzen pro Datei und gesamt (Regel 18)
-- [x] KI-Stufe automatisch mit Limit: `claude -p --tools ""` ohne Shell,
+- [x] KI-Stufe (Default aus, kein Guthabenverbrauch) mit Limit: `claude -p --tools ""` ohne Shell,
       Prompt via stdin, Tagesbudget (Läufe + USD aus `total_cost_usd`),
       Mindestabstand, Backoff, Zeitlimit, Ausgabegrenze, Antwort nur
       über Prompt-IDs validiert (`graphsync/src/llm.rs`)

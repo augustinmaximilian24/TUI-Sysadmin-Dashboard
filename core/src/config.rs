@@ -664,14 +664,16 @@ impl Default for GraphSyncConfig {
     }
 }
 
-/// KI-Stufe von `logsentry-graphsync`. Läuft automatisch, aber hart
+/// KI-Stufe von `logsentry-graphsync`. **Standardmäßig aus**: ohne
+/// ausdrückliches `enabled = true` wird nie ein KI-Aufruf gestartet und
+/// kein Guthaben verbraucht. Eingeschaltet läuft sie automatisch, aber hart
 /// begrenzt (Läufe und Kosten pro Tag, Dateien pro Lauf, Mindestabstand).
 /// Ohne Netz scheitert der Aufruf nur und wird nach `failure_backoff_secs`
 /// erneut versucht -- die Offline-Stufen laufen davon unberührt weiter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct GraphSyncLlmConfig {
-    /// Schaltet die KI-Stufe ein/aus.
+    /// Schaltet die KI-Stufe ein/aus (Default `false`: kein Guthabenverbrauch).
     pub enabled: bool,
     /// Programm, das direkt (ohne Shell) gestartet wird.
     pub command: String,
@@ -706,7 +708,7 @@ pub struct GraphSyncLlmConfig {
 impl Default for GraphSyncLlmConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             command: "claude".to_string(),
             args: [
                 "-p",
@@ -1109,6 +1111,8 @@ mod tests {
         assert_eq!(config.graph_sync.source_dirs, vec!["~/Notizen".to_string()]);
         assert_eq!(config.graph_sync.llm.max_usd_per_day, 0.1);
         assert_eq!(config.graph_sync.llm.max_runs_per_day, 6);
+        // Ohne ausdrückliches Einschalten kein KI-Aufruf, kein Guthaben.
+        assert!(!config.graph_sync.llm.enabled);
         // Ohne Werkzeuge: Notizinhalte dürfen nie Aktionen auslösen.
         let args = &config.graph_sync.llm.args;
         let tools = args

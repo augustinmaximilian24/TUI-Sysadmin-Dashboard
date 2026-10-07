@@ -131,8 +131,9 @@ Ablauf alle `scan_interval_secs` (Default 30 s):
    `EXTRACTED` (grün in der GUI).
 3. **Gemeinsame seltene Tags/Überschriftenbegriffe** → Kante `INFERRED`
    (amber). Begriffe in mehr als `max_term_docs` Dateien zählen nicht.
-4. **KI-Stufe:** geänderte Dateien, die seit `min_stable_secs` nicht mehr
-   bearbeitet wurden, gehen gebündelt an `claude -p` (ohne Werkzeuge,
+4. **KI-Stufe (standardmäßig aus, kein Guthabenverbrauch):** nur nach
+   ausdrücklichem `[graph_sync.llm] enabled = true` gehen geänderte Dateien, die seit `min_stable_secs` nicht mehr
+   bearbeitet wurden, gebündelt an `claude -p` (ohne Werkzeuge,
    `--tools ""`) → Kante `INFERRED`. Hart begrenzt durch
    `max_runs_per_day`, `max_usd_per_day`, `max_files_per_run` und
    `min_interval_secs`; ohne Netz wird nach `failure_backoff_secs` erneut
@@ -154,8 +155,8 @@ journalctl --user -u logsentry-graphsync -f  # Deltas, KI-Läufe, Kosten
 
 Die KI-Stufe nutzt die eigene Claude-Code-Anmeldung (`claude` muss im
 `PATH` der User-Unit liegen, siehe `Environment=PATH=` in
-`packaging/systemd/logsentry-graphsync.service`). Abschalten:
-`[graph_sync.llm] enabled = false` oder `--no-llm`.
+`packaging/systemd/logsentry-graphsync.service`). Im Auslieferungszustand
+ist sie aus; `--no-llm` erzwingt das zusätzlich pro Aufruf.
 
 ## Entwicklung
 

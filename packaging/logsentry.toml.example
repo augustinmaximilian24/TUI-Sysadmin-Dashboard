@@ -48,9 +48,10 @@ scan_interval_secs = 30
 max_term_docs = 20
 
 [graph_sync.llm]
-# Semantische Verknüpfungen über `claude -p` (ohne Werkzeuge). Läuft
-# automatisch, aber hart begrenzt; ohne Netz wird nur später erneut versucht.
-enabled = true
+# Semantische Verknüpfungen über `claude -p` (ohne Werkzeuge).
+# AUS, damit kein Guthaben verbraucht wird. Nur bewusst auf true setzen;
+# dann läuft sie automatisch, aber hart begrenzt durch die Werte unten.
+enabled = false
 max_runs_per_day = 6
 max_usd_per_day = 0.5
 max_files_per_run = 10
