@@ -1,0 +1,29 @@
+[package]
+name = "logsentry-graphsync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "logsentry-graphsync"
+path = "src/main.rs"
+
+[lib]
+name = "logsentry_graphsync"
+path = "src/lib.rs"
+
+[dependencies]
+logsentry-core = { path = "../core" }
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+# chrono: Tagesgrenze des KI-Budgets nach lokaler Zeit (wie die Baselines).
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "daemon", "gui", "proto", "tui"]
+members = ["core", "daemon", "graphsync", "gui", "proto", "tui"]
 
 [workspace.package]
 version = "0.1.0"

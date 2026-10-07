@@ -595,6 +595,10 @@ pub struct GraphSyncConfig {
     pub extensions: Vec<String>,
     /// Verzeichnisnamen, die beim Durchsuchen übersprungen werden.
     pub exclude_dir_names: Vec<String>,
+    /// Versteckte Unterverzeichnisse (`.name`) überspringen, z. B. `.cargo`
+    /// oder `.local`, wenn `~` als Quelle eingetragen ist. Die Wurzeln
+    /// selbst dürfen versteckt sein (`~/.claude/activity-log`).
+    pub skip_hidden_dirs: bool,
     /// Harte Obergrenze für die Anzahl erfasster Dateien (Regel 18).
     pub max_files: usize,
     /// Größere Dateien werden übersprungen (Bytes).
@@ -639,6 +643,7 @@ impl Default for GraphSyncConfig {
             .iter()
             .map(ToString::to_string)
             .collect(),
+            skip_hidden_dirs: true,
             max_files: 20_000,
             max_file_bytes: 1_000_000,
             scan_interval_secs: 30,
