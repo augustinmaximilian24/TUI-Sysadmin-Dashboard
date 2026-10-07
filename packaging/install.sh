@@ -18,8 +18,9 @@ CONFIG_DIR=/etc/logsentry
 
 DAEMON_BIN="$REPO_ROOT/target/release/logsentry-daemon"
 GUI_BIN="$REPO_ROOT/target/release/logsentry-gui"
+GRAPHSYNC_BIN="$REPO_ROOT/target/release/logsentry-graphsync"
 
-if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$GUI_BIN" ]; then
+if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$GUI_BIN" ] || [ ! -x "$GRAPHSYNC_BIN" ]; then
     echo "Release-Binaries fehlen. Erst bauen: cargo build --release" >&2
     exit 1
 fi
@@ -30,6 +31,7 @@ groupadd --system logsentry 2>/dev/null || true
 echo "Kopiere Binaries nach $BIN_DIR ..."
 install -Dm755 "$DAEMON_BIN" "$BIN_DIR/logsentry-daemon"
 install -Dm755 "$GUI_BIN" "$BIN_DIR/logsentry-gui"
+install -Dm755 "$GRAPHSYNC_BIN" "$BIN_DIR/logsentry-graphsync"
 
 if [ ! -f "$CONFIG_DIR/logsentry.toml" ]; then
     echo "Installiere Beispiel-Konfiguration nach $CONFIG_DIR/logsentry.toml ..."
@@ -41,6 +43,9 @@ fi
 echo "Installiere systemd-Unit ..."
 install -Dm644 "$REPO_ROOT/packaging/systemd/logsentry.service" /etc/systemd/system/logsentry.service
 systemctl daemon-reload
+
+echo "Installiere systemd-User-Unit für graphsync (läuft später als Benutzer, nicht als root) ..."
+install -Dm644 "$REPO_ROOT/packaging/systemd/logsentry-graphsync.service" /etc/systemd/user/logsentry-graphsync.service
 
 echo "Installiere .desktop-Datei für die GUI ..."
 install -Dm644 "$REPO_ROOT/packaging/logsentry.desktop" /usr/share/applications/logsentry.desktop
@@ -62,4 +67,11 @@ Fertig. Nächste Schritte:
 
 4. GUI starten (aus dem Anwendungsmenü oder direkt):
      logsentry-gui
+
+5. Optional: automatische Verknüpfungen für die Graph-Ansichten
+   (Quellordner in [graph_sync] eintragen, dann als normaler Benutzer,
+   NICHT mit sudo):
+     systemctl --user daemon-reload
+     systemctl --user enable --now logsentry-graphsync.service
+     journalctl --user -u logsentry-graphsync -f
 EOF

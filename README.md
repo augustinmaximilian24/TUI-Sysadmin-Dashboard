@@ -115,6 +115,49 @@ Aktion filtert der Daemon deren eigene Folgezeilen für ein kurzes
 Zeitfenster (Default 30 s) aus der Anomalie-Erkennung heraus, damit die
 Aktion nicht ihre eigene nächste Anomalie auslöst.
 
+## Automatische Verknüpfungen (graphsync, optional)
+
+`logsentry-graphsync` hält die Verknüpfungen der beiden Graph-Ansichten
+(Wissensgraph, Home-Übersicht) selbstständig aktuell. Es läuft als
+**systemd-User-Unit unter dem eigenen Konto** (nicht im Daemon, nicht als
+root), weil die Notizen im Home-Verzeichnis liegen.
+
+Ablauf alle `scan_interval_secs` (Default 30 s):
+
+1. **Delta:** Quellordner durchsuchen; nur Dateien mit geänderter
+   Größe/mtime werden gelesen und gehasht, nur bei geändertem Inhalt neu
+   ausgewertet. Ein Lauf ohne Änderung kostet bei 5000 Dateien ≈ 0,1 s.
+2. **Explizite Links** (`[[Wikilink]]`, `[Text](pfad.md)`) → Kante
+   `EXTRACTED` (grün in der GUI).
+3. **Gemeinsame seltene Tags/Überschriftenbegriffe** → Kante `INFERRED`
+   (amber). Begriffe in mehr als `max_term_docs` Dateien zählen nicht.
+4. **KI-Stufe (standardmäßig aus, kein Guthabenverbrauch):** nur nach
+   ausdrücklichem `[graph_sync.llm] enabled = true` gehen geänderte Dateien, die seit `min_stable_secs` nicht mehr
+   bearbeitet wurden, gebündelt an `claude -p` (ohne Werkzeuge,
+   `--tools ""`) → Kante `INFERRED`. Hart begrenzt durch
+   `max_runs_per_day`, `max_usd_per_day`, `max_files_per_run` und
+   `min_interval_secs`; ohne Netz wird nach `failure_backoff_secs` erneut
+   versucht, die Stufen 1–3 laufen davon unberührt weiter.
+
+Ergebnis ist `~/.local/share/logsentry/graphsync/links.json` (gleiches
+Format wie `graph.json`); die GUI mischt die Datei automatisch ein und lädt
+bei jeder Änderung neu.
+
+Einrichten (nach `sudo ./packaging/install.sh`):
+
+```sh
+sudo nano /etc/logsentry/logsentry.toml      # [graph_sync] source_dirs anpassen
+logsentry-graphsync --once --no-llm          # Probelauf ohne KI
+systemctl --user daemon-reload
+systemctl --user enable --now logsentry-graphsync.service
+journalctl --user -u logsentry-graphsync -f  # Deltas, KI-Läufe, Kosten
+```
+
+Die KI-Stufe nutzt die eigene Claude-Code-Anmeldung (`claude` muss im
+`PATH` der User-Unit liegen, siehe `Environment=PATH=` in
+`packaging/systemd/logsentry-graphsync.service`). Im Auslieferungszustand
+ist sie aus; `--no-llm` erzwingt das zusätzlich pro Aufruf.
+
 ## Entwicklung
 
 ```sh

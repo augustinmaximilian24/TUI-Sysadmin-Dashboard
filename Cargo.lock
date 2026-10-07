@@ -1979,6 +1979,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "logsentry-graphsync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "logsentry-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "logsentry-gui"
 version = "0.1.0"
 dependencies = [

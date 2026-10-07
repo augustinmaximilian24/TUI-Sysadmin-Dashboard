@@ -63,6 +63,9 @@ pub struct Config {
     /// Erkennung anderer Geräte im Heimnetz per ARP (Phase-12-Erweiterung,
     /// optional).
     pub lan_devices: LanDevicesConfig,
+    /// Automatische Delta- und Verknüpfungserkennung für Markdown-Dateien
+    /// (`logsentry-graphsync`, Phase 14, optional).
+    pub graph_sync: GraphSyncConfig,
 }
 
 /// Einstellungen für die Journal-Ingestion.
@@ -514,6 +517,19 @@ pub struct KnowledgeGraphConfig {
     /// `layout`-Modul) -- mehr Iterationen ergeben ein stabileres Layout,
     /// kosten aber Zeit beim Laden.
     pub layout_iterations: usize,
+    /// Zusätzliche, von `logsentry-graphsync` erzeugte Verknüpfungen
+    /// (gleiches Format wie `graph.json`), die beim Laden in den Graphen
+    /// eingemischt werden. Leer = keine. Eine fehlende Datei ist kein
+    /// Fehler (Regel 16).
+    pub links_overlay_path: String,
+    /// Ob Dateien aus dem Overlay, die im Basisgraphen keinen Knoten haben,
+    /// als neue Knoten hinzugefügt werden (`false` = nur bestehende Knoten
+    /// verbinden).
+    pub overlay_adds_nodes: bool,
+    /// Obergrenze für neu hinzugefügte Overlay-Knoten (Regel 18): das
+    /// 3D-Layout wächst quadratisch mit der Knotenzahl (2000 Knoten ≈
+    /// 2,5 s im Release-Build). Vernetzte Dateien haben Vorrang.
+    pub overlay_max_added_nodes: usize,
 }
 
 impl Default for KnowledgeGraphConfig {
@@ -526,6 +542,9 @@ impl Default for KnowledgeGraphConfig {
             idle_resume_secs: 2.5,
             drag_sensitivity_deg_per_px: 0.3,
             layout_iterations: 300,
+            links_overlay_path: DEFAULT_GRAPH_SYNC_OUTPUT.to_string(),
+            overlay_adds_nodes: true,
+            overlay_max_added_nodes: 1_500,
         }
     }
 }
@@ -540,6 +559,12 @@ pub struct HomeOverviewConfig {
     pub enabled: bool,
     /// Pfad zur `graph.json` (`~` wird durch `$HOME` ersetzt).
     pub graph_json_path: String,
+    /// Siehe [`KnowledgeGraphConfig::links_overlay_path`].
+    pub links_overlay_path: String,
+    /// Siehe [`KnowledgeGraphConfig::overlay_adds_nodes`]. Default `false`:
+    /// die Home-Übersicht zeigt Ordner, einzelne Notizen sollen sie nicht
+    /// überfluten -- es werden nur vorhandene Knoten verbunden.
+    pub overlay_adds_nodes: bool,
 }
 
 impl Default for HomeOverviewConfig {
@@ -547,6 +572,169 @@ impl Default for HomeOverviewConfig {
         Self {
             enabled: true,
             graph_json_path: "~/.local/share/homegraph/graph.json".to_string(),
+            links_overlay_path: DEFAULT_GRAPH_SYNC_OUTPUT.to_string(),
+            overlay_adds_nodes: false,
+        }
+    }
+}
+
+/// Default-Ausgabepfad von `logsentry-graphsync`, zugleich Default-Overlay
+/// beider Graph-Ansichten.
+pub const DEFAULT_GRAPH_SYNC_OUTPUT: &str = "~/.local/share/logsentry/graphsync/links.json";
+
+/// Einstellungen für `logsentry-graphsync` (Phase 14, optional): erkennt
+/// geänderte Markdown-Dateien per Hash (Delta), extrahiert Verknüpfungen
+/// und schreibt sie als Overlay für die Graph-Ansichten.
+///
+/// Läuft als eigener Benutzerprozess, nicht im Daemon: die Dateien liegen
+/// im Home-Verzeichnis, der Daemon ist bewusst davon abgeschottet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GraphSyncConfig {
+    /// Schaltet die Synchronisation ein/aus.
+    pub enabled: bool,
+    /// Wurzelverzeichnisse, die rekursiv nach Dateien durchsucht werden
+    /// (`~` wird durch `$HOME` ersetzt).
+    pub source_dirs: Vec<String>,
+    /// Berücksichtigte Dateiendungen (ohne Punkt, Groß-/Kleinschreibung egal).
+    pub extensions: Vec<String>,
+    /// Verzeichnisnamen, die beim Durchsuchen übersprungen werden.
+    pub exclude_dir_names: Vec<String>,
+    /// Versteckte Unterverzeichnisse (`.name`) überspringen, z. B. `.cargo`
+    /// oder `.local`, wenn `~` als Quelle eingetragen ist. Die Wurzeln
+    /// selbst dürfen versteckt sein (`~/.claude/activity-log`).
+    pub skip_hidden_dirs: bool,
+    /// Harte Obergrenze für die Anzahl erfasster Dateien (Regel 18).
+    pub max_files: usize,
+    /// Größere Dateien werden übersprungen (Bytes).
+    pub max_file_bytes: u64,
+    /// Abstand zwischen zwei Prüfläufen in Sekunden.
+    pub scan_interval_secs: u64,
+    /// Zustandsdatei (Hashes, extrahierte Links/Begriffe, KI-Ergebnisse).
+    pub state_path: String,
+    /// Ausgabedatei im `graph.json`-Format (wird von der GUI eingemischt).
+    pub output_path: String,
+    /// Mindestlänge eines Überschriften-Begriffs.
+    pub min_term_len: usize,
+    /// Begriffe, die in mehr Dateien vorkommen, gelten als zu allgemein
+    /// und erzeugen keine Kanten (begrenzt zugleich die Paaranzahl).
+    pub max_term_docs: usize,
+    /// Mindestpunktzahl gemeinsamer Begriffe für eine Kante (gemeinsamer
+    /// Tag = 2 Punkte, gemeinsames Überschriftenwort = 1 Punkt).
+    pub min_shared_score: u32,
+    /// Höchstzahl begriffsbasierter Kanten pro Datei.
+    pub max_inferred_per_file: usize,
+    /// Harte Obergrenze für die Kantenzahl der Ausgabe (Regel 18).
+    pub max_edges: usize,
+    /// KI-Stufe (semantische Verknüpfungen über `claude -p`).
+    pub llm: GraphSyncLlmConfig,
+}
+
+impl Default for GraphSyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            source_dirs: vec!["~/.claude/activity-log".to_string()],
+            extensions: vec!["md".to_string(), "markdown".to_string()],
+            exclude_dir_names: [
+                ".git",
+                "node_modules",
+                "target",
+                ".cache",
+                ".trash",
+                ".obsidian",
+                "graphify-out",
+            ]
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+            skip_hidden_dirs: true,
+            max_files: 20_000,
+            max_file_bytes: 1_000_000,
+            scan_interval_secs: 30,
+            state_path: "~/.local/share/logsentry/graphsync/state.json".to_string(),
+            output_path: DEFAULT_GRAPH_SYNC_OUTPUT.to_string(),
+            min_term_len: 4,
+            max_term_docs: 20,
+            min_shared_score: 2,
+            max_inferred_per_file: 5,
+            max_edges: 50_000,
+            llm: GraphSyncLlmConfig::default(),
+        }
+    }
+}
+
+/// KI-Stufe von `logsentry-graphsync`. **Standardmäßig aus**: ohne
+/// ausdrückliches `enabled = true` wird nie ein KI-Aufruf gestartet und
+/// kein Guthaben verbraucht. Eingeschaltet läuft sie automatisch, aber hart
+/// begrenzt (Läufe und Kosten pro Tag, Dateien pro Lauf, Mindestabstand).
+/// Ohne Netz scheitert der Aufruf nur und wird nach `failure_backoff_secs`
+/// erneut versucht -- die Offline-Stufen laufen davon unberührt weiter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct GraphSyncLlmConfig {
+    /// Schaltet die KI-Stufe ein/aus (Default `false`: kein Guthabenverbrauch).
+    pub enabled: bool,
+    /// Programm, das direkt (ohne Shell) gestartet wird.
+    pub command: String,
+    /// Argumente; der Prompt geht über stdin. Default: Claude Code ohne
+    /// Werkzeuge (`--tools ""`), damit Notizinhalte nie zu Aktionen führen.
+    pub args: Vec<String>,
+    /// Höchstzahl Aufrufe pro Kalendertag (auch fehlgeschlagene zählen).
+    pub max_runs_per_day: u32,
+    /// Kostenobergrenze pro Kalendertag in USD (laut `total_cost_usd`).
+    pub max_usd_per_day: f64,
+    /// Höchstzahl Dateien pro Aufruf.
+    pub max_files_per_run: usize,
+    /// Pro Datei werden höchstens so viele Zeichen gesendet.
+    pub max_chars_per_file: usize,
+    /// Höchstzahl bekannter Dateien, die als mögliche Ziele im Prompt stehen.
+    pub max_known_files_in_prompt: usize,
+    /// Eine Datei wird erst analysiert, wenn sie so lange unverändert ist
+    /// (vermeidet Aufrufe während des Schreibens).
+    pub min_stable_secs: u64,
+    /// Mindestabstand zwischen zwei erfolgreichen Aufrufen in Sekunden.
+    pub min_interval_secs: u64,
+    /// Wartezeit nach einem fehlgeschlagenen Aufruf (z. B. kein Netz).
+    pub failure_backoff_secs: u64,
+    /// Zeitlimit pro Aufruf in Sekunden.
+    pub timeout_secs: u64,
+    /// Höchstzahl übernommener Kanten pro Aufruf.
+    pub max_edges_per_run: usize,
+    /// Höchstzahl gelesener Ausgabe-Bytes (Regel 18).
+    pub max_output_bytes: usize,
+}
+
+impl Default for GraphSyncLlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            command: "claude".to_string(),
+            args: [
+                "-p",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--no-session-persistence",
+                "--output-format",
+                "json",
+                "--model",
+                "sonnet",
+            ]
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+            max_runs_per_day: 6,
+            max_usd_per_day: 0.5,
+            max_files_per_run: 10,
+            max_chars_per_file: 6_000,
+            max_known_files_in_prompt: 500,
+            min_stable_secs: 600,
+            min_interval_secs: 1_800,
+            failure_backoff_secs: 1_800,
+            timeout_secs: 300,
+            max_edges_per_run: 200,
+            max_output_bytes: 1_000_000,
         }
     }
 }
@@ -908,6 +1096,45 @@ mod tests {
         // Nicht gesetzte Felder bleiben beim Default.
         assert_eq!(config.knowledge_graph.poll_interval_secs, 2);
         assert_eq!(config.knowledge_graph.idle_resume_secs, 2.5);
+    }
+
+    #[test]
+    fn graph_sync_teilkonfiguration_behaelt_ki_limits() {
+        let raw = r#"
+            [graph_sync]
+            source_dirs = ["~/Notizen"]
+
+            [graph_sync.llm]
+            max_usd_per_day = 0.1
+        "#;
+        let config = Config::load_from_str(raw).expect("gueltiges TOML");
+        assert_eq!(config.graph_sync.source_dirs, vec!["~/Notizen".to_string()]);
+        assert_eq!(config.graph_sync.llm.max_usd_per_day, 0.1);
+        assert_eq!(config.graph_sync.llm.max_runs_per_day, 6);
+        // Ohne ausdrückliches Einschalten kein KI-Aufruf, kein Guthaben.
+        assert!(!config.graph_sync.llm.enabled);
+        // Ohne Werkzeuge: Notizinhalte dürfen nie Aktionen auslösen.
+        let args = &config.graph_sync.llm.args;
+        let tools = args
+            .iter()
+            .position(|a| a == "--tools")
+            .expect("--tools gesetzt");
+        assert_eq!(args[tools + 1], "");
+    }
+
+    #[test]
+    fn overlay_default_zeigt_auf_graphsync_ausgabe() {
+        let config = Config::default();
+        assert_eq!(
+            config.knowledge_graph.links_overlay_path,
+            config.graph_sync.output_path
+        );
+        assert_eq!(
+            config.home_overview.links_overlay_path,
+            config.graph_sync.output_path
+        );
+        assert!(config.knowledge_graph.overlay_adds_nodes);
+        assert!(!config.home_overview.overlay_adds_nodes);
     }
 
     #[test]
