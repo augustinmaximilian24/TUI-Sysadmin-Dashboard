@@ -71,3 +71,10 @@ overlay_max_added_nodes = 1500
 # Hier nur vorhandene Knoten verbinden, keine einzelnen Notizen ergänzen.
 links_overlay_path = "~/.local/share/logsentry/graphsync/links.json"
 overlay_adds_nodes = false
+
+[network_map]
+# Stadt-Datenbank im MaxMind-DB-Format (.mmdb), z. B. DB-IP City Lite
+# (kostenlos, CC BY 4.0, Quelle db-ip.com). Fehlt die Datei, zeigt die Karte
+# nur Länder. Leer = Stadtauflösung aus. Wird komplett in den Speicher
+# gelesen (rund 127 MB). Siehe README, Abschnitt "Städte auf der Netzwerkkarte".
+city_database_path = "~/.local/share/logsentry/dbip-city-lite.mmdb"

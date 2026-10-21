@@ -439,6 +439,36 @@ Benutzerkonto (Regel 7); der Daemon pollt weiter nur den System-Bus.
       Karte (Regel 16)
 - [x] Live gegen das echte System und in der laufenden GUI verifiziert
 
+**Phase 16 – Netzwerkkarte: Stadt statt nur Land (optional, außerhalb des
+ursprünglichen v1.0-Scopes)**
+
+Auf einen Wunsch hin: bei einem privaten Server (Reverse-DNS ohne
+Ortshinweis, z. B. `…dip0.t-ipconnect.de`) sollte die Karte mindestens die
+Stadt zeigen, nicht nur das Land. Vorher gab es Städte nur über
+Reverse-DNS-Hinweise (Flughafencodes bei Rechenzentren, Telekom-Backbone).
+
+- [x] `maxminddb` (reines Rust, ohne `unsafe`/`mmap`) liest eine
+      Stadt-Datenbank im MaxMind-DB-Format
+      (`gui/src/network_map/citydb.rs`); `NetworkMapConfig::city_database_path`
+      (Default `~/.local/share/logsentry/dbip-city-lite.mmdb`, leer = aus,
+      fehlende Datei = still wie bisher). Eine geteilte Instanz für Verbindungs-
+      und Routen-Thread (`SharedCityDb`), nie auf dem Render-Thread (Regel 21)
+- [x] Orts-Reihenfolge in `combine_location`: Reverse-DNS-Hinweis ->
+      Stadt-Datenbank -> Länder-Mittelpunkt; `LocationSource` hält die Quelle
+      fest, Datenbank-/Router-Orte erscheinen als "ca." in Karte, Tooltip und
+      Verbindungsliste
+- [x] Fallback `refine_from_route`: Ohne bessere Quelle nimmt ein Ziel die
+      Stadt des **letzten** Routers mit Ortshinweis auf dem gemessenen Weg
+      (nur gleiches Land, Anzeige "ca. … (via Router)")
+- [x] Tests: Datenbank-Lesen über eine im Test erzeugte Mini-Datenbank
+      (`maxminddb-writer`, nur dev-dependency), Orts-Reihenfolge und
+      Router-Ableitung als reine Funktionen; Rauchtest gegen die echte Datei
+      (`LOGSENTRY_CITYDB=… cargo test -p logsentry-gui echte_datenbank --
+      --ignored --nocapture`), gegen DB-IP City Lite 2026-10 gelaufen
+- [ ] Live in der GUI gegen eine echte Verbindung zu einem Privatanschluss
+      verifiziert (Genauigkeit der angezeigten Stadt, Speicherverbrauch der GUI
+      mit geladener Datei)
+
 ## 7. Definition of Done (v1.0)
 
 - Daemon läuft 72 h ohne Absturz und ohne Speicherwachstum

@@ -19,6 +19,7 @@
 
 mod camera;
 mod data;
+pub(crate) use data::expand_home;
 mod holo;
 mod layout;
 

@@ -184,6 +184,40 @@ Die KI-Stufe nutzt die eigene Claude-Code-Anmeldung (`claude` muss im
 `packaging/systemd/logsentry-graphsync.service`). Im Auslieferungszustand
 ist sie aus; `--no-llm` erzwingt das zusätzlich pro Aufruf.
 
+## Städte auf der Netzwerkkarte (optional)
+
+Ohne weitere Datei zeigt die Karte das Land der Gegenstelle. Mit einer
+Stadt-Datenbank erscheint zusätzlich die Stadt, auch bei Privatanschlüssen
+(z. B. dem Heimserver eines Bekannten):
+
+```sh
+mkdir -p ~/.local/share/logsentry && cd ~/.local/share/logsentry
+curl -O https://download.db-ip.com/free/dbip-city-lite-JJJJ-MM.mmdb.gz   # aktuellen Monat einsetzen
+gunzip dbip-city-lite-JJJJ-MM.mmdb.gz
+mv dbip-city-lite-JJJJ-MM.mmdb dbip-city-lite.mmdb
+```
+
+Der Pfad steht in `[network_map] city_database_path` (Default
+`~/.local/share/logsentry/dbip-city-lite.mmdb`, leer = aus). Fehlt die Datei,
+bleibt alles beim Alten. Die Datei wird komplett in den Speicher gelesen
+(rund 127 MB bei DB-IP City Lite, Stand Oktober 2026) und beim Start einmal geladen.
+Sie wird monatlich neu veröffentlicht; neu laden heißt GUI neu starten.
+
+Die Reihenfolge für den Ort einer Gegenstelle: Hinweis im Reverse-DNS-Namen
+(z. B. Flughafencode bei Rechenzentren), dann Stadt-Datenbank, dann die Stadt
+des letzten Routers mit Ortshinweis auf dem gemessenen Weg (Anzeige "ca. …
+(via Router)"), zuletzt der Länder-Mittelpunkt. Orte aus der Datenbank
+erscheinen als "ca.": bei Privatanschlüssen ist es oft nur die Stadt des
+Einwahlknotens, im ungünstigen Fall liegt sie dutzende Kilometer daneben.
+Hinter VPN, Tunnel oder Carrier-Grade-NAT zeigt die Karte den Tunnel-Endpunkt.
+In der Verbindungsliste unter der Karte stehen zusätzlich Region (Bundesland) und
+Koordinaten; ohne Stadt sind die Koordinaten der Länder-Mittelpunkt und so benannt.
+
+IP-Geolocation-Daten von [DB-IP.com](https://db-ip.com) (Lizenz
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), Namensnennung
+erforderlich). Alternativ funktioniert jede Datei im MaxMind-DB-Format, z. B.
+GeoLite2-City (Account und Lizenzbedingungen von MaxMind).
+
 ## Entwicklung
 
 ```sh

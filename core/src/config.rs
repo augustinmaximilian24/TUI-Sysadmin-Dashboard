@@ -802,6 +802,18 @@ pub struct NetworkMapConfig {
     /// Pfad zur legacy MaxMind "GeoIP Country Edition"-Datenbank, wie sie
     /// das Debian/Ubuntu-Paket `geoip-database` installiert.
     pub geoip_database_path: String,
+    /// Pfad zu einer Stadt-Datenbank im MaxMind-DB-Format (`.mmdb`), z. B. der
+    /// kostenlosen *DB-IP City Lite* (CC BY 4.0, Namensnennung an DB-IP.com
+    /// nötig, Quelle: <https://db-ip.com/db/download/ip-to-city-lite>) oder
+    /// *GeoLite2-City*. Damit zeigt die Karte statt nur des Landes die Stadt
+    /// der Gegenstelle, auch bei Privatanschlüssen. `~` wird durch `$HOME`
+    /// ersetzt.
+    ///
+    /// Fehlt die Datei, bleibt es beim Verhalten ohne Stadtauflösung -- kein
+    /// Fehler. Leer = ausdrücklich aus. Die Datei wird komplett in den
+    /// Speicher gelesen; die Werte sind Näherungen (siehe
+    /// `gui/src/network_map/citydb.rs`).
+    pub city_database_path: String,
     /// Abstand zwischen zwei Scans von `/proc/net/tcp` in Sekunden.
     pub poll_interval_seconds: u64,
     /// ISO-3166-1-Alpha-2-Code für den "Zuhause"-Punkt auf der Karte.
@@ -855,6 +867,7 @@ impl Default for NetworkMapConfig {
         Self {
             enabled: true,
             geoip_database_path: "/usr/share/GeoIP/GeoIP.dat".to_string(),
+            city_database_path: "~/.local/share/logsentry/dbip-city-lite.mmdb".to_string(),
             poll_interval_seconds: 5,
             home_country_override: String::new(),
             home_latitude: None,
@@ -1237,5 +1250,38 @@ mod tests {
         assert!(!config.lan_devices.enabled);
         assert!(!config.lan_devices.ping_sweep_enabled);
         assert_eq!(config.lan_devices.scan_interval_secs, 30);
+    }
+
+    #[test]
+    fn network_map_stadt_datenbank_hat_nutzerpfad_als_default() {
+        let config = Config::default();
+        assert_eq!(
+            config.network_map.city_database_path,
+            "~/.local/share/logsentry/dbip-city-lite.mmdb"
+        );
+    }
+
+    #[test]
+    fn network_map_stadt_datenbank_pfad_ist_per_toml_aenderbar_oder_abschaltbar() {
+        let custom: Config = toml::from_str(
+            r#"
+            [network_map]
+            city_database_path = "/opt/geo/GeoLite2-City.mmdb"
+            "#,
+        )
+        .expect("gültiges TOML");
+        assert_eq!(
+            custom.network_map.city_database_path,
+            "/opt/geo/GeoLite2-City.mmdb"
+        );
+
+        let off: Config = toml::from_str(
+            r#"
+            [network_map]
+            city_database_path = ""
+            "#,
+        )
+        .expect("gültiges TOML");
+        assert!(off.network_map.city_database_path.is_empty());
     }
 }
