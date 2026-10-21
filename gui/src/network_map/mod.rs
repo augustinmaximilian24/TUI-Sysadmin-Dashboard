@@ -13,6 +13,13 @@
 //! `show()` läuft auf dem Render-Thread, klont nur den kleinen aktuellen
 //! Zustand und zeichnet daraus -- keine I/O im Render-Pfad (Regel 21).
 //!
+//! Ort einer Gegenstelle, in dieser Reihenfolge (siehe [`combine_location`]
+//! und [`refine_from_route`]): Reverse-DNS-Hinweis des Ziels selbst, dann die
+//! lokale Stadt-Datenbank ([`citydb`]), dann der letzte Router mit
+//! Ortshinweis auf dem gemessenen Weg, zuletzt der Länder-Mittelpunkt. Wie
+//! sicher der Ort ist, hält [`LocationSource`] fest und zeigt die Anzeige als
+//! "ca." an.
+//!
 //! Ein **zweiter** Hintergrund-Thread misst optional den tatsächlichen Weg
 //! zu jeder Gegenstelle ([`traceroute`]), sodass die Karte die
 //! Zwischenstationen zeigt ("Zuhause -> Frankfurt -> Vereinigte Staaten ->
@@ -21,6 +28,7 @@
 //! abschaltbar (`traceroute_enabled`) und in einem eigenen Thread, damit
 //! ein langsamer Messlauf die Verbindungsanzeige nicht ausbremst.
 
+mod citydb;
 pub mod connections;
 pub mod geoip;
 mod globe;
@@ -35,6 +43,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, Pos2, Rect, Sense, Stroke};
 
+use citydb::{CityDb, CityDbState, CityHit, SharedCityDb};
 use geoip::CountryDb;
 use globe::{GlobeCamera, Vec3};
 use logsentry_core::config::NetworkMapConfig;
@@ -86,6 +95,14 @@ struct RouteHop {
     /// Reverse-DNS etwas hergab, sonst der ausgeschriebene Ländername.
     /// `None`, wenn sich nicht einmal ein Land bestimmen ließ.
     place: Option<String>,
+    /// Land des Hops, soweit bestimmbar -- [`refine_from_route`] übernimmt
+    /// nur Router aus demselben Land wie das Ziel.
+    country: Option<&'static str>,
+    /// Nur gesetzt, wenn der Reverse-DNS-Name des Routers selbst einen Ort
+    /// verrät (Städtekürzel, Flughafencode). Das ist belastbarer als ein
+    /// Datenbankeintrag für eine Router-Adresse und deshalb die einzige
+    /// Quelle, aus der [`refine_from_route`] einen Ort für das Ziel ableitet.
+    precise: Option<(f32, f32, String)>,
 }
 
 impl RouteHop {
@@ -111,6 +128,11 @@ struct ConnectionPoint {
     /// einen bekannten Flughafencode im Hostnamen gefunden hat -- sonst
     /// `None`, dann sind `lat`/`lon` nur der Länder-Mittelpunkt.
     precise_city: Option<String>,
+    /// Bundesland/Staat, nur bei [`LocationSource::CityDatabase`] bekannt.
+    region: Option<String>,
+    /// Woher `lat`/`lon`/`precise_city` stammen -- bestimmt, wie sicher der
+    /// Ort ist und wie [`ConnectionPoint::place`] ihn anzeigt.
+    source: LocationSource,
     /// Programm, das laut [`connections::resolve_program_names`] gerade
     /// diese Verbindung hält -- `None`, solange sich der Prozess nicht
     /// (mehr) zuordnen ließ (z. B. Verbindung eines fremden Benutzers,
@@ -130,12 +152,150 @@ impl ConnectionPoint {
     /// Reverse-DNS-Nachschärfung etwas gefunden hat, sonst der
     /// ausgeschriebene Ländername, sonst (unbekannter Code) der rohe
     /// GeoIP-Code als letzter Rückfall.
+    ///
+    /// Stadtangaben aus einer Datenbank oder vom Router-Weg sind Näherungen
+    /// und stehen deshalb mit "ca." da -- bei einem Privatanschluss ist es
+    /// oft nur die Stadt des Einwahlknotens, nicht die des Anschlusses.
     fn place(&self) -> String {
         let country = geoip::country_name(self.country).unwrap_or(self.country);
-        match &self.precise_city {
-            Some(city) => format!("{city}, {country}"),
-            None => country.to_string(),
+        match (&self.precise_city, self.source) {
+            (Some(city), LocationSource::Route) => {
+                format!("ca. {city}, {country} (via Router)")
+            }
+            (Some(city), LocationSource::CityDatabase) => format!("ca. {city}, {country}"),
+            (Some(city), _) => format!("{city}, {country}"),
+            (None, _) => country.to_string(),
         }
+    }
+
+    /// Ausführlicher Ort für die Verbindungsliste: wie [`Self::place`], dazu
+    /// die Region (nur aus der Stadt-Datenbank bekannt) und die Koordinaten.
+    /// Ohne Stadt sind die Koordinaten nur der Landesmittelpunkt und heißen
+    /// auch so.
+    fn detail(&self) -> String {
+        let country = geoip::country_name(self.country).unwrap_or(self.country);
+        let (lat, lon) = (self.lat, self.lon);
+        match (&self.precise_city, self.source) {
+            (None, _) => format!("{country} (nur Land, Mittelpunkt {lat:.3}, {lon:.3})"),
+            (Some(city), LocationSource::CityDatabase) => {
+                let region = self
+                    .region
+                    .as_ref()
+                    .map(|region| format!("{region}, "))
+                    .unwrap_or_default();
+                format!("ca. {city}, {region}{country} ({lat:.3}, {lon:.3})")
+            }
+            _ => format!("{} ({lat:.3}, {lon:.3})", self.place()),
+        }
+    }
+}
+
+/// Woher die Position einer Gegenstelle stammt, vom verlässlichsten zum
+/// gröbsten Verfahren.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocationSource {
+    /// Der Reverse-DNS-Name des Ziels verrät den Ort (z. B. ein
+    /// Flughafencode bei Rechenzentren).
+    ReverseDns,
+    /// Eintrag aus der lokalen Stadt-Datenbank ([`citydb`]).
+    CityDatabase,
+    /// Stadt des letzten Routers mit Ortshinweis auf dem Weg zum Ziel
+    /// ([`refine_from_route`]) -- bei Privatanschlüssen der Einwahlraum,
+    /// nicht der Anschluss selbst.
+    Route,
+    /// Nur der Mittelpunkt des Landes.
+    Country,
+}
+
+/// Ergebnis von [`combine_location`].
+#[derive(Debug, PartialEq)]
+struct Located {
+    country: &'static str,
+    lat: f32,
+    lon: f32,
+    city: Option<String>,
+    region: Option<String>,
+    source: LocationSource,
+}
+
+/// Wählt aus den verfügbaren Quellen die genaueste aus: Reverse-DNS-Hinweis,
+/// dann Stadt-Datenbank, dann Länder-Mittelpunkt. Rein, damit die Reihenfolge
+/// ohne Netzwerk und ohne Dateien testbar ist (Regel 25); der Aufrufer holt
+/// die Eingaben (Reverse-DNS ist ein Subprozess und gehört nicht hierher).
+///
+/// Das Land kommt bevorzugt aus der Stadt-Datenbank, damit Stadt und Land
+/// zusammenpassen, sonst aus der Country-Datenbank. Ohne Land gibt es keinen
+/// Ort (`None`): die Verbindung zählt dann als nicht zuordenbar.
+fn combine_location(
+    country_db_code: Option<&'static str>,
+    city_hit: Option<&CityHit>,
+    precise_rdns: Option<(f32, f32, String)>,
+) -> Option<Located> {
+    let country = city_hit.map(|hit| hit.country).or(country_db_code)?;
+
+    if let Some((lat, lon, city)) = precise_rdns {
+        return Some(Located {
+            country,
+            lat,
+            lon,
+            city: Some(city),
+            region: None,
+            source: LocationSource::ReverseDns,
+        });
+    }
+    if let Some(CityHit {
+        city: Some(city),
+        position: Some((lat, lon)),
+        region,
+        ..
+    }) = city_hit
+    {
+        return Some(Located {
+            country,
+            lat: *lat,
+            lon: *lon,
+            city: Some(city.clone()),
+            region: region.clone(),
+            source: LocationSource::CityDatabase,
+        });
+    }
+    let (lat, lon) = geoip::country_centroid(country)?;
+    Some(Located {
+        country,
+        lat,
+        lon,
+        city: None,
+        region: None,
+        source: LocationSource::Country,
+    })
+}
+
+/// Leitet für ein Ziel ohne genaueren Ort die Stadt aus dem Weg ab: der
+/// **letzte** Router vor dem Ziel, dessen Reverse-DNS-Name einen Ort verrät,
+/// liegt meist im selben Einwahlraum wie die Gegenstelle. Das ist ein
+/// Fallback für den Fall ohne Stadt-Datenbank und deutlich grober als diese;
+/// deshalb zeigt die Anzeige "ca." und "(via Router)".
+///
+/// Greift nur bei [`LocationSource::Country`] und nur für Router im selben
+/// Land wie das Ziel -- ein Frankfurter Router auf dem Weg zu einem Server in
+/// den USA sagt nichts über dessen Standort.
+fn refine_from_route(point: &mut ConnectionPoint) {
+    if point.source != LocationSource::Country {
+        return;
+    }
+    let found = point.route.iter().rev().find_map(|hop| {
+        if hop.ip == Some(point.ip) || hop.country != Some(point.country) {
+            return None;
+        }
+        let (lat, lon, city) = hop.precise.as_ref()?;
+        Some((*lat, *lon, city.clone()))
+    });
+    if let Some((lat, lon, city)) = found {
+        point.lat = lat;
+        point.lon = lon;
+        point.precise_city = Some(city);
+        point.region = None;
+        point.source = LocationSource::Route;
     }
 }
 
@@ -166,6 +326,7 @@ struct Shared {
 
 fn spawn_watcher(
     db_path: std::path::PathBuf,
+    city_db: Arc<SharedCityDb>,
     poll_interval: Duration,
     shared: Arc<Mutex<Shared>>,
     ctx: egui::Context,
@@ -192,6 +353,23 @@ fn spawn_watcher(
             guard.countries = countries;
         }
         ctx.request_repaint();
+
+        // Die Stadt-Datenbank wird hier (bzw. im Routen-Thread, je nachdem
+        // wer zuerst fragt) einmalig geladen. Eine vorhandene, aber defekte
+        // Datei meldet das Panel; eine fehlende ist der Normalfall und
+        // bleibt still (Regel 16).
+        if let CityDbState::Failed(message) = city_db.get() {
+            let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+            let note = format!(
+                "Stadt-Datenbank konnte nicht geladen werden ({message}) -- die Karte zeigt \
+                 nur Länder."
+            );
+            // Einen schon gemeldeten GeoIP-Fehler nicht überschreiben.
+            guard.error = Some(match guard.error.take() {
+                Some(earlier) => format!("{earlier}\n{note}"),
+                None => note,
+            });
+        }
 
         loop {
             let now = Instant::now();
@@ -235,6 +413,7 @@ fn spawn_watcher(
                             if point.route.is_empty() {
                                 if let Some(route) = routes.get(ip) {
                                     point.route = Arc::clone(route);
+                                    refine_from_route(point);
                                 }
                             }
                             false
@@ -247,27 +426,26 @@ fn spawn_watcher(
             let mut unresolved = 0usize;
             let mut newly_resolved = Vec::new();
             for ip in new_ips {
-                let resolved = db.as_ref().and_then(|db| db.lookup_v4(ip)).and_then(|code| {
-                    geoip::country_centroid(code).map(|(lat, lon)| (code, lat, lon))
-                });
-                match resolved {
-                    Some((country, country_lat, country_lon)) => {
-                        let (lat, lon, precise_city) =
-                            match precise_location::resolve_precise(ip) {
-                                Some((lat, lon, city)) => (lat, lon, Some(city)),
-                                None => (country_lat, country_lon, None),
-                            };
-                        newly_resolved.push(ConnectionPoint {
-                            ip,
-                            country,
-                            lat,
-                            lon,
-                            precise_city,
-                            program: program_names.get(&ip).cloned(),
-                            route: Arc::new(Vec::new()),
-                            last_seen: now,
-                        });
-                    }
+                let country_code = db.as_ref().and_then(|db| db.lookup_v4(ip));
+                let city_hit = city_db.db().and_then(|db| db.lookup_v4(ip));
+                if country_code.is_none() && city_hit.is_none() {
+                    unresolved += 1;
+                    continue;
+                }
+                let precise = precise_location::resolve_precise(ip);
+                match combine_location(country_code, city_hit.as_ref(), precise) {
+                    Some(located) => newly_resolved.push(ConnectionPoint {
+                        ip,
+                        country: located.country,
+                        lat: located.lat,
+                        lon: located.lon,
+                        precise_city: located.city,
+                        region: located.region,
+                        source: located.source,
+                        program: program_names.get(&ip).cloned(),
+                        route: Arc::new(Vec::new()),
+                        last_seen: now,
+                    }),
                     None => unresolved += 1,
                 }
             }
@@ -278,6 +456,7 @@ fn spawn_watcher(
                 // Route sofort zurück, statt erneut gemessen zu werden.
                 if let Some(route) = guard.routes.get(&point.ip) {
                     point.route = Arc::clone(route);
+                    refine_from_route(&mut point);
                 }
                 guard.points.insert(point.ip, point);
             }
@@ -300,6 +479,7 @@ fn spawn_watcher(
 /// Messungen gleichzeitig los.
 fn spawn_route_watcher(
     db_path: std::path::PathBuf,
+    city_db: Arc<SharedCityDb>,
     max_hops: u8,
     timeout_secs: u64,
     shared: Arc<Mutex<Shared>>,
@@ -339,7 +519,7 @@ fn spawn_route_watcher(
             // Messlauf und Namensauflösung ohne gehaltene Sperre
             // (Regel 21): beides dauert Sekunden.
             let hops = traceroute::trace(target, max_hops, timeout_secs);
-            let stops = Arc::new(resolve_route_hops(&hops, db.as_ref()));
+            let stops = Arc::new(resolve_route_hops(&hops, db.as_ref(), city_db.db()));
 
             {
                 let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
@@ -350,6 +530,7 @@ fn spawn_route_watcher(
                 state.routes.insert(target, Arc::clone(&stops));
                 if let Some(point) = state.points.get_mut(&target) {
                     point.route = stops;
+                    refine_from_route(point);
                 }
             }
             ctx.request_repaint();
@@ -366,11 +547,21 @@ fn spawn_route_watcher(
 /// Stadtauflösung auf denselben Länder-Mittelpunkt fallen. Auf der Karte
 /// würden sie sonst verschwinden; in der Routenliste unter der Karte
 /// stehen sie ohnehin einzeln.
-fn resolve_route_hops(hops: &[traceroute::Hop], db: Option<&CountryDb>) -> Vec<RouteHop> {
+fn resolve_route_hops(
+    hops: &[traceroute::Hop],
+    db: Option<&CountryDb>,
+    city_db: Option<&CityDb>,
+) -> Vec<RouteHop> {
     hops.iter()
         .map(|hop| {
             let Some(ip) = *hop else {
-                return RouteHop { ip: None, position: None, place: None };
+                return RouteHop {
+                    ip: None,
+                    position: None,
+                    place: None,
+                    country: None,
+                    precise: None,
+                };
             };
             if !connections::is_routable_public(ip) {
                 // Der eigene Router gehört zum Weg, hat aber keine
@@ -379,24 +570,44 @@ fn resolve_route_hops(hops: &[traceroute::Hop], db: Option<&CountryDb>) -> Vec<R
                     ip: Some(ip),
                     position: None,
                     place: Some("lokales Netz".to_string()),
+                    country: None,
+                    precise: None,
                 };
             }
-            let located = db
-                .and_then(|db| db.lookup_v4(ip))
-                .and_then(|code| geoip::country_centroid(code).map(|c| (code, c)));
-            let Some((code, (country_lat, country_lon))) = located else {
-                return RouteHop { ip: Some(ip), position: None, place: None };
+            let country_code = db.and_then(|db| db.lookup_v4(ip));
+            let city_hit = city_db.and_then(|db| db.lookup_v4(ip));
+            if country_code.is_none() && city_hit.is_none() {
+                return RouteHop {
+                    ip: Some(ip),
+                    position: None,
+                    place: None,
+                    country: None,
+                    precise: None,
+                };
+            }
+            let precise = precise_location::resolve_precise(ip);
+            let located = combine_location(country_code, city_hit.as_ref(), precise.clone());
+            let Some(located) = located else {
+                return RouteHop {
+                    ip: Some(ip),
+                    position: None,
+                    place: None,
+                    country: None,
+                    precise: None,
+                };
             };
-            let (lat, lon, city) = match precise_location::resolve_precise(ip) {
-                Some((lat, lon, city)) => (lat, lon, Some(city)),
-                None => (country_lat, country_lon, None),
-            };
-            let country = geoip::country_name(code).unwrap_or(code);
-            let place = match city {
+            let country = geoip::country_name(located.country).unwrap_or(located.country);
+            let place = match &located.city {
                 Some(city) => format!("{city}, {country}"),
                 None => country.to_string(),
             };
-            RouteHop { ip: Some(ip), position: Some((lat, lon)), place: Some(place) }
+            RouteHop {
+                ip: Some(ip),
+                position: Some((located.lat, located.lon)),
+                place: Some(place),
+                country: Some(located.country),
+                precise,
+            }
         })
         .collect()
 }
@@ -438,8 +649,18 @@ pub struct NetworkMapPanel {
 impl NetworkMapPanel {
     pub fn new(config: &NetworkMapConfig, ctx: &egui::Context) -> Self {
         let shared = Arc::new(Mutex::new(Shared::default()));
+        // Leerer Pfad = Stadtauflösung aus. `~` wird wie bei den
+        // Graph-Pfaden durch `$HOME` ersetzt.
+        let city_db_path = (!config.city_database_path.trim().is_empty()).then(|| {
+            crate::knowledge_graph::expand_home(
+                config.city_database_path.trim(),
+                std::env::var("HOME").ok().as_deref(),
+            )
+        });
+        let city_db = Arc::new(SharedCityDb::new(city_db_path));
         spawn_watcher(
             std::path::PathBuf::from(&config.geoip_database_path),
+            Arc::clone(&city_db),
             Duration::from_secs(config.poll_interval_seconds.max(1)),
             Arc::clone(&shared),
             ctx.clone(),
@@ -447,6 +668,7 @@ impl NetworkMapPanel {
         if config.traceroute_enabled {
             spawn_route_watcher(
                 std::path::PathBuf::from(&config.geoip_database_path),
+                city_db,
                 config.traceroute_max_hops,
                 config.traceroute_timeout_seconds.max(1),
                 Arc::clone(&shared),
@@ -613,7 +835,7 @@ impl NetworkMapPanel {
                             "{} → zu Server: {} in {}",
                             point.program.as_deref().unwrap_or("Unbekanntes Programm"),
                             point.ip,
-                            point.place(),
+                            point.detail(),
                         ))
                         .color(crate::theme::TEXT_MUTED)
                         .size(11.0),
@@ -1202,6 +1424,8 @@ mod tests {
             ip: Some(Ipv4Addr::from(ip)),
             position,
             place: place.map(str::to_string),
+            country: None,
+            precise: None,
         }
     }
 
@@ -1231,7 +1455,13 @@ mod tests {
     #[test]
     fn route_waypoints_ueberspringt_hops_ohne_position() {
         let route = vec![
-            RouteHop { ip: None, position: None, place: None },
+            RouteHop {
+                ip: None,
+                position: None,
+                place: None,
+                country: None,
+                precise: None,
+            },
             hop([192, 168, 178, 1], Some("lokales Netz"), None),
             hop([62, 155, 242, 122], Some("Deutschland"), Some((51.0, 9.0))),
         ];
@@ -1248,7 +1478,7 @@ mod tests {
             None,
             Some(Ipv4Addr::new(8, 8, 8, 8)),
         ];
-        let resolved = resolve_route_hops(&hops, None);
+        let resolved = resolve_route_hops(&hops, None, None);
         assert_eq!(resolved.len(), 3);
         assert!(resolved.iter().all(|h| h.position.is_none()));
         assert_eq!(resolved[0].place.as_deref(), Some("lokales Netz"));
@@ -1262,5 +1492,238 @@ mod tests {
         let texts = vec!["Berlin".to_string(), "Tokio".to_string()];
         let result = declutter_labels(&anchors, &texts);
         assert_eq!(result, vec![anchors[0] + egui::vec2(6.0, 1.0), anchors[1] + egui::vec2(6.0, 1.0)]);
+    }
+    fn city_hit(
+        country: &'static str,
+        city: Option<&str>,
+        position: Option<(f32, f32)>,
+    ) -> CityHit {
+        CityHit {
+            country,
+            city: city.map(str::to_string),
+            position,
+            region: None,
+        }
+    }
+
+    #[test]
+    fn combine_location_bevorzugt_reverse_dns_vor_stadt_datenbank() {
+        let hit = city_hit("DE", Some("Berlin"), Some((52.5, 13.4)));
+        let located = combine_location(
+            Some("DE"),
+            Some(&hit),
+            Some((50.03, 8.57, "Frankfurt".to_string())),
+        )
+        .expect("Ort");
+        assert_eq!(located.source, LocationSource::ReverseDns);
+        assert_eq!(located.city.as_deref(), Some("Frankfurt"));
+    }
+
+    #[test]
+    fn combine_location_nimmt_stadt_datenbank_vor_laendermittelpunkt() {
+        let hit = city_hit("DE", Some("Regensburg"), Some((49.01, 12.1)));
+        let located = combine_location(Some("DE"), Some(&hit), None).expect("Ort");
+        assert_eq!(located.source, LocationSource::CityDatabase);
+        assert_eq!(located.city.as_deref(), Some("Regensburg"));
+        assert_eq!((located.lat, located.lon), (49.01, 12.1));
+    }
+
+    #[test]
+    fn combine_location_faellt_ohne_stadt_auf_laendermittelpunkt_zurueck() {
+        // Treffer nur auf Landesebene: kein Stadtname, keine Position.
+        let hit = city_hit("DE", None, None);
+        let located = combine_location(None, Some(&hit), None).expect("Ort");
+        assert_eq!(located.source, LocationSource::Country);
+        assert_eq!(located.city, None);
+        assert_eq!(
+            (located.lat, located.lon),
+            geoip::country_centroid("DE").expect("DE")
+        );
+    }
+
+    #[test]
+    fn combine_location_ohne_stadt_datenbank_wie_bisher() {
+        let located = combine_location(Some("US"), None, None).expect("Ort");
+        assert_eq!(located.source, LocationSource::Country);
+        assert_eq!(located.country, "US");
+    }
+
+    #[test]
+    fn combine_location_ohne_land_ist_none() {
+        assert_eq!(combine_location(None, None, None), None);
+        // Auch ein Reverse-DNS-Hinweis ersetzt kein fehlendes Land.
+        assert_eq!(
+            combine_location(None, None, Some((50.0, 8.0, "Frankfurt".into()))),
+            None
+        );
+    }
+
+    #[test]
+    fn combine_location_land_der_stadt_datenbank_hat_vorrang() {
+        let hit = city_hit("AT", Some("Wien"), Some((48.2, 16.4)));
+        let located = combine_location(Some("DE"), Some(&hit), None).expect("Ort");
+        assert_eq!(
+            located.country, "AT",
+            "Stadt und Land müssen zusammenpassen"
+        );
+    }
+
+    fn test_point(source: LocationSource, route: Vec<RouteHop>) -> ConnectionPoint {
+        let (lat, lon) = geoip::country_centroid("DE").expect("DE");
+        ConnectionPoint {
+            ip: Ipv4Addr::new(93, 1, 2, 3),
+            country: "DE",
+            lat,
+            lon,
+            precise_city: None,
+            region: None,
+            source,
+            program: None,
+            route: Arc::new(route),
+            last_seen: Instant::now(),
+        }
+    }
+
+    fn route_hop(ip: [u8; 4], country: &'static str, city: Option<(&str, f32, f32)>) -> RouteHop {
+        RouteHop {
+            ip: Some(Ipv4Addr::from(ip)),
+            position: Some((50.0, 8.0)),
+            place: Some(country.to_string()),
+            country: Some(country),
+            precise: city.map(|(name, lat, lon)| (lat, lon, name.to_string())),
+        }
+    }
+
+    #[test]
+    fn refine_from_route_nimmt_letzten_router_mit_ortshinweis() {
+        let mut point = test_point(
+            LocationSource::Country,
+            vec![
+                route_hop([62, 155, 242, 122], "DE", Some(("Frankfurt", 50.11, 8.68))),
+                route_hop([80, 157, 207, 46], "DE", Some(("München", 48.14, 11.58))),
+                route_hop([84, 1, 1, 1], "DE", None),
+            ],
+        );
+        refine_from_route(&mut point);
+        assert_eq!(point.source, LocationSource::Route);
+        assert_eq!(point.precise_city.as_deref(), Some("München"));
+        assert_eq!((point.lat, point.lon), (48.14, 11.58));
+        assert_eq!(point.place(), "ca. München, Germany (via Router)");
+    }
+
+    #[test]
+    fn refine_from_route_ignoriert_router_in_anderem_land() {
+        // Ein Frankfurter Router auf dem Weg zu einem Ziel in den USA sagt
+        // nichts über den Standort des Ziels.
+        let mut point = test_point(
+            LocationSource::Country,
+            vec![route_hop(
+                [62, 155, 242, 122],
+                "FR",
+                Some(("Paris", 48.85, 2.35)),
+            )],
+        );
+        refine_from_route(&mut point);
+        assert_eq!(point.source, LocationSource::Country);
+        assert_eq!(point.precise_city, None);
+    }
+
+    #[test]
+    fn refine_from_route_laesst_genauere_quellen_unberuehrt() {
+        let route = vec![route_hop(
+            [62, 155, 242, 122],
+            "DE",
+            Some(("Frankfurt", 50.11, 8.68)),
+        )];
+        for source in [LocationSource::ReverseDns, LocationSource::CityDatabase] {
+            let mut point = test_point(source, route.clone());
+            point.precise_city = Some("Regensburg".to_string());
+            refine_from_route(&mut point);
+            assert_eq!(point.source, source);
+            assert_eq!(point.precise_city.as_deref(), Some("Regensburg"));
+        }
+    }
+
+    #[test]
+    fn refine_from_route_ohne_ortshinweis_aendert_nichts() {
+        let mut point = test_point(
+            LocationSource::Country,
+            vec![route_hop([62, 155, 242, 122], "DE", None)],
+        );
+        refine_from_route(&mut point);
+        assert_eq!(point.source, LocationSource::Country);
+        assert_eq!(point.precise_city, None);
+    }
+
+    #[test]
+    fn refine_from_route_ueberspringt_das_ziel_selbst() {
+        let mut target = route_hop([93, 1, 2, 3], "DE", Some(("Berlin", 52.5, 13.4)));
+        target.ip = Some(Ipv4Addr::new(93, 1, 2, 3));
+        let mut point = test_point(LocationSource::Country, vec![target]);
+        refine_from_route(&mut point);
+        assert_eq!(point.source, LocationSource::Country);
+    }
+
+    #[test]
+    fn combine_location_reicht_region_der_stadt_datenbank_durch() {
+        let mut hit = city_hit("DE", Some("Darmstadt"), Some((49.86, 8.63)));
+        hit.region = Some("Hessen".to_string());
+        let located = combine_location(Some("DE"), Some(&hit), None).expect("Ort");
+        assert_eq!(located.region.as_deref(), Some("Hessen"));
+        // Ein Reverse-DNS-Ort ist genauer; die Region der Datenbank würde
+        // zu einer anderen Stadt gehören und darf nicht daneben stehen.
+        let rdns = combine_location(
+            Some("DE"),
+            Some(&hit),
+            Some((50.03, 8.57, "Frankfurt".to_string())),
+        )
+        .expect("Ort");
+        assert_eq!(rdns.region, None);
+    }
+
+    #[test]
+    fn detail_zeigt_region_und_koordinaten_je_nach_quelle() {
+        let mut point = test_point(LocationSource::CityDatabase, Vec::new());
+        point.precise_city = Some("Darmstadt".to_string());
+        point.region = Some("Hessen".to_string());
+        point.lat = 49.8644;
+        point.lon = 8.62535;
+        assert_eq!(
+            point.detail(),
+            "ca. Darmstadt, Hessen, Germany (49.864, 8.625)"
+        );
+
+        point.source = LocationSource::ReverseDns;
+        point.region = None;
+        assert_eq!(point.detail(), "Darmstadt, Germany (49.864, 8.625)");
+
+        point.source = LocationSource::Route;
+        assert_eq!(
+            point.detail(),
+            "ca. Darmstadt, Germany (via Router) (49.864, 8.625)"
+        );
+
+        // Nur Land: die Koordinaten sind der Landesmittelpunkt und werden
+        // so benannt, damit sie nicht als Standort gelesen werden.
+        point.source = LocationSource::Country;
+        point.precise_city = None;
+        point.lat = 51.165;
+        point.lon = 10.452;
+        assert_eq!(
+            point.detail(),
+            "Germany (nur Land, Mittelpunkt 51.165, 10.452)"
+        );
+    }
+
+    #[test]
+    fn place_kennzeichnet_unsichere_quellen() {
+        let mut point = test_point(LocationSource::ReverseDns, Vec::new());
+        point.precise_city = Some("Frankfurt".to_string());
+        assert_eq!(point.place(), "Frankfurt, Germany");
+        point.source = LocationSource::CityDatabase;
+        assert_eq!(point.place(), "ca. Frankfurt, Germany");
+        point.source = LocationSource::Country;
+        point.precise_city = None;
+        assert_eq!(point.place(), "Germany");
     }
 }

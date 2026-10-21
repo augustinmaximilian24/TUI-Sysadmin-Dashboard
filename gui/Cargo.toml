@@ -24,8 +24,19 @@ eframe = "0.29"
 # egui_plot: Live-Graph mit dynamischer Y-Achse (Phase 7, Regel: Live-Graph
 # ohne feste Obergrenze). Version an `eframe`/`egui` 0.29 gekoppelt.
 egui_plot = "0.29"
+# maxminddb: Leser für das MaxMind-DB-Format (.mmdb) der Netzwerkkarte, damit
+# Verbindungen auf eine Stadt statt nur auf ein Land aufgelöst werden
+# (kostenlose DB-IP-City-Lite- oder GeoLite2-City-Datei, siehe
+# `gui/src/network_map/citydb.rs`). Reines Rust, ISC-Lizenz; ohne das
+# Feature `mmap` und damit ohne `unsafe` auf unserer Seite. Der bisherige
+# Eigenbau in `geoip.rs` versteht nur das alte Country-`.dat`-Format.
+maxminddb = "0.32.0"
 
 [dev-dependencies]
+# maxminddb-writer: erzeugt in Tests eine winzige City-Datenbank im Speicher,
+# damit `citydb.rs` ohne die echte, große Datei testbar ist
+# (Regel 25). Nur Dev-Abhängigkeit.
+maxminddb-writer = "0.1.3"
 # Für Tests des Wissensgraph-Tabs (Phase 11): temporäre graph.json-Dateien
 # statt gegen echte Nutzerdaten zu testen. Gleiche Version wie in `core`.
 tempfile = "3"
