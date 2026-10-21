@@ -42,6 +42,9 @@ pub struct CityHit {
     /// da ist: Koordinaten ohne Stadt wären nur ein Landes-Platzhalter der
     /// Datenbank und dürften nicht als Genauigkeit erscheinen.
     pub position: Option<(f32, f32)>,
+    /// Erste Verwaltungsebene (Bundesland, Staat), falls die Datenbank sie
+    /// kennt. Deutsch, sonst Englisch.
+    pub region: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -82,13 +85,11 @@ impl CityDb {
 fn hit_from_record(record: &geoip2::City<'_>) -> Option<CityHit> {
     let country = geoip::canonical_country_code(record.country.iso_code?)?;
 
-    let names = &record.city.names;
-    let city = names
-        .german
-        .or(names.english)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string);
+    let city = pick_name(record.city.names.german, record.city.names.english);
+    let region = record
+        .subdivisions
+        .first()
+        .and_then(|sub| pick_name(sub.names.german, sub.names.english));
 
     let position = city.as_ref().and_then(|_| {
         let lat = record.location.latitude?;
@@ -103,7 +104,17 @@ fn hit_from_record(record: &geoip2::City<'_>) -> Option<CityHit> {
         country,
         city,
         position,
+        region,
     })
+}
+
+/// Deutscher Name, sonst englischer; leere Namen zählen als fehlend.
+fn pick_name(german: Option<&str>, english: Option<&str>) -> Option<String> {
+    german
+        .or(english)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 /// Prüft Wertebereich und Endlichkeit, bevor eine Koordinate auf die Kugel
@@ -193,6 +204,10 @@ mod tests {
         names: Names,
     }
     #[derive(Serialize)]
+    struct Subdivision {
+        names: Names,
+    }
+    #[derive(Serialize)]
     struct Country {
         iso_code: &'static str,
     }
@@ -210,6 +225,19 @@ mod tests {
         country: Country,
         #[serde(skip_serializing_if = "Option::is_none")]
         location: Option<Location>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        subdivisions: Vec<Subdivision>,
+    }
+
+    /// Hängt einer Test-Region (Bundesland o. Ä.) an einen Datensatz.
+    fn in_region(mut rec: Record, de: &'static str, en: &'static str) -> Record {
+        rec.subdivisions.push(Subdivision {
+            names: Names {
+                de: (!de.is_empty()).then_some(de),
+                en: Some(en),
+            },
+        });
+        rec
     }
 
     fn record(
@@ -230,6 +258,7 @@ mod tests {
                 latitude: lat,
                 longitude: lon,
             }),
+            subdivisions: Vec::new(),
         }
     }
 
@@ -269,6 +298,37 @@ mod tests {
         let (lat, lon) = hit.position.expect("Position");
         assert!((lat - 48.137).abs() < 0.001);
         assert!((lon - 11.575).abs() < 0.001);
+    }
+
+    #[test]
+    fn liefert_region_deutsch_sonst_englisch_sonst_none() {
+        let (_dir, path) = db_with(&[
+            (
+                "93.0.0.0/8",
+                in_region(
+                    record("DE", Some(("München", "Munich")), 48.137, 11.575),
+                    "Bayern",
+                    "Bavaria",
+                ),
+            ),
+            (
+                "5.0.0.0/8",
+                in_region(
+                    record("US", Some(("", "Austin")), 30.27, -97.74),
+                    "",
+                    "Texas",
+                ),
+            ),
+            (
+                "6.0.0.0/8",
+                record("NL", Some(("", "Amsterdam")), 52.37, 4.9),
+            ),
+        ]);
+        let db = CityDb::load(&path).expect("laden");
+        let region = |ip| db.lookup_v4(ip).expect("Treffer").region;
+        assert_eq!(region(Ipv4Addr::new(93, 1, 2, 3)).as_deref(), Some("Bayern"));
+        assert_eq!(region(Ipv4Addr::new(5, 1, 2, 3)).as_deref(), Some("Texas"));
+        assert_eq!(region(Ipv4Addr::new(6, 1, 2, 3)), None);
     }
 
     #[test]

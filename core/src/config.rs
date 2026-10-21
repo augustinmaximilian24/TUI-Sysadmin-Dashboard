@@ -1251,6 +1251,7 @@ mod tests {
         assert!(!config.lan_devices.ping_sweep_enabled);
         assert_eq!(config.lan_devices.scan_interval_secs, 30);
     }
+
     #[test]
     fn network_map_stadt_datenbank_hat_nutzerpfad_als_default() {
         let config = Config::default();

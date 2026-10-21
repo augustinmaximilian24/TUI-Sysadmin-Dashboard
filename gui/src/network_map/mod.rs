@@ -128,6 +128,8 @@ struct ConnectionPoint {
     /// einen bekannten Flughafencode im Hostnamen gefunden hat -- sonst
     /// `None`, dann sind `lat`/`lon` nur der Länder-Mittelpunkt.
     precise_city: Option<String>,
+    /// Bundesland/Staat, nur bei [`LocationSource::CityDatabase`] bekannt.
+    region: Option<String>,
     /// Woher `lat`/`lon`/`precise_city` stammen -- bestimmt, wie sicher der
     /// Ort ist und wie [`ConnectionPoint::place`] ihn anzeigt.
     source: LocationSource,
@@ -165,6 +167,27 @@ impl ConnectionPoint {
             (None, _) => country.to_string(),
         }
     }
+
+    /// Ausführlicher Ort für die Verbindungsliste: wie [`Self::place`], dazu
+    /// die Region (nur aus der Stadt-Datenbank bekannt) und die Koordinaten.
+    /// Ohne Stadt sind die Koordinaten nur der Landesmittelpunkt und heißen
+    /// auch so.
+    fn detail(&self) -> String {
+        let country = geoip::country_name(self.country).unwrap_or(self.country);
+        let (lat, lon) = (self.lat, self.lon);
+        match (&self.precise_city, self.source) {
+            (None, _) => format!("{country} (nur Land, Mittelpunkt {lat:.3}, {lon:.3})"),
+            (Some(city), LocationSource::CityDatabase) => {
+                let region = self
+                    .region
+                    .as_ref()
+                    .map(|region| format!("{region}, "))
+                    .unwrap_or_default();
+                format!("ca. {city}, {region}{country} ({lat:.3}, {lon:.3})")
+            }
+            _ => format!("{} ({lat:.3}, {lon:.3})", self.place()),
+        }
+    }
 }
 
 /// Woher die Position einer Gegenstelle stammt, vom verlässlichsten zum
@@ -191,6 +214,7 @@ struct Located {
     lat: f32,
     lon: f32,
     city: Option<String>,
+    region: Option<String>,
     source: LocationSource,
 }
 
@@ -215,12 +239,14 @@ fn combine_location(
             lat,
             lon,
             city: Some(city),
+            region: None,
             source: LocationSource::ReverseDns,
         });
     }
     if let Some(CityHit {
         city: Some(city),
         position: Some((lat, lon)),
+        region,
         ..
     }) = city_hit
     {
@@ -229,6 +255,7 @@ fn combine_location(
             lat: *lat,
             lon: *lon,
             city: Some(city.clone()),
+            region: region.clone(),
             source: LocationSource::CityDatabase,
         });
     }
@@ -238,6 +265,7 @@ fn combine_location(
         lat,
         lon,
         city: None,
+        region: None,
         source: LocationSource::Country,
     })
 }
@@ -266,6 +294,7 @@ fn refine_from_route(point: &mut ConnectionPoint) {
         point.lat = lat;
         point.lon = lon;
         point.precise_city = Some(city);
+        point.region = None;
         point.source = LocationSource::Route;
     }
 }
@@ -331,10 +360,15 @@ fn spawn_watcher(
         // bleibt still (Regel 16).
         if let CityDbState::Failed(message) = city_db.get() {
             let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
-            guard.error = Some(format!(
+            let note = format!(
                 "Stadt-Datenbank konnte nicht geladen werden ({message}) -- die Karte zeigt \
                  nur Länder."
-            ));
+            );
+            // Einen schon gemeldeten GeoIP-Fehler nicht überschreiben.
+            guard.error = Some(match guard.error.take() {
+                Some(earlier) => format!("{earlier}\n{note}"),
+                None => note,
+            });
         }
 
         loop {
@@ -406,6 +440,7 @@ fn spawn_watcher(
                         lat: located.lat,
                         lon: located.lon,
                         precise_city: located.city,
+                        region: located.region,
                         source: located.source,
                         program: program_names.get(&ip).cloned(),
                         route: Arc::new(Vec::new()),
@@ -800,7 +835,7 @@ impl NetworkMapPanel {
                             "{} → zu Server: {} in {}",
                             point.program.as_deref().unwrap_or("Unbekanntes Programm"),
                             point.ip,
-                            point.place(),
+                            point.detail(),
                         ))
                         .color(crate::theme::TEXT_MUTED)
                         .size(11.0),
@@ -1467,6 +1502,7 @@ mod tests {
             country,
             city: city.map(str::to_string),
             position,
+            region: None,
         }
     }
 
@@ -1540,6 +1576,7 @@ mod tests {
             lat,
             lon,
             precise_city: None,
+            region: None,
             source,
             program: None,
             route: Arc::new(route),
@@ -1625,6 +1662,57 @@ mod tests {
         let mut point = test_point(LocationSource::Country, vec![target]);
         refine_from_route(&mut point);
         assert_eq!(point.source, LocationSource::Country);
+    }
+
+    #[test]
+    fn combine_location_reicht_region_der_stadt_datenbank_durch() {
+        let mut hit = city_hit("DE", Some("Darmstadt"), Some((49.86, 8.63)));
+        hit.region = Some("Hessen".to_string());
+        let located = combine_location(Some("DE"), Some(&hit), None).expect("Ort");
+        assert_eq!(located.region.as_deref(), Some("Hessen"));
+        // Ein Reverse-DNS-Ort ist genauer; die Region der Datenbank würde
+        // zu einer anderen Stadt gehören und darf nicht daneben stehen.
+        let rdns = combine_location(
+            Some("DE"),
+            Some(&hit),
+            Some((50.03, 8.57, "Frankfurt".to_string())),
+        )
+        .expect("Ort");
+        assert_eq!(rdns.region, None);
+    }
+
+    #[test]
+    fn detail_zeigt_region_und_koordinaten_je_nach_quelle() {
+        let mut point = test_point(LocationSource::CityDatabase, Vec::new());
+        point.precise_city = Some("Darmstadt".to_string());
+        point.region = Some("Hessen".to_string());
+        point.lat = 49.8644;
+        point.lon = 8.62535;
+        assert_eq!(
+            point.detail(),
+            "ca. Darmstadt, Hessen, Germany (49.864, 8.625)"
+        );
+
+        point.source = LocationSource::ReverseDns;
+        point.region = None;
+        assert_eq!(point.detail(), "Darmstadt, Germany (49.864, 8.625)");
+
+        point.source = LocationSource::Route;
+        assert_eq!(
+            point.detail(),
+            "ca. Darmstadt, Germany (via Router) (49.864, 8.625)"
+        );
+
+        // Nur Land: die Koordinaten sind der Landesmittelpunkt und werden
+        // so benannt, damit sie nicht als Standort gelesen werden.
+        point.source = LocationSource::Country;
+        point.precise_city = None;
+        point.lat = 51.165;
+        point.lon = 10.452;
+        assert_eq!(
+            point.detail(),
+            "Germany (nur Land, Mittelpunkt 51.165, 10.452)"
+        );
     }
 
     #[test]

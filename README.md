@@ -210,6 +210,8 @@ des letzten Routers mit Ortshinweis auf dem gemessenen Weg (Anzeige "ca. …
 erscheinen als "ca.": bei Privatanschlüssen ist es oft nur die Stadt des
 Einwahlknotens, im ungünstigen Fall liegt sie dutzende Kilometer daneben.
 Hinter VPN, Tunnel oder Carrier-Grade-NAT zeigt die Karte den Tunnel-Endpunkt.
+In der Verbindungsliste unter der Karte stehen zusätzlich Region (Bundesland) und
+Koordinaten; ohne Stadt sind die Koordinaten der Länder-Mittelpunkt und so benannt.
 
 IP-Geolocation-Daten von [DB-IP.com](https://db-ip.com) (Lizenz
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), Namensnennung
