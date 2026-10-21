@@ -141,6 +141,18 @@ pub fn country_centroid(code: &str) -> Option<(f32, f32)> {
         .map(|(_, lat, lon)| (*lat, *lon))
 }
 
+/// Bringt einen Ländercode aus einer fremden Quelle (z. B. der Stadt-Datenbank)
+/// in die `'static`-Schreibweise dieser Datei -- nur so lassen sich Name und
+/// Mittelpunkt nachschlagen und in `ConnectionPoint` ablegen. Groß-/Kleinschreibung
+/// ist egal; unbekannte Codes liefern `None`, statt einen Platzhalter zu raten.
+pub fn canonical_country_code(code: &str) -> Option<&'static str> {
+    let upper = code.trim().to_ascii_uppercase();
+    COUNTRY_CENTROIDS
+        .iter()
+        .find(|(c, _, _)| *c == upper)
+        .map(|(c, _, _)| *c)
+}
+
 /// Ausgeschriebener englischer Ländername zum Alpha-2-Code, für die
 /// Anzeige auf der Karte und in der Verbindungsliste -- ein Ländercode
 /// allein ist kein "Ortsname", den der Nutzer lesen will. Dieselbe Quelle
@@ -775,6 +787,14 @@ mod tests {
     fn country_centroid_unbekannter_code_ist_none() {
         assert_eq!(country_centroid("ZZ"), None);
         assert_eq!(country_centroid("EU"), None);
+    }
+
+    #[test]
+    fn canonical_country_code_normalisiert_schreibweise() {
+        assert_eq!(canonical_country_code("de"), Some("DE"));
+        assert_eq!(canonical_country_code(" us "), Some("US"));
+        assert_eq!(canonical_country_code("ZZ"), None);
+        assert_eq!(canonical_country_code(""), None);
     }
 
     #[test]
