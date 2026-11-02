@@ -102,7 +102,7 @@ struct RouteHop {
     /// verrät (Städtekürzel, Flughafencode). Das ist belastbarer als ein
     /// Datenbankeintrag für eine Router-Adresse und deshalb die einzige
     /// Quelle, aus der [`refine_from_route`] einen Ort für das Ziel ableitet.
-    precise: Option<(f32, f32, String)>,
+    precise: Option<(f32, f32, String, &'static str)>,
 }
 
 impl RouteHop {
@@ -224,18 +224,22 @@ struct Located {
 /// die Eingaben (Reverse-DNS ist ein Subprozess und gehört nicht hierher).
 ///
 /// Das Land kommt bevorzugt aus der Stadt-Datenbank, damit Stadt und Land
-/// zusammenpassen, sonst aus der Country-Datenbank. Ohne Land gibt es keinen
+/// zusammenpassen, sonst aus der Country-Datenbank; nur ein Reverse-DNS-Ort
+/// überstimmt es mit seinem eigenen Land. Ohne Datenbank-Land gibt es keinen
 /// Ort (`None`): die Verbindung zählt dann als nicht zuordenbar.
 fn combine_location(
     country_db_code: Option<&'static str>,
     city_hit: Option<&CityHit>,
-    precise_rdns: Option<(f32, f32, String)>,
+    precise_rdns: Option<(f32, f32, String, &'static str)>,
 ) -> Option<Located> {
     let country = city_hit.map(|hit| hit.country).or(country_db_code)?;
 
-    if let Some((lat, lon, city)) = precise_rdns {
+    // Ein Reverse-DNS-Ort bringt sein eigenes Land mit: Hostname und
+    // Datenbank können sich widersprechen (Google-IPs stehen oft unter
+    // einem fremden Land), und Stadt und Land müssen zusammenpassen.
+    if let Some((lat, lon, city, rdns_country)) = precise_rdns {
         return Some(Located {
-            country,
+            country: rdns_country,
             lat,
             lon,
             city: Some(city),
@@ -287,7 +291,7 @@ fn refine_from_route(point: &mut ConnectionPoint) {
         if hop.ip == Some(point.ip) || hop.country != Some(point.country) {
             return None;
         }
-        let (lat, lon, city) = hop.precise.as_ref()?;
+        let (lat, lon, city, _) = hop.precise.as_ref()?;
         Some((*lat, *lon, city.clone()))
     });
     if let Some((lat, lon, city)) = found {
@@ -1512,11 +1516,25 @@ mod tests {
         let located = combine_location(
             Some("DE"),
             Some(&hit),
-            Some((50.03, 8.57, "Frankfurt".to_string())),
+            Some((50.03, 8.57, "Frankfurt".to_string(), "DE")),
         )
         .expect("Ort");
         assert_eq!(located.source, LocationSource::ReverseDns);
         assert_eq!(located.city.as_deref(), Some("Frankfurt"));
+    }
+
+    #[test]
+    fn combine_location_reverse_dns_land_schlaegt_falsche_datenbank() {
+        // Google-IP mit Hostname zrh…: DB-IP führt sie unter AE (Fujairah).
+        let hit = city_hit("AE", Some("Fujairah"), Some((25.12, 56.33)));
+        let located = combine_location(
+            Some("AE"),
+            Some(&hit),
+            Some((47.46, 8.55, "Zürich".to_string(), "CH")),
+        )
+        .expect("Ort");
+        assert_eq!(located.city.as_deref(), Some("Zürich"));
+        assert_eq!(located.country, "CH", "Land muss zur Stadt passen");
     }
 
     #[test]
@@ -1553,7 +1571,7 @@ mod tests {
         assert_eq!(combine_location(None, None, None), None);
         // Auch ein Reverse-DNS-Hinweis ersetzt kein fehlendes Land.
         assert_eq!(
-            combine_location(None, None, Some((50.0, 8.0, "Frankfurt".into()))),
+            combine_location(None, None, Some((50.0, 8.0, "Frankfurt".into(), "DE"))),
             None
         );
     }
@@ -1590,7 +1608,7 @@ mod tests {
             position: Some((50.0, 8.0)),
             place: Some(country.to_string()),
             country: Some(country),
-            precise: city.map(|(name, lat, lon)| (lat, lon, name.to_string())),
+            precise: city.map(|(name, lat, lon)| (lat, lon, name.to_string(), country)),
         }
     }
 
@@ -1675,7 +1693,7 @@ mod tests {
         let rdns = combine_location(
             Some("DE"),
             Some(&hit),
-            Some((50.03, 8.57, "Frankfurt".to_string())),
+            Some((50.03, 8.57, "Frankfurt".to_string(), "DE")),
         )
         .expect("Ort");
         assert_eq!(rdns.region, None);
