@@ -77,6 +77,10 @@ impl Rotated {
 pub const MIN_ZOOM: f32 = 0.5;
 pub const MAX_ZOOM: f32 = 4.0;
 
+/// Ab diesem Zoom zeigt die Karte die Länderkürzel. Im Startzoom (1.0) sind
+/// bis zu 180 Labels gleichzeitig zu sehen und die Karte wird unübersichtlich.
+pub const COUNTRY_LABEL_MIN_ZOOM: f32 = 1.6;
+
 /// Wie schnell die freie Drehung nach einem "Wurf" (Maus mit Schwung
 /// loslassen) abklingt -- exponentielle Dämpfung pro Sekunde, im selben
 /// Muster wie [`GlobeCamera::ease_towards_origin`].
@@ -175,6 +179,11 @@ impl GlobeCamera {
     /// orthografisch statt perspektivisch projiziert wird.
     pub fn apply_zoom(&mut self, scroll_delta_y: f32, sensitivity: f32) {
         self.zoom = (self.zoom + scroll_delta_y * sensitivity).clamp(MIN_ZOOM, MAX_ZOOM);
+    }
+
+    /// Ob die Länderkürzel gezeichnet werden (siehe [`COUNTRY_LABEL_MIN_ZOOM`]).
+    pub fn shows_country_labels(&self) -> bool {
+        self.zoom >= COUNTRY_LABEL_MIN_ZOOM
     }
 
     /// Zieht `yaw`/`pitch` frame-raten-unabhängig exponentiell zurück zur
@@ -409,6 +418,18 @@ mod tests {
         assert!((camera.zoom - MIN_ZOOM).abs() < 1e-4);
         camera.apply_zoom(1000.0, 1.0);
         assert!((camera.zoom - MAX_ZOOM).abs() < 1e-4);
+    }
+
+    #[test]
+    fn laenderkuerzel_erscheinen_erst_beim_hineinzoomen() {
+        let mut camera = GlobeCamera::centered_on(0.0, 0.0);
+        assert!(!camera.shows_country_labels(), "Startzoom: zu unübersichtlich");
+        camera.zoom = COUNTRY_LABEL_MIN_ZOOM - 0.01;
+        assert!(!camera.shows_country_labels());
+        camera.zoom = COUNTRY_LABEL_MIN_ZOOM;
+        assert!(camera.shows_country_labels());
+        camera.zoom = MAX_ZOOM;
+        assert!(camera.shows_country_labels());
     }
 
     #[test]
