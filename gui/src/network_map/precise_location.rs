@@ -27,48 +27,48 @@ use std::process::Command;
 /// längeren Wortes sein (`"fra"` in `"frankfurt-mail"` wäre falsch), aber
 /// direkt vor Ziffern/Trennzeichen/Ende stehen (`"fra16"`, `"fra-1"`,
 /// `"fra.example.com"`).
-const AIRPORT_HINTS: &[(&str, f32, f32, &str)] = &[
-    ("fra", 50.03, 8.57, "Frankfurt"),
-    ("lhr", 51.47, -0.45, "London"),
-    ("ams", 52.31, 4.76, "Amsterdam"),
-    ("cdg", 49.01, 2.55, "Paris"),
-    ("mad", 40.47, -3.56, "Madrid"),
-    ("fco", 41.80, 12.25, "Rom"),
-    ("mxp", 45.63, 8.72, "Mailand"),
-    ("zrh", 47.46, 8.55, "Zürich"),
-    ("vie", 48.11, 16.57, "Wien"),
-    ("waw", 52.17, 20.97, "Warschau"),
-    ("arn", 59.65, 17.92, "Stockholm"),
-    ("hel", 60.32, 24.96, "Helsinki"),
-    ("cph", 55.62, 12.65, "Kopenhagen"),
-    ("dub", 53.43, -6.24, "Dublin"),
-    ("bru", 50.90, 4.48, "Brüssel"),
-    ("prg", 50.10, 14.26, "Prag"),
-    ("bud", 47.44, 19.26, "Budapest"),
-    ("iad", 38.95, -77.45, "Washington D.C."),
-    ("jfk", 40.64, -73.78, "New York"),
-    ("ewr", 40.69, -74.17, "New York (Newark)"),
-    ("ord", 41.98, -87.90, "Chicago"),
-    ("atl", 33.64, -84.43, "Atlanta"),
-    ("dfw", 32.90, -97.04, "Dallas"),
-    ("lax", 33.94, -118.41, "Los Angeles"),
-    ("sfo", 37.62, -122.38, "San Francisco"),
-    ("sea", 47.45, -122.31, "Seattle"),
-    ("den", 39.86, -104.67, "Denver"),
-    ("mia", 25.80, -80.29, "Miami"),
-    ("bos", 42.36, -71.01, "Boston"),
-    ("yyz", 43.68, -79.63, "Toronto"),
-    ("yul", 45.47, -73.74, "Montreal"),
-    ("gru", -23.43, -46.47, "São Paulo"),
-    ("sin", 1.36, 103.99, "Singapur"),
-    ("hkg", 22.31, 113.91, "Hongkong"),
-    ("nrt", 35.76, 140.39, "Tokio"),
-    ("icn", 37.46, 126.44, "Seoul"),
-    ("syd", -33.95, 151.18, "Sydney"),
-    ("bom", 19.09, 72.87, "Mumbai"),
-    ("del", 28.56, 77.10, "Delhi"),
-    ("dxb", 25.25, 55.36, "Dubai"),
-    ("jnb", -26.13, 28.24, "Johannesburg"),
+const AIRPORT_HINTS: &[(&str, f32, f32, &str, &str)] = &[
+    ("fra", 50.03, 8.57, "Frankfurt", "DE"),
+    ("lhr", 51.47, -0.45, "London", "GB"),
+    ("ams", 52.31, 4.76, "Amsterdam", "NL"),
+    ("cdg", 49.01, 2.55, "Paris", "FR"),
+    ("mad", 40.47, -3.56, "Madrid", "ES"),
+    ("fco", 41.80, 12.25, "Rom", "IT"),
+    ("mxp", 45.63, 8.72, "Mailand", "IT"),
+    ("zrh", 47.46, 8.55, "Zürich", "CH"),
+    ("vie", 48.11, 16.57, "Wien", "AT"),
+    ("waw", 52.17, 20.97, "Warschau", "PL"),
+    ("arn", 59.65, 17.92, "Stockholm", "SE"),
+    ("hel", 60.32, 24.96, "Helsinki", "FI"),
+    ("cph", 55.62, 12.65, "Kopenhagen", "DK"),
+    ("dub", 53.43, -6.24, "Dublin", "IE"),
+    ("bru", 50.90, 4.48, "Brüssel", "BE"),
+    ("prg", 50.10, 14.26, "Prag", "CZ"),
+    ("bud", 47.44, 19.26, "Budapest", "HU"),
+    ("iad", 38.95, -77.45, "Washington D.C.", "US"),
+    ("jfk", 40.64, -73.78, "New York", "US"),
+    ("ewr", 40.69, -74.17, "New York (Newark)", "US"),
+    ("ord", 41.98, -87.90, "Chicago", "US"),
+    ("atl", 33.64, -84.43, "Atlanta", "US"),
+    ("dfw", 32.90, -97.04, "Dallas", "US"),
+    ("lax", 33.94, -118.41, "Los Angeles", "US"),
+    ("sfo", 37.62, -122.38, "San Francisco", "US"),
+    ("sea", 47.45, -122.31, "Seattle", "US"),
+    ("den", 39.86, -104.67, "Denver", "US"),
+    ("mia", 25.80, -80.29, "Miami", "US"),
+    ("bos", 42.36, -71.01, "Boston", "US"),
+    ("yyz", 43.68, -79.63, "Toronto", "CA"),
+    ("yul", 45.47, -73.74, "Montreal", "CA"),
+    ("gru", -23.43, -46.47, "São Paulo", "BR"),
+    ("sin", 1.36, 103.99, "Singapur", "SG"),
+    ("hkg", 22.31, 113.91, "Hongkong", "HK"),
+    ("nrt", 35.76, 140.39, "Tokio", "JP"),
+    ("icn", 37.46, 126.44, "Seoul", "KR"),
+    ("syd", -33.95, 151.18, "Sydney", "AU"),
+    ("bom", 19.09, 72.87, "Mumbai", "IN"),
+    ("del", 28.56, 77.10, "Delhi", "IN"),
+    ("dxb", 25.25, 55.36, "Dubai", "AE"),
+    ("jnb", -26.13, 28.24, "Johannesburg", "ZA"),
 ];
 
 /// Reverse-DNS über die System-NSS-Auflösung (`getent hosts`, dasselbe
@@ -93,13 +93,13 @@ fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
 /// bekannten Flughafencode als Präfix, gefolgt von einer Ziffer, `-`
 /// oder dem Ende des Labels -- verhindert Fehltreffer wie `"fra"` in
 /// `"frankfurt-relay.example.com"`.
-fn airport_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
+fn airport_hint(hostname: &str) -> Option<(f32, f32, &'static str, &'static str)> {
     hostname.split('.').find_map(|label| {
         let label = label.to_ascii_lowercase();
-        AIRPORT_HINTS.iter().find_map(|&(code, lat, lon, city)| {
+        AIRPORT_HINTS.iter().find_map(|&(code, lat, lon, city, country)| {
             let rest = label.strip_prefix(code)?;
             let boundary_ok = rest.chars().next().is_none_or(|c| !c.is_ascii_alphabetic());
-            boundary_ok.then_some((lat, lon, city))
+            boundary_ok.then_some((lat, lon, city, country))
         })
     })
 }
@@ -111,29 +111,29 @@ fn airport_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
 /// Zwischenstationen, statt beide auf denselben Länder-Mittelpunkt zu
 /// legen. Wie bei [`AIRPORT_HINTS`] nur Städte, deren Lage eindeutiges
 /// Allgemeinwissen ist.
-const DTAG_CITY_HINTS: &[(&str, f32, f32, &str)] = &[
-    ("f", 50.11, 8.68, "Frankfurt"),
-    ("m", 48.14, 11.58, "München"),
-    ("b", 52.52, 13.40, "Berlin"),
-    ("d", 51.23, 6.78, "Düsseldorf"),
-    ("hh", 53.55, 9.99, "Hamburg"),
-    ("k", 50.94, 6.96, "Köln"),
-    ("s", 48.78, 9.18, "Stuttgart"),
-    ("h", 52.37, 9.73, "Hannover"),
-    ("n", 49.45, 11.08, "Nürnberg"),
-    ("l", 51.34, 12.37, "Leipzig"),
-    ("bn", 50.74, 7.10, "Bonn"),
-    ("ma", 49.49, 8.47, "Mannheim"),
-    ("do", 51.51, 7.47, "Dortmund"),
-    ("e", 51.46, 7.01, "Essen"),
-    ("br", 53.08, 8.80, "Bremen"),
+const DTAG_CITY_HINTS: &[(&str, f32, f32, &str, &str)] = &[
+    ("f", 50.11, 8.68, "Frankfurt", "DE"),
+    ("m", 48.14, 11.58, "München", "DE"),
+    ("b", 52.52, 13.40, "Berlin", "DE"),
+    ("d", 51.23, 6.78, "Düsseldorf", "DE"),
+    ("hh", 53.55, 9.99, "Hamburg", "DE"),
+    ("k", 50.94, 6.96, "Köln", "DE"),
+    ("s", 48.78, 9.18, "Stuttgart", "DE"),
+    ("h", 52.37, 9.73, "Hannover", "DE"),
+    ("n", 49.45, 11.08, "Nürnberg", "DE"),
+    ("l", 51.34, 12.37, "Leipzig", "DE"),
+    ("bn", 50.74, 7.10, "Bonn", "DE"),
+    ("ma", 49.49, 8.47, "Mannheim", "DE"),
+    ("do", 51.51, 7.47, "Dortmund", "DE"),
+    ("e", 51.46, 7.01, "Essen", "DE"),
+    ("br", 53.08, 8.80, "Bremen", "DE"),
 ];
 
 /// Erkennt das Telekom-Backbone-Schema: endet der Hostname auf
 /// `.DE.NET.DTAG.DE`, steht direkt davor das Standortkürzel. Bewusst über
 /// die festen Endlabels geprüft statt per Teilstring-Suche -- ein bloßes
 /// `"f"` irgendwo im Namen wäre sonst ein Dauer-Fehltreffer.
-fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
+fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str, &'static str)> {
     let labels: Vec<String> = hostname.split('.').map(|l| l.to_ascii_lowercase()).collect();
     let suffix_start = labels.len().checked_sub(4)?;
     if labels[suffix_start..] != ["de", "net", "dtag", "de"] {
@@ -143,7 +143,7 @@ fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
     DTAG_CITY_HINTS
         .iter()
         .find(|(c, ..)| c == code)
-        .map(|&(_, lat, lon, city)| (lat, lon, city))
+        .map(|&(_, lat, lon, city, country)| (lat, lon, city, country))
 }
 
 /// Versucht, `ip` über Reverse-DNS genauer zu verorten als der
@@ -153,10 +153,11 @@ fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str)> {
 /// `None`, wenn Reverse-DNS fehlschlägt oder der Hostname keinem bekannten
 /// Muster entspricht -- der Aufrufer fällt dann auf den Länder-Mittelpunkt
 /// zurück.
-pub fn resolve_precise(ip: Ipv4Addr) -> Option<(f32, f32, String)> {
+pub fn resolve_precise(ip: Ipv4Addr) -> Option<(f32, f32, String, &'static str)> {
     let hostname = reverse_dns(ip)?;
-    let (lat, lon, city) = dtag_city_hint(&hostname).or_else(|| airport_hint(&hostname))?;
-    Some((lat, lon, city.to_string()))
+    let (lat, lon, city, country) =
+        dtag_city_hint(&hostname).or_else(|| airport_hint(&hostname))?;
+    Some((lat, lon, city.to_string(), country))
 }
 
 #[cfg(test)]
@@ -167,18 +168,31 @@ mod tests {
     fn erkennt_google_stil_hostnamen() {
         assert_eq!(
             airport_hint("fra16s48-in-f14.1e100.net"),
-            Some((50.03, 8.57, "Frankfurt"))
+            Some((50.03, 8.57, "Frankfurt", "DE"))
         );
         assert_eq!(
             airport_hint("lhr25s16-in-f14.1e100.net"),
-            Some((51.47, -0.45, "London"))
+            Some((51.47, -0.45, "London", "GB"))
+        );
+    }
+
+    #[test]
+    fn hinweise_tragen_das_land_des_ortes() {
+        // Die Google-IP, die DB-IP fälschlich unter AE führt.
+        assert_eq!(
+            airport_hint("zrh04s07-in-f170.1e100.net"),
+            Some((47.46, 8.55, "Zürich", "CH"))
+        );
+        assert_eq!(
+            dtag_city_hint("f-eh1-i.F.DE.NET.DTAG.DE").map(|(.., country)| country),
+            Some("DE")
         );
     }
 
     #[test]
     fn erkennt_cdn_stil_hostnamen_mit_bindestrich() {
         assert_eq!(
-            airport_hint("server-1-2-3-4.fra-1.r.cloudfront.net").map(|(_, _, city)| city),
+            airport_hint("server-1-2-3-4.fra-1.r.cloudfront.net").map(|(_, _, city, _)| city),
             Some("Frankfurt")
         );
     }
@@ -199,11 +213,11 @@ mod tests {
     fn erkennt_telekom_backbone_standorte() {
         // Beide Hostnamen stammen aus echten Messläufen dieses Anschlusses.
         assert_eq!(
-            dtag_city_hint("f-eh1-i.F.DE.NET.DTAG.DE").map(|(_, _, city)| city),
+            dtag_city_hint("f-eh1-i.F.DE.NET.DTAG.DE").map(|(_, _, city, _)| city),
             Some("Frankfurt")
         );
         assert_eq!(
-            dtag_city_hint("m-ef1-i.M.DE.NET.DTAG.DE").map(|(_, _, city)| city),
+            dtag_city_hint("m-ef1-i.M.DE.NET.DTAG.DE").map(|(_, _, city, _)| city),
             Some("München")
         );
     }
