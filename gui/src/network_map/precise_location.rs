@@ -155,9 +155,44 @@ fn dtag_city_hint(hostname: &str) -> Option<(f32, f32, &'static str, &'static st
 /// zurück.
 pub fn resolve_precise(ip: Ipv4Addr) -> Option<(f32, f32, String, &'static str)> {
     let hostname = reverse_dns(ip)?;
-    let (lat, lon, city, country) =
-        dtag_city_hint(&hostname).or_else(|| airport_hint(&hostname))?;
+    resolve_with(ip, &hostname, forward_dns)
+}
+
+/// Auswahl der Hinweise, ohne Netzwerk testbar: `forward` löst einen
+/// Hostnamen auf seine IPv4-Adressen auf.
+///
+/// Der Flughafencode gilt nur, wenn der Hostname **vorwärts** wieder auf `ip`
+/// zeigt (forward-confirmed reverse DNS). Den PTR-Eintrag setzt, wer den
+/// Adressblock verwaltet, und könnte dort einen beliebigen Ort behaupten;
+/// den Vorwärts-Eintrag der Anbieterdomain (z. B. `1e100.net`) kann er nicht
+/// setzen. Das Telekom-Schema bleibt ungeprüft: Router haben oft keinen
+/// Vorwärts-Eintrag, und der Hinweis kommt dort nur über die feste Endung.
+fn resolve_with(
+    ip: Ipv4Addr,
+    hostname: &str,
+    forward: impl FnOnce(&str) -> Vec<Ipv4Addr>,
+) -> Option<(f32, f32, String, &'static str)> {
+    let (lat, lon, city, country) = match dtag_city_hint(hostname) {
+        Some(hint) => hint,
+        None => {
+            let hint = airport_hint(hostname)?;
+            forward(hostname).contains(&ip).then_some(hint)?
+        }
+    };
     Some((lat, lon, city.to_string(), country))
+}
+
+/// Vorwärts-Auflösung wie [`reverse_dns`] über `getent` (`ahostsv4` liefert
+/// je Adresse eine Zeile `<ip> STREAM <name>`). Fehler ergeben eine leere
+/// Liste, der Hinweis gilt dann als unbestätigt (Regel 16).
+fn forward_dns(hostname: &str) -> Vec<Ipv4Addr> {
+    let Ok(output) = Command::new("getent").arg("ahostsv4").arg(hostname).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next()?.parse().ok())
+        .collect()
 }
 
 #[cfg(test)]
@@ -187,6 +222,26 @@ mod tests {
             dtag_city_hint("f-eh1-i.F.DE.NET.DTAG.DE").map(|(.., country)| country),
             Some("DE")
         );
+    }
+
+    const ZRH_HOST: &str = "zrh04s07-in-f170.1e100.net";
+    const ZRH_IP: Ipv4Addr = Ipv4Addr::new(172, 217, 19, 170);
+
+    #[test]
+    fn flughafen_hinweis_gilt_nur_bei_bestaetigtem_hostnamen() {
+        let bestaetigt = resolve_with(ZRH_IP, ZRH_HOST, |_| vec![ZRH_IP]);
+        assert_eq!(bestaetigt.map(|(.., city, country)| (city, country)), Some(("Zürich".to_string(), "CH")));
+        // Der Hostname löst auf eine andere IP auf: gefälschter PTR-Eintrag.
+        let andere_ip = Ipv4Addr::new(203, 0, 113, 7);
+        assert_eq!(resolve_with(andere_ip, ZRH_HOST, |_| vec![ZRH_IP]), None);
+        // Keine Vorwärts-Auflösung: nicht bestätigt.
+        assert_eq!(resolve_with(ZRH_IP, ZRH_HOST, |_| vec![]), None);
+    }
+
+    #[test]
+    fn telekom_hinweis_braucht_keine_vorwaerts_pruefung() {
+        let hit = resolve_with(ZRH_IP, "f-eh1-i.F.DE.NET.DTAG.DE", |_| vec![]);
+        assert_eq!(hit.map(|(.., city, country)| (city, country)), Some(("Frankfurt".to_string(), "DE")));
     }
 
     #[test]
