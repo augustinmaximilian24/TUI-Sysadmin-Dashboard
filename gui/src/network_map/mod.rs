@@ -938,7 +938,7 @@ impl NetworkMapPanel {
             }
 
             let (x, y, visible) = view.project(country.label_point);
-            if visible {
+            if visible && self.camera.shows_country_labels() {
                 country_label_anchors.push(Pos2::new(x, y));
                 country_label_texts.push(country.code.clone());
             }
