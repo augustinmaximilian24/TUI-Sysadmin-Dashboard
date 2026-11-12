@@ -32,6 +32,47 @@ pub fn read_established_remote_ipv4() -> Vec<Ipv4Addr> {
         .unwrap_or_default()
 }
 
+/// Prüft, ob der eigene Router (Default-Gateway) gerade antwortet.
+///
+/// Nötig, weil `/proc/net/tcp` bei einem Router-Ausfall nichts merkt: es
+/// kommt kein Abbau-Paket an, also bleiben ruhige Verbindungen
+/// `ESTABLISHED`, bis das Programm sie schließt oder der Kernel nach
+/// Minuten aufgibt. Ein Ping mit 1 s Timeout über das System-`ping`
+/// (trägt selbst `cap_net_raw`, die GUI braucht keine Rechte, Regel 7).
+/// Ohne Default-Route ist der Router per Definition nicht erreichbar; fehlt
+/// `ping`, gilt er als erreichbar, damit die Karte nicht grundlos leer
+/// bleibt (Regel 16).
+pub fn router_reachable() -> bool {
+    let Some(gateway) = std::fs::read_to_string(PROC_NET_ROUTE)
+        .ok()
+        .and_then(|text| parse_default_gateway(&text))
+    else {
+        return false;
+    };
+    std::process::Command::new("ping")
+        .args(["-c", "1", "-W", "1", "-n", "-q"])
+        .arg(gateway.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(true)
+}
+
+const PROC_NET_ROUTE: &str = "/proc/net/route";
+
+/// Gateway der Default-Route (Ziel `00000000`) aus `/proc/net/route` --
+/// gleiche Little-Endian-Kodierung wie `/proc/net/tcp`.
+fn parse_default_gateway(contents: &str) -> Option<Ipv4Addr> {
+    contents.lines().skip(1).find_map(|line| {
+        let mut fields = line.split_whitespace();
+        let _iface = fields.next()?;
+        let destination = fields.next()?;
+        let gateway = fields.next()?;
+        (destination == "00000000").then(|| parse_hex_ipv4(gateway)).flatten()
+    })
+}
+
 /// Reine Parsing-Funktion über den Text von `/proc/net/tcp`, damit sie
 /// ohne Live-System testbar ist (Regel 25).
 fn parse_established_remote_ipv4(contents: &str) -> Vec<Ipv4Addr> {
@@ -179,6 +220,27 @@ pub(super) fn is_routable_public(ip: Ipv4Addr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standard_gateway_kommt_aus_der_route_mit_ziel_null() {
+        // Gekürzt aus `/proc/net/route` dieses Rechners (2026-11-12): erst
+        // die Default-Route über die FritzBox, dann das eigene Subnetz.
+        let text = "\
+Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+enp14s0\t00B2A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
+enp14s0\t00000000\t01B2A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
+";
+        assert_eq!(parse_default_gateway(text), Some(Ipv4Addr::new(192, 168, 178, 1)));
+    }
+
+    #[test]
+    fn ohne_default_route_gibt_es_kein_gateway() {
+        let text = "\
+Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+enp14s0\t00B2A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
+";
+        assert_eq!(parse_default_gateway(text), None);
+    }
 
     /// Feste Fixture statt eines Live-`/proc/net/tcp` (Regel 25): eine
     /// lauschende Zeile (muss ignoriert werden), eine etablierte Zeile zu
