@@ -197,6 +197,13 @@ Reverse-DNS-Hinweise (Flughafencodes bei Rechenzentren, Telekom-Backbone).
       verifiziert (Genauigkeit der angezeigten Stadt, Speicherverbrauch der GUI
       mit geladener Datei)
 
+## 6a. Hardware des Desktop-Rechners
+
+Ryzen 5 7600X · Arctic Freezer 34 eSports DUO · MSI B650 GAMING PLUS WIFI ·
+32 GB DDR5-6000 Kingston FURY Beast · **AMD Radeon RX 9070 XT OC** (nicht mehr
+die RTX 4060 Ti) · Lexar NM790 2 TB · Gigabyte UD750GM · Gehäuse Systemtreff
+Plexus-ST-801. Details und Sensorzuordnung: `docs/hardware-desktop.md`.
+
 ## 7. Definition of Done (v1.0)
 
 - Daemon läuft 72 h ohne Absturz und ohne Speicherwachstum
