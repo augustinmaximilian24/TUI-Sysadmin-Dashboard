@@ -1497,12 +1497,29 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     pg.cam.y0 = pg.cam.yaw; pg.cam.p0 = pg.cam.pitch;
     gpage.hidden = false; tip.hidden = true;
     gcv.hidden = kind === 'anom'; apage.hidden = kind !== 'anom';
+    setNav(kind);
     document.getElementById('gcrumb').textContent = 'Schreibtisch › ' + (kind === 'graph' ? '34" › ' + GRAPH_DEF[arg].title : kind === 'globe' ? '27" oben › Verbindungen' : '27" hochkant › Anomalien');
     if (kind === 'anom') renderAnomList();
     showInfo(); drawPage();
     document.getElementById('gback').focus();
   }
-  function closePage() { gpage.hidden = true; pg = { kind: null }; requestRender(); }
+  function closePage() { gpage.hidden = true; pg = { kind: null }; setNav(null); requestRender(); }
+  // Tabs oben rechts als Schnellzugriff auf dieselben Seiten wie die Bildschirme
+  var NAV = { werkbank: null, graphen: 'graph', anomalien: 'anom', netzwerk: 'globe' };
+  function setNav(kind) {
+    document.querySelectorAll('nav a').forEach(function (a) {
+      var on = NAV[a.getAttribute('href').slice(1)] === kind;
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+  }
+  document.querySelectorAll('nav a').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      var kind = NAV[a.getAttribute('href').slice(1)];
+      if (!kind) { if (pg.kind) closePage(); if (view !== 'desk') leavePc(); return; }
+      if (pg.kind !== kind) openPage(kind, kind === 'graph' ? 'kg' : undefined);
+    });
+  });
   document.getElementById('gback').addEventListener('click', closePage);
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pg.kind) closePage(); });
   liveListeners.push(function () { if (pg.kind === 'anom') drawPage(); });
@@ -1620,6 +1637,9 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     if (pg.kind === 'graph') {
       var def = GRAPH_DEF[pg.id], d = pg.d;
       if (pg.group < 0) {
+        var other = pg.id === 'kg' ? 'home' : 'kg';
+        ginfo.append(backLink(GRAPH_DEF[other].title + ' öffnen', function () { openPage('graph', other); }));
+        ginfo.lastChild.textContent = GRAPH_DEF[other].title + ' öffnen ›';
         ginfo.append(el('h3', null, def.title), el('div', 'm', d.groups.length + ' Gruppen · ' + d.nodes.length + ' Knoten · ' + d.links.length + ' Kanten · ' + (d.sample ? 'Beispieldaten – echte Daten zeigt das Programm (just werkbank)' : def.src)));
         d.members.map(function (m, g) { return g; }).sort(function (a, b) { return d.members[b].length - d.members[a].length; })
           .forEach(function (g) { li(ul, holoColor(g), d.groups[g] + ' (' + d.members[g].length + ')', function () { openGroup(g); }); });
