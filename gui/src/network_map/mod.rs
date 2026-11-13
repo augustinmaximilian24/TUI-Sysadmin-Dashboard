@@ -1171,6 +1171,90 @@ impl NetworkMapPanel {
     }
 }
 
+/// Abstand zwischen zwei Zeilen im fensterlosen JSON-Modus
+/// ([`run_json_export`]); so oft wie das Poll-Intervall der Verbindungen.
+const JSON_EXPORT_INTERVAL: Duration = Duration::from_secs(2);
+
+impl NetworkMapPanel {
+    /// Aktueller Zustand als JSON (siehe [`export_json`]), nach IP sortiert
+    /// wie die Verbindungsliste unter der Kugel.
+    pub fn export(&self) -> serde_json::Value {
+        let guard = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut points: Vec<ConnectionPoint> = guard.points.values().cloned().collect();
+        points.sort_by_key(|a| a.ip);
+        export_json(
+            &points,
+            self.home.as_ref(),
+            guard.router_offline,
+            guard.unresolved_count,
+            guard.error.as_deref(),
+        )
+    }
+}
+
+/// Fensterloser Modus `logsentry-gui --netzkarte-json` für die 3D-Werkbank
+/// (`prototypes/werkbank-3d/`): startet dieselben Hintergrund-Threads wie die
+/// Kugel im Panel und schreibt alle [`JSON_EXPORT_INTERVAL`] den Zustand als
+/// eine JSON-Zeile auf stdout. Endet, sobald niemand mehr liest.
+pub fn run_json_export(config: &NetworkMapConfig) -> anyhow::Result<()> {
+    use std::io::Write;
+    let panel = NetworkMapPanel::new(config, &egui::Context::default());
+    loop {
+        // stdout nicht dauerhaft sperren: das Logging schreibt ebenfalls dorthin.
+        let mut out = std::io::stdout();
+        if writeln!(out, "{}", panel.export()).and_then(|()| out.flush()).is_err() {
+            return Ok(());
+        }
+        std::thread::sleep(JSON_EXPORT_INTERVAL);
+    }
+}
+
+/// Baut das JSON für [`NetworkMapPanel::export`]: dieselben Ziele, Orte und
+/// Routen wie die Verbindungsliste unter der Kugel. Rein, damit ohne
+/// Hintergrund-Threads testbar.
+fn export_json(
+    points: &[ConnectionPoint],
+    home: Option<&(String, f32, f32)>,
+    router_offline: bool,
+    unresolved: usize,
+    error: Option<&str>,
+) -> serde_json::Value {
+    let points: Vec<serde_json::Value> = points
+        .iter()
+        .map(|p| {
+            let route: Vec<serde_json::Value> = p
+                .route
+                .iter()
+                .map(|hop| {
+                    serde_json::json!({
+                        "text": hop.describe(),
+                        "place": hop.place,
+                        "lat": hop.position.map(|(lat, _)| lat),
+                        "lon": hop.position.map(|(_, lon)| lon),
+                        "is_target": hop.ip == Some(p.ip),
+                    })
+                })
+                .collect();
+            serde_json::json!({
+                "ip": p.ip.to_string(),
+                "program": p.program,
+                "place": p.place(),
+                "detail": p.detail(),
+                "lat": p.lat,
+                "lon": p.lon,
+                "route": route,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "home": home.map(|(code, lat, lon)| serde_json::json!({ "code": code, "lat": lat, "lon": lon })),
+        "router_offline": router_offline,
+        "unresolved": unresolved,
+        "error": error,
+        "points": points,
+    })
+}
+
 /// Wasserfarbe, direkt aus dem echten `mapbox/dark-v11`-Style-JSON
 /// (Layer `water`, `hsl(0, 0%, 12%)`) übernommen statt geschätzt -- der
 /// Nutzer wollte explizit genau diesen Stil.
@@ -1828,5 +1912,27 @@ mod tests {
         point.source = LocationSource::Country;
         point.precise_city = None;
         assert_eq!(point.place(), "Germany");
+    }
+
+    #[test]
+    fn export_json_liefert_ort_programm_und_route_wie_die_liste() {
+        let mut point = test_point(
+            LocationSource::Country,
+            vec![route_hop([80, 1, 1, 1], "DE", None)],
+        );
+        point.program = Some("firefox".to_string());
+        let home = ("DE".to_string(), 51.0_f32, 10.0_f32);
+
+        let json = export_json(&[point], Some(&home), false, 2, None);
+
+        let p = &json["points"][0];
+        assert_eq!(p["ip"], "93.1.2.3");
+        assert_eq!(p["program"], "firefox");
+        assert_eq!(p["place"], "Germany");
+        assert_eq!(p["route"][0]["text"], "DE (80.1.1.1)");
+        assert_eq!(p["route"][0]["lat"], 50.0);
+        assert_eq!(json["home"]["code"], "DE");
+        assert_eq!(json["unresolved"], 2);
+        assert_eq!(json["router_offline"], false);
     }
 }
