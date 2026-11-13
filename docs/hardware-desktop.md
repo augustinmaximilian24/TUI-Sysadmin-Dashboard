@@ -21,5 +21,7 @@ Hinweise:
 - Laut Bestellung wurde die CPU gegen den 7600X getauscht (Titel nennt noch 7500F).
 - Der Autostart-Eintrag „NVIDIA Performance Mode" stammt noch von der alten
   Nvidia-Karte und ist mit der RX 9070 XT überflüssig.
-- Offen: genaue Serie der ASUS-Karte (TUF Gaming oder Prime), Lüfterbelegung
-  am Mainboard, Monitor-Modelle.
+- Grafikkarte laut Angabe „ASUS TUF Prime“. ASUS führt TUF Gaming und Prime
+  als getrennte Serien; die genaue Bezeichnung zeigt `lspci -nnk | grep -A3 VGA`
+  (Zeile „Subsystem“). Das 3D-Modell ist bis dahin neutral gehalten.
+- Offen: Lüfterbelegung am Mainboard, Monitor-Modelle.

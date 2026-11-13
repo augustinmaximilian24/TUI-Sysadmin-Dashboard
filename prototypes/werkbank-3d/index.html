@@ -1,0 +1,948 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>logsentry Werkbank 3D</title>
+<style>
+/* Layout: Kopfzeile, Kennzahlen-Leiste, darunter 3D-Bühne links und Detail-Panel rechts (auf dem Handy untereinander). */
+:root {
+  --bg: #F3F4F6;
+  --surface: #FFFFFF;
+  --line: #E1E3E8;
+  --fg: #17191D;
+  --muted: #5B616B;
+  --accent: #2255D4;
+  --accent-soft: #E8EEFC;
+  --ok: #16784A; --ok-soft: #E6F4EC;
+  --warn: #8A5300; --warn-soft: #FFF3DC;
+  --crit: #B42318; --crit-soft: #FDECEA;
+  --font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --stage: #EDEEF1;
+  --overlay: rgba(255,255,255,0.88);
+  --line-soft: #EEF0F3;
+  --tag-bg: #EEF0F3;
+  --fg2: #3A3F47;
+  --on-accent: #FFFFFF;
+  --tip-bg: #17191D; --tip-fg: #FFFFFF;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101216; --surface: #191C21; --line: #2A2E35; --fg: #ECEEF1; --muted: #A2A8B2;
+    --accent: #86A6FF; --accent-soft: #1D2944;
+    --ok: #5BCB94; --ok-soft: #12301F; --warn: #F2B55C; --warn-soft: #33270F; --crit: #FF8A7E; --crit-soft: #3A1714;
+    --stage: #0C0D10; --overlay: rgba(25,28,33,0.88); --line-soft: #23272D; --tag-bg: #262A31; --fg2: #C9CED6;
+    --on-accent: #0B1020; --tip-bg: #ECEEF1; --tip-fg: #101216;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101216; --surface: #191C21; --line: #2A2E35; --fg: #ECEEF1; --muted: #A2A8B2;
+  --accent: #86A6FF; --accent-soft: #1D2944;
+  --ok: #5BCB94; --ok-soft: #12301F; --warn: #F2B55C; --warn-soft: #33270F; --crit: #FF8A7E; --crit-soft: #3A1714;
+  --stage: #0C0D10; --overlay: rgba(25,28,33,0.88); --line-soft: #23272D; --tag-bg: #262A31; --fg2: #C9CED6;
+  --on-accent: #0B1020; --tip-bg: #ECEEF1; --tip-fg: #101216;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 20px; display: flex; flex-direction: column; gap: 14px; max-width: 1600px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.brand { font-weight: 700; font-size: 18px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 12px; font-weight: 500; }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: block; }
+nav { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
+.theme-btn { min-height: 40px; }
+nav a { padding: 9px 14px; border-radius: 8px; color: var(--muted); text-decoration: none; }
+nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+.kpi .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .s { font-size: 12px; color: var(--muted); }
+.kpi.crit .v { color: var(--crit); }
+.kpi.pending .v { color: var(--muted); }
+
+.main { display: flex; flex-wrap: wrap; gap: 14px; }
+.stage { position: relative; flex: 999 1 640px; min-width: 0; height: clamp(440px, 70vh, 780px); background: var(--stage); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.overlay-top { position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crumb { font-size: 13px; color: var(--muted); background: var(--overlay); padding: 6px 10px; border-radius: 8px; }
+.btn { min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.overlay-bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.hint { position: absolute; right: 12px; top: 12px; font-size: 12px; color: var(--muted); background: var(--overlay); padding: 6px 10px; border-radius: 8px; max-width: 260px; }
+.tip { position: absolute; pointer-events: none; background: var(--tip-bg); color: var(--tip-fg); font-size: 12px; padding: 5px 9px; border-radius: 6px; white-space: nowrap; transform: translate(12px, -28px); }
+.loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.card h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+.card h3 { margin: 0; font-size: 14px; }
+.eyebrow { font-size: 12px; color: var(--muted); }
+.model { font-size: 13px; color: var(--fg2); margin-top: 2px; }
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.row .k { flex: 1 1 0; color: var(--fg2); min-width: 72px; }
+.row .v { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; max-width: 65%; }
+.tag { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--tag-bg); color: var(--muted); white-space: nowrap; }
+.src { font-size: 12px; color: var(--muted); }
+.anom { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; font-size: 12px; }
+.anom b { flex: none; }
+.anom span { font-family: var(--mono); overflow-wrap: anywhere; }
+.anom.WARN { background: var(--warn-soft); } .anom.WARN b { color: var(--warn); }
+.anom.INFO { background: var(--accent-soft); } .anom.INFO b { color: var(--accent); }
+.anom.CRIT { background: var(--crit-soft); } .anom.CRIT b { color: var(--crit); }
+.list { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.list div { display: flex; justify-content: space-between; gap: 10px; }
+.list span:last-child { color: var(--muted); text-align: right; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+@media (max-width: 700px) { .hint { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="brand">logsentry</div>
+    <span class="pill"><i></i>verbunden</span>
+    <nav aria-label="Bereiche">
+      <a href="#werkbank" aria-current="page">Werkbank</a>
+      <a href="#graphen">Graphen</a>
+      <a href="#anomalien">Anomalien</a>
+      <a href="#netzwerk">Netzwerk</a>
+    </nav>
+    <button class="btn theme-btn" id="themeBtn" type="button" aria-label="Darstellung wechseln">Darstellung: System</button>
+  </header>
+
+  <section class="kpis" aria-label="Wichtigste Werte">
+    <div class="kpi"><div class="l">CPU-Last</div><div class="v">1 %</div><div class="s">Load 0,49</div></div>
+    <div class="kpi"><div class="l">CPU-Temperatur</div><div class="v">50,4 °C</div><div class="s">Ryzen 5 7600X · Tctl</div></div>
+    <div class="kpi pending"><div class="l">Grafikkarte</div><div class="v">– °C</div><div class="s">ASUS RX 9070 XT · noch nicht erfasst</div></div>
+    <div class="kpi"><div class="l">Arbeitsspeicher</div><div class="v">21 %</div><div class="s">≈ 6,7 von 32 GB · 34,2 °C</div></div>
+    <div class="kpi"><div class="l">SSD</div><div class="v">33,8 °C</div><div class="s">Lexar NM790 · / zu 47 % belegt</div></div>
+    <div class="kpi"><div class="l">Netzwerk</div><div class="v">40,0 °C</div><div class="s">LAN und WLAN</div></div>
+    <div class="kpi crit"><div class="l">Anomalien (60 min)</div><div class="v">31</div><div class="s">davon 1 kritisch</div></div>
+  </section>
+
+  <div class="main">
+    <section class="stage" id="stage" aria-label="3D-Ansicht des Arbeitsplatzes">
+      <div class="loading" id="loading">3D-Ansicht wird geladen …</div>
+      <div class="overlay-top">
+        <button class="btn" id="back" type="button" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+          Schreibtisch
+        </button>
+        <div class="crumb" id="crumb">Schreibtisch</div>
+      </div>
+      <div class="hint" id="hint">Ziehen dreht die Ansicht, Mausrad zoomt. Klick auf den PC oder einen Monitor zoomt hinein.</div>
+      <div class="overlay-bottom" id="chips"></div>
+      <div class="tip" id="tip" hidden></div>
+    </section>
+
+    <aside id="panel" aria-live="polite"></aside>
+  </div>
+  <p class="note">Messwerte sind eine Momentaufnahme aus deinem Dashboard; im fertigen Programm kommen sie live vom Daemon. „Noch nicht erfasst" heißt: der Sensor existiert unter Linux, steht aber noch nicht im Snapshot. Anordnung und Farben folgen deinen Fotos und Angaben; die Bauteile sind im Code nachgebaut und lassen sich später gegen fertige 3D-Modelle (glTF) austauschen.</p>
+</div>
+
+<script src="vendor/three-0.147.0/three.min.js"></script>
+<script src="vendor/three-0.147.0/OrbitControls.js"></script>
+<script src="vendor/three-0.147.0/RoomEnvironment.js"></script>
+<script src="vendor/three-0.147.0/RoundedBoxGeometry.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PARTS = {
+    cpu: { name: 'Prozessor & Kühler', model: 'AMD Ryzen 5 7600X · Arctic Freezer 34 eSports DUO (schwarz, weiße Lüfter)',
+      rows: [['Temperatur Tctl', '50,4 °C'], ['Temperatur Tccd1', '37,8 °C'], ['Auslastung', '1 %'], ['Load 1 / 5 / 15 min', '0,49 / 0,64 / 0,79'], ['Takt', '– GHz', 1], ['Kühler-Lüfter (2 ×)', '– U/min', 1]],
+      src: 'k10temp, sysinfo; Lüfter über Mainboard-hwmon',
+      procs: [['firefox', '0,9 %'], ['cinnamon', '0,6 %'], ['logsentry', '0,4 %']],
+      anom: ['WARN', '<*> Consumed <*> CPU time, <*> memory peak, 0B memory swap peak.'] },
+    gpu: { name: 'Grafikkarte', model: 'ASUS Radeon RX 9070 XT OC · 16 GB GDDR6',
+      rows: [['Temperatur (Edge)', '– °C', 1], ['Hotspot (Junction)', '– °C', 1], ['Speicher', '– °C', 1], ['Lüfter', '– U/min', 1], ['Leistungsaufnahme', '– W', 1], ['Grafikspeicher belegt', '– GB', 1]],
+      src: 'amdgpu-Treiber (hwmon) – unter Linux ohne Zusatzsoftware lesbar, noch nicht im Snapshot',
+      procs: [['cinnamon', '–'], ['steam', '–']], anom: null },
+    ram: { name: 'Arbeitsspeicher', model: 'Kingston FURY Beast DDR5-6000 CL30 · 2 × 16 GB',
+      rows: [['Temperatur', '34,2 °C'], ['Belegt', '21 % (≈ 6,7 GB)']],
+      src: 'spd5118, sysinfo',
+      procs: [['firefox', '1,2 GB'], ['steam', '640 MB'], ['cinnamon', '310 MB']], anom: null },
+    nvme: { name: 'SSD', model: 'Lexar NM790 · 2 TB · PCIe 4.0 (unter dem M.2-Kühlblech)',
+      rows: [['Composite', '33,8 °C'], ['Sensor 1', '33,8 °C'], ['Sensor 2', '31,9 °C'], ['/', '47 % belegt'], ['/var/lib/logsentry', '47 % belegt'], ['/boot/efi', '1 % belegt']],
+      src: 'nvme-Sensoren, sysinfo', procs: [], anom: null },
+    board: { name: 'Mainboard', model: 'MSI B650 GAMING PLUS WIFI · AM5',
+      rows: [['LAN-Chip (Realtek)', '40,0 °C'], ['WLAN-Chip (MediaTek)', '40,0 °C']],
+      src: 'r8169, mt7921', procs: [],
+      anom: ['INFO', 'wlp13s0: WPA: Group rekeying completed with <MAC> [GTK=CCMP]'] },
+    fans: { name: 'Gehäuselüfter', model: '3 × 120 mm im Boden (Intake), 3 × 120 mm im Deckel (Outtake), Leuchtringe golden',
+      rows: [['Boden vorne', '– U/min', 1], ['Boden Mitte', '– U/min', 1], ['Boden hinten', '– U/min', 1], ['Deckel vorne', '– U/min', 1], ['Deckel Mitte', '– U/min', 1], ['Deckel hinten', '– U/min', 1]],
+      src: 'Mainboard-hwmon (fan*_input) – noch nicht erfasst', procs: [], anom: null },
+    psu: { name: 'Netzteil', model: 'Gigabyte UD750GM · 750 W · 80+ Gold · modular (hintere Kammer)',
+      rows: [], src: 'Keine Sensoren – bei Netzteilen ohne Datenkabel normal.', procs: [], anom: null }
+  };
+  var ORDER = ['cpu', 'gpu', 'ram', 'nvme', 'board', 'fans', 'psu'];
+  var MONS = {
+    main: { name: '34" Curved', role: 'Hauptmonitor, unten mittig', shows: [['Inhalt', 'Systemzustand'], ['Kacheln', 'CPU, CPU-Temp., Grafikkarte, RAM, SSD, Load'], ['Verlauf', 'Entropie der letzten 5 min']] },
+    top: { name: '27" oben', role: 'mittig über dem Hauptmonitor, mit Monitorlampe', shows: [['Inhalt', 'Anomalien'], ['Zeitraum', 'letzte 60 min'], ['Anzahl', '31, davon 1 kritisch']] },
+    portrait: { name: '27" hochkant', role: 'rechts neben beiden', shows: [['Inhalt', 'Temperaturen'], ['Darunter', 'größte Verbraucher (Beispielwerte)']] }
+  };
+  var MON_ORDER = ['main', 'top', 'portrait'];
+  var currentMon = 'main';
+
+  var stage = document.getElementById('stage');
+  var panel = document.getElementById('panel');
+  var chipsEl = document.getElementById('chips');
+  var crumb = document.getElementById('crumb');
+  var backBtn = document.getElementById('back');
+  var tip = document.getElementById('tip');
+  var hint = document.getElementById('hint');
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var view = 'desk';
+  var selected = 'cpu';
+  var themeListeners = [];
+  var darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+  function isDark() {
+    var t = document.documentElement.getAttribute('data-theme');
+    return t === 'dark' || (t !== 'light' && darkMq.matches);
+  }
+  function fireTheme() { var d = isDark(); themeListeners.forEach(function (f) { f(d); }); }
+  var themeBtn = document.getElementById('themeBtn');
+  var THEME_LABEL = { '': 'Darstellung: System', light: 'Darstellung: Hell', dark: 'Darstellung: Dunkel' };
+  function setThemeChoice(v) {
+    if (v) document.documentElement.setAttribute('data-theme', v); else document.documentElement.removeAttribute('data-theme');
+    themeBtn.textContent = THEME_LABEL[v || ''];
+    try { localStorage.setItem('werkbank-theme', v || ''); } catch (e) {}
+    fireTheme();
+  }
+  (function () { var v = ''; try { v = localStorage.getItem('werkbank-theme') || ''; } catch (e) {} if (v) setThemeChoice(v); })();
+  themeBtn.addEventListener('click', function () {
+    var cur = document.documentElement.getAttribute('data-theme') || '';
+    setThemeChoice(cur === '' ? 'light' : cur === 'light' ? 'dark' : '');
+  });
+  if (darkMq.addEventListener) darkMq.addEventListener('change', fireTheme);
+  new MutationObserver(fireTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  var api = { enterPc: function () {}, select: function () {}, enterMon: function () {} };
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function renderPanel() {
+    panel.textContent = '';
+    if (view === 'desk') {
+      var c = el('section', 'card');
+      c.appendChild(el('h2', null, 'Dein Arbeitsplatz'));
+      var l = el('div', 'list');
+      [['PC (rechts auf dem Tisch)', 'läuft · 50,4 °C'], ['34" Curved, unten mittig', 'Systemzustand'], ['27" darüber', 'Anomalien'], ['27" hochkant rechts', 'Temperaturen'], ['Tastatur & Maus', 'Razer (openrazer)'], ['Tastenfeld', 'über OpenDeck']].forEach(function (r) {
+        var d = el('div'); d.appendChild(el('span', null, r[0])); d.appendChild(el('span', null, r[1])); l.appendChild(d);
+      });
+      c.appendChild(l);
+      var go = el('button', 'btn primary', 'In den PC zoomen'); go.type = 'button'; go.addEventListener('click', function () { api.enterPc(); });
+      c.appendChild(go);
+      panel.appendChild(c);
+      var a = el('section', 'card');
+      a.appendChild(el('h3', null, 'Letzte Anomalien'));
+      [['CRIT', '(max) LIST (max)'], ['WARN', 'max : TTY=pts/4 ; USER=root ; COMMAND=…'], ['INFO', 'wlp13s0: WPA: Group rekeying completed']].forEach(function (x) {
+        var d = el('div', 'anom ' + x[0]); d.appendChild(el('b', null, x[0])); d.appendChild(el('span', null, x[1])); a.appendChild(d);
+      });
+      panel.appendChild(a);
+      return;
+    }
+    if (view === 'mon') {
+      var mo = MONS[currentMon];
+      var mc = el('section', 'card');
+      var mh = el('div'); mh.appendChild(el('div', 'eyebrow', 'Monitor')); mh.appendChild(el('h2', null, mo.name)); mh.appendChild(el('div', 'model', mo.role)); mc.appendChild(mh);
+      var mr = el('div', 'rows');
+      mo.shows.forEach(function (r) { var row = el('div', 'row'); row.appendChild(el('span', 'k', r[0])); row.appendChild(el('span', 'v', r[1])); mr.appendChild(row); });
+      mc.appendChild(mr);
+      mc.appendChild(el('div', 'src', 'Im fertigen Programm öffnet ein Klick auf den Bildschirminhalt den passenden Bereich.'));
+      panel.appendChild(mc);
+      return;
+    }
+    var p = PARTS[selected];
+    var card = el('section', 'card');
+    var head = el('div');
+    head.appendChild(el('div', 'eyebrow', 'Bauteil'));
+    head.appendChild(el('h2', null, p.name));
+    head.appendChild(el('div', 'model', p.model));
+    card.appendChild(head);
+    if (p.rows.length) {
+      var rows = el('div', 'rows');
+      p.rows.forEach(function (r) {
+        var row = el('div', 'row');
+        row.appendChild(el('span', 'k', r[0]));
+        if (r[2]) row.appendChild(el('span', 'tag', 'noch nicht erfasst'));
+        row.appendChild(el('span', 'v', r[1]));
+        rows.appendChild(row);
+      });
+      card.appendChild(rows);
+    }
+    card.appendChild(el('div', 'src', 'Quelle: ' + p.src));
+    if (p.procs.length) {
+      var pr = el('div');
+      var h = el('div'); h.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:4px';
+      h.appendChild(el('h3', null, 'Größte Verbraucher')); h.appendChild(el('span', 'eyebrow', 'Beispielwerte'));
+      pr.appendChild(h);
+      var l2 = el('div', 'list');
+      p.procs.forEach(function (x) { var d = el('div'); d.appendChild(el('span', null, x[0])); d.appendChild(el('span', null, x[1])); l2.appendChild(d); });
+      pr.appendChild(l2);
+      card.appendChild(pr);
+    }
+    if (p.anom) {
+      var an = el('div', 'anom ' + p.anom[0]); an.appendChild(el('b', null, p.anom[0])); an.appendChild(el('span', null, p.anom[1])); card.appendChild(an);
+    }
+    panel.appendChild(card);
+  }
+
+  function renderChips() {
+    chipsEl.textContent = '';
+    if (view === 'mon') {
+      MON_ORDER.forEach(function (id) {
+        var mb = el('button', 'btn', MONS[id].name); mb.type = 'button';
+        mb.setAttribute('aria-pressed', String(id === currentMon));
+        mb.addEventListener('click', function () { api.enterMon(id); });
+        chipsEl.appendChild(mb);
+      });
+      var pb = el('button', 'btn', 'PC'); pb.type = 'button'; pb.addEventListener('click', function () { api.enterPc(); }); chipsEl.appendChild(pb);
+      return;
+    }
+    if (view !== 'pc') return;
+    ORDER.forEach(function (id) {
+      var b = el('button', 'btn', PARTS[id].name);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(id === selected));
+      b.addEventListener('click', function () { api.select(id); });
+      chipsEl.appendChild(b);
+    });
+  }
+
+  function updateChrome() {
+    backBtn.hidden = view === 'desk';
+    crumb.textContent = view === 'pc' ? 'Schreibtisch › PC › ' + PARTS[selected].name : view === 'mon' ? 'Schreibtisch › ' + MONS[currentMon].name : 'Schreibtisch';
+    hint.textContent = view === 'pc' ? 'Klick auf ein Bauteil zeigt seine Werte. Ziehen dreht, Mausrad zoomt.' : view === 'mon' ? 'Klick auf einen anderen Monitor oder den PC wechselt dorthin.' : 'Ziehen dreht die Ansicht, Mausrad zoomt. Klick auf den PC oder einen Monitor zoomt hinein.';
+    renderChips();
+    renderPanel();
+  }
+
+  renderPanel();
+
+  if (!window.THREE || !THREE.OrbitControls || !THREE.RoundedBoxGeometry) {
+    document.getElementById('loading').textContent = '3D-Bibliothek konnte nicht geladen werden.';
+    return;
+  }
+
+  // ---------- Renderer, Szene, Kamera ----------
+  var renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+  } catch (e) {
+    document.getElementById('loading').textContent = 'Dieser Browser kann kein WebGL darstellen.';
+    return;
+  }
+  document.getElementById('loading').remove();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.95;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.setAttribute('aria-label', '3D-Modell von Schreibtisch und PC');
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color('#EDEEF1');
+  var pmrem = new THREE.PMREMGenerator(renderer);
+  var envTex = THREE.RoomEnvironment ? pmrem.fromScene(new THREE.RoomEnvironment(), 0.04).texture : null;
+  scene.environment = envTex;
+
+  var camera = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 25;
+  controls.maxDistance = 480;
+  controls.maxPolarAngle = Math.PI * 0.49;
+
+  var hemi = new THREE.HemisphereLight(0xffffff, 0xd9d4cc, 0.32); scene.add(hemi);
+  var sun = new THREE.DirectionalLight(0xffffff, 1.45);
+  sun.position.set(-120, 260, 220);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -160; sun.shadow.camera.right = 160;
+  sun.shadow.camera.top = 220; sun.shadow.camera.bottom = -80;
+  sun.shadow.camera.near = 10; sun.shadow.camera.far = 700;
+  sun.shadow.bias = -0.0004;
+  scene.add(sun);
+
+  // ---------- Bausteine ----------
+  function M(color, rough, metal, extra) {
+    var o = { color: color, roughness: rough == null ? 0.5 : rough, metalness: metal || 0, envMapIntensity: 0.38 };
+    if (extra) for (var k in extra) o[k] = extra[k];
+    return new THREE.MeshStandardMaterial(o);
+  }
+  function rbox(w, h, d, r, mat) {
+    var rr = Math.max(0.01, Math.min(r, Math.min(w, h, d) / 2 - 0.01));
+    var m = new THREE.Mesh(new THREE.RoundedBoxGeometry(w, h, d, 3, rr), mat);
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
+  function box(w, h, d, mat) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
+  function at(m, x, y, z) { m.position.set(x, y, z); return m; }
+  function cyl(r, len, mat, seg) { var m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg || 24), mat); m.castShadow = true; return m; }
+  function canvasTex(w, h, draw) {
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = 8;
+    var paint = function () { draw(c.getContext('2d'), w, h); t.needsUpdate = true; };
+    paint();
+    repaints.push(paint);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(paint);
+    return t;
+  }
+
+  var repaints = [];
+  var spinning = [];
+  // Lüfter mit Achse +z. opts: depth, frame (Farbe oder null), ring (Leuchtfarbe), blade, hub, bladeOpacity, blades, speed
+  function fan(size, opts) {
+    var g = new THREE.Group();
+    var s = size / 2, depth = opts.depth || 2.5;
+    if (opts.frame) {
+      var shape = new THREE.Shape();
+      var r = 0.9;
+      shape.moveTo(-s + r, -s); shape.lineTo(s - r, -s); shape.quadraticCurveTo(s, -s, s, -s + r);
+      shape.lineTo(s, s - r); shape.quadraticCurveTo(s, s, s - r, s); shape.lineTo(-s + r, s);
+      shape.quadraticCurveTo(-s, s, -s, s - r); shape.lineTo(-s, -s + r); shape.quadraticCurveTo(-s, -s, -s + r, -s);
+      var hole = new THREE.Path(); hole.absarc(0, 0, s * 0.93, 0, Math.PI * 2, true); shape.holes.push(hole);
+      var fg = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: false, curveSegments: 40 });
+      fg.translate(0, 0, -depth / 2);
+      var fm = new THREE.Mesh(fg, M(opts.frame, 0.55, 0.05)); fm.castShadow = true; g.add(fm);
+    }
+    if (opts.ring) {
+      var ringMat = M('#6B4206', 0.4, 0.2, { emissive: new THREE.Color(opts.ring), emissiveIntensity: 0.95, toneMapped: false });
+      [-depth / 2 + 0.15, depth / 2 - 0.15].forEach(function (z) {
+        var t = new THREE.Mesh(new THREE.TorusGeometry(s * 0.9, 0.24, 10, 64), ringMat); t.position.z = z; g.add(t);
+      });
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(s * 0.32, 0.18, 8, 40), ringMat));
+    }
+    var rotor = new THREE.Group();
+    var hub = cyl(s * 0.3, depth * 0.85, M(opts.hub || '#1d1e21', 0.5, 0.1), 32);
+    hub.rotation.x = Math.PI / 2; rotor.add(hub);
+    var bladeMat = M(opts.blade || '#2a2c30', 0.55, 0, opts.bladeOpacity ? { transparent: true, opacity: opts.bladeOpacity } : null);
+    var n = opts.blades || 9;
+    for (var i = 0; i < n; i++) {
+      var pivot = new THREE.Group();
+      var bl = new THREE.Mesh(new THREE.BoxGeometry(s * 0.6, s * 0.36, 0.12), bladeMat);
+      bl.position.x = s * 0.6; bl.rotation.x = 0.55; bl.rotation.z = 0.25; bl.castShadow = true;
+      pivot.add(bl); pivot.rotation.z = (i / n) * Math.PI * 2; rotor.add(pivot);
+    }
+    g.add(rotor);
+    spinning.push({ obj: rotor, speed: opts.speed || 2.2 });
+    return g;
+  }
+  function tag(obj, part) { obj.traverse(function (o) { o.userData.part = part; }); return obj; }
+
+  // ---------- Raum: Boden, Holzwand ----------
+  var floor = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), M('#D9D4CB', 0.95));
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+  var planks = canvasTex(1024, 512, function (x, w, h) {
+    var cols = ['#9A6A3B', '#916236', '#A27142', '#8C5F33', '#986A3E'];
+    var pw = w / 10;
+    for (var i = 0; i < 10; i++) {
+      x.fillStyle = cols[i % cols.length]; x.fillRect(i * pw, 0, pw, h);
+      x.strokeStyle = 'rgba(90,55,25,0.18)'; x.lineWidth = 1;
+      for (var g = 0; g < 7; g++) { x.beginPath(); var gx = i * pw + 8 + g * (pw - 16) / 6; x.moveTo(gx, 0); x.bezierCurveTo(gx + 6, h * 0.3, gx - 6, h * 0.6, gx + 3, h); x.stroke(); }
+      x.fillStyle = 'rgba(70,40,15,0.45)'; x.fillRect(i * pw, 0, 2, h);
+    }
+  });
+  planks.wrapS = planks.wrapT = THREE.RepeatWrapping; planks.repeat.set(3, 1);
+  var wall = new THREE.Mesh(new THREE.PlaneGeometry(330, 300), M('#C4C4C4', 0.85, 0, { map: planks }));
+  wall.position.set(0, 150, -48); wall.receiveShadow = true; scene.add(wall);
+  var wall2 = new THREE.Mesh(new THREE.PlaneGeometry(200, 300), M('#F2F1EE', 0.95));
+  wall2.position.set(165, 150, 52); wall2.rotation.y = -Math.PI / 2; wall2.receiveShadow = true; scene.add(wall2);
+
+  // ---------- Schreibtisch ----------
+  var desk = new THREE.Group(); scene.add(desk);
+  var TOP = 75;
+  // Helle Holzoptik mit Maserung
+  var deskTex = canvasTex(1024, 512, function (x, w, h) {
+    x.fillStyle = '#E6D3B1'; x.fillRect(0, 0, w, h);
+    for (var i = 0; i < 140; i++) {
+      var y0 = Math.random() * h, a = 0.04 + Math.random() * 0.08;
+      x.strokeStyle = (i % 3 ? 'rgba(150,110,60,' : 'rgba(255,245,225,') + a + ')';
+      x.lineWidth = 0.6 + Math.random() * 1.8;
+      x.beginPath(); x.moveTo(0, y0);
+      x.bezierCurveTo(w * 0.3, y0 + (Math.random() - 0.5) * 18, w * 0.7, y0 + (Math.random() - 0.5) * 18, w, y0 + (Math.random() - 0.5) * 10);
+      x.stroke();
+    }
+  });
+  var deskWood = M('#ffffff', 0.55, 0, { map: deskTex });
+  var dark = M('#18191C', 0.45, 0.2);
+  var steel = M('#1F2125', 0.45, 0.35);
+  desk.add(at(rbox(200, 3, 82, 0.8, deskWood), 0, TOP - 1.5, 0));
+  [[-94, -36], [94, -36], [-94, 36], [94, 36]].forEach(function (p) { desk.add(at(rbox(5, TOP - 3, 5, 0.6, steel), p[0], (TOP - 3) / 2, p[1])); });
+  desk.add(at(box(186, 6, 3, steel), 0, TOP - 7, -36));
+  // Schreibtischunterlage im Pergament-Ton
+  desk.add(at(rbox(130, 0.3, 46, 0.12, M('#1C1D20', 0.92)), -12, TOP + 0.15, 16));
+
+  var SP;
+  function screenPalette(d) {
+    return d ? { bg: '#14171C', card: '#1B1F26', border: '#2C313A', fg: '#E8EBEF', muted: '#9AA1AB', accent: '#86A6FF', track: '#2C313A', dim: '#6B727C',
+      CRIT: ['#3A1714', '#FF8A7E'], WARN: ['#33270F', '#F2B55C'], INFO: ['#1D2944', '#9DB6FF'] }
+      : { bg: '#FBFBFC', card: '#FFFFFF', border: '#E1E3E8', fg: '#17191D', muted: '#5B616B', accent: '#2255D4', track: '#E1E3E8', dim: '#9AA0A8',
+      CRIT: ['#FDECEA', '#B42318'], WARN: ['#FFF3DC', '#8A5300'], INFO: ['#E8EEFC', '#2255D4'] };
+  }
+  SP = screenPalette(isDark());
+  function header(x, s, size) { x.fillStyle = SP.muted; x.font = '600 ' + (size || 44) + 'px Inter, sans-serif'; x.fillText(s, 60, 90); }
+  // 34" Curved: Systemzustand
+  var texMain = canvasTex(2100, 900, function (x, w, h) {
+    x.fillStyle = SP.bg; x.fillRect(0, 0, w, h);
+    header(x, 'Systemzustand · desktop-mint', 48);
+    [['CPU', '1 %'], ['CPU-Temp.', '50 °C'], ['Grafikkarte', '– °C'], ['RAM', '21 %'], ['SSD', '34 °C'], ['Load', '0,49']].forEach(function (r, i) {
+      var cx = 60 + i * 335;
+      x.fillStyle = SP.card; x.fillRect(cx, 140, 305, 230); x.strokeStyle = SP.border; x.lineWidth = 3; x.strokeRect(cx, 140, 305, 230);
+      x.fillStyle = SP.muted; x.font = '500 38px Inter, sans-serif'; x.fillText(r[0], cx + 24, 200);
+      x.fillStyle = r[1].charAt(0) === '–' ? SP.dim : SP.fg; x.font = '700 92px Inter, sans-serif'; x.fillText(r[1], cx + 24, 320);
+    });
+    x.fillStyle = SP.muted; x.font = '500 36px Inter, sans-serif'; x.fillText('Entropie, letzte 5 min', 60, 460);
+    x.strokeStyle = SP.border; x.lineWidth = 2;
+    for (var g = 0; g < 4; g++) { x.beginPath(); x.moveTo(60, 500 + g * 110); x.lineTo(w - 60, 500 + g * 110); x.stroke(); }
+    x.strokeStyle = SP.accent; x.lineWidth = 6; x.beginPath();
+    for (var i2 = 0; i2 <= 120; i2++) {
+      var v = 1.8 + Math.sin(i2 * 0.21) * 0.15 + Math.sin(i2 * 0.05) * 0.1 - (i2 > 70 && i2 < 74 ? 1.2 : 0);
+      var px = 60 + i2 * (w - 120) / 120, py = 830 - v / 3 * 330;
+      if (i2) x.lineTo(px, py); else x.moveTo(px, py);
+    }
+    x.stroke();
+  });
+  // 27" oben: Anomalien
+  var texTop = canvasTex(1200, 680, function (x, w, h) {
+    x.fillStyle = SP.bg; x.fillRect(0, 0, w, h);
+    header(x, 'Anomalien · 31 in 60 min');
+    [['CRIT', '(max) LIST (max)'], ['WARN', 'sudo-Aufruf von max'], ['INFO', 'WLAN-Schlüssel erneuert'], ['WARN', 'Speicherspitze user@1000']].forEach(function (r, i) {
+      var y = 140 + i * 125;
+      x.fillStyle = SP[r[0]][0]; x.fillRect(60, y, 1080, 100);
+      x.fillStyle = SP[r[0]][1]; x.font = '700 40px Inter, sans-serif'; x.fillText(r[0], 90, y + 64);
+      x.fillStyle = SP.fg; x.font = '400 40px Inter, sans-serif'; x.fillText(r[1], 270, y + 64);
+    });
+  });
+  // 27" hochkant: Temperaturen und Prozesse
+  var texPortrait = canvasTex(680, 1200, function (x, w, h) {
+    x.fillStyle = SP.bg; x.fillRect(0, 0, w, h);
+    x.fillStyle = SP.muted; x.font = '600 40px Inter, sans-serif'; x.fillText('Temperaturen', 44, 80);
+    [['CPU Tctl', '50,4 °C', 0.5], ['CPU Tccd1', '37,8 °C', 0.38], ['Grafikkarte', '– °C', 0], ['RAM', '34,2 °C', 0.34], ['SSD', '33,8 °C', 0.34], ['LAN', '40,0 °C', 0.4], ['WLAN', '40,0 °C', 0.4]].forEach(function (r, i) {
+      var y = 160 + i * 92;
+      x.fillStyle = SP.fg; x.font = '400 34px Inter, sans-serif'; x.fillText(r[0], 44, y);
+      x.font = '700 34px Inter, sans-serif'; x.textAlign = 'right'; x.fillText(r[1], w - 44, y); x.textAlign = 'left';
+      x.fillStyle = SP.track; x.fillRect(44, y + 18, w - 88, 12);
+      x.fillStyle = SP.accent; x.fillRect(44, y + 18, (w - 88) * r[2], 12);
+    });
+    x.fillStyle = SP.muted; x.font = '600 40px Inter, sans-serif'; x.fillText('Größte Verbraucher', 44, 870);
+    [['firefox', '0,9 %'], ['cinnamon', '0,6 %'], ['logsentry', '0,4 %'], ['pipewire', '0,3 %']].forEach(function (r, i) {
+      var y = 950 + i * 62;
+      x.fillStyle = SP.fg; x.font = '400 34px Inter, sans-serif'; x.fillText(r[0], 44, y);
+      x.textAlign = 'right'; x.fillText(r[1], w - 44, y); x.textAlign = 'left';
+    });
+  });
+
+  function flatMonitor(w, h, tex) {
+    var g = new THREE.Group();
+    g.add(at(rbox(w + 1.4, h + 1.4, 2.2, 0.5, dark), 0, 0, -1.2));
+    g.add(at(rbox(w * 0.45, h * 0.5, 3, 1.2, dark), 0, 0, -3.2));
+    var s = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+    s.position.z = -0.08; g.add(s);
+    return g;
+  }
+
+  // 34" Curved-Ultrawide (Radius 180 cm), unten mittig
+  var MAIN_X = -22;
+  var main = new THREE.Group(); main.position.set(MAIN_X, TOP, -14); desk.add(main);
+  var R = 180, arc = 80 / R, SH = 33.5, SY = 30;
+  texMain.wrapS = THREE.RepeatWrapping; texMain.repeat.x = -1; texMain.offset.x = 1;
+  var scr = new THREE.Mesh(new THREE.CylinderGeometry(R, R, SH, 64, 1, true, Math.PI - arc / 2, arc), new THREE.MeshBasicMaterial({ map: texMain, toneMapped: false, side: THREE.BackSide }));
+  scr.position.set(0, SY, R); main.add(scr);
+  var shell = new THREE.Mesh(new THREE.CylinderGeometry(R + 1.6, R + 1.6, SH + 1.6, 64, 1, true, Math.PI - (arc + 0.012) / 2, arc + 0.012), M('#18191C', 0.45, 0.2, { side: THREE.DoubleSide }));
+  shell.position.set(0, SY, R); shell.castShadow = true; main.add(shell);
+  main.add(at(rbox(16, 12, 4, 1.5, dark), 0, SY, -4.2));
+  main.add(at(rbox(6, 22, 3, 1, steel), 0, 13, -7));
+  main.add(at(rbox(34, 1.2, 20, 0.5, steel), 0, 0.6, -6));
+
+  // 27" darüber, am Arm, mit Monitorlampe
+  var top27 = flatMonitor(60, 34, texTop); top27.position.set(MAIN_X, TOP + 70, -24); desk.add(top27);
+  desk.add(at(cyl(1.6, 60, steel), MAIN_X, TOP + 30, -32));
+  desk.add(at(rbox(8, 3, 6, 1, steel), MAIN_X, TOP + 60, -28));
+  var lamp = cyl(1.1, 48, M('#1C1D20', 0.4, 0.5));
+  lamp.rotation.z = Math.PI / 2; lamp.position.set(MAIN_X, TOP + 89, -22); desk.add(lamp);
+  var lampGlowMat = M('#FFE2B8', 0.4, 0, { emissive: new THREE.Color('#FFC27A'), emissiveIntensity: 1.0, toneMapped: false });
+  desk.add(at(box(46, 0.3, 1.2, lampGlowMat), MAIN_X, TOP + 87.8, -21.4));
+  // Warmes Licht der Monitorlampe auf den Schreibtisch (ca. 2700 K)
+  var lampSpot = new THREE.SpotLight('#FFC27A', 0.25, 260, 0.95, 0.85, 1.1);
+  lampSpot.position.set(MAIN_X, TOP + 87, -19);
+  lampSpot.target.position.set(MAIN_X + 4, TOP, 20);
+  lampSpot.castShadow = true; lampSpot.shadow.mapSize.set(1024, 1024); lampSpot.shadow.bias = -0.0006;
+  scene.add(lampSpot); scene.add(lampSpot.target);
+  var lampSpill = new THREE.PointLight('#FFB866', 0, 140, 1.6); lampSpill.position.set(MAIN_X, TOP + 92, -30); scene.add(lampSpill);
+  var screenGlow = new THREE.PointLight('#AFC4FF', 0, 120, 1.8); screenGlow.position.set(MAIN_X + 10, TOP + 40, 10); scene.add(screenGlow);
+
+  // 27" hochkant rechts
+  var portrait = new THREE.Group(); portrait.position.set(36, TOP, -18); portrait.rotation.y = -0.32; desk.add(portrait);
+  var pm = flatMonitor(34, 60, texPortrait); pm.position.set(0, 42, 0); portrait.add(pm);
+  portrait.add(at(rbox(5, 14, 3, 1, steel), 0, 7, -4));
+  portrait.add(at(rbox(24, 1.2, 18, 0.5, steel), 0, 0.6, -4));
+
+  // Lautsprecher vor dem Fuß des Hauptmonitors
+  desk.add(at(rbox(18, 8, 9, 1, M('#151618', 0.7, 0.1)), MAIN_X, TOP + 4, 0));
+  desk.add(at(box(14, 0.2, 0.2, M('#B8955A', 0.3, 0.8)), MAIN_X, TOP + 6.8, 4.55));
+
+  // Tastatur (Razer) mit Handballenauflage
+  var kb = new THREE.Group(); kb.position.set(MAIN_X, TOP, 18); desk.add(kb);
+  kb.add(at(rbox(45, 2.4, 15, 0.7, M('#141518', 0.5, 0.2)), 0, 1.2, 0));
+  var keyMat = M('#26282C', 0.6, 0, { emissive: new THREE.Color('#FFB04A'), emissiveIntensity: 0.22 });
+  var keys = new THREE.InstancedMesh(new THREE.BoxGeometry(1.75, 0.9, 1.75), keyMat, 6 * 18);
+  var dm = new THREE.Object3D(), ki = 0;
+  for (var row = 0; row < 6; row++) for (var col = 0; col < 18; col++) { dm.position.set(-19.8 + col * 2.33, 2.8, -5.6 + row * 2.2); dm.updateMatrix(); keys.setMatrixAt(ki++, dm.matrix); }
+  keys.castShadow = true; kb.add(keys);
+  kb.add(at(rbox(44, 1.4, 7, 0.6, M('#101113', 0.85)), 0, 0.7, 11.5));
+  var goldGlowMat = M('#6B4206', 0.5, 0, { emissive: new THREE.Color('#FFA41C'), emissiveIntensity: 0.9, toneMapped: false });
+  kb.add(at(box(45.6, 0.3, 15.6, goldGlowMat), 0, 0.2, 0));
+  var kbLight = new THREE.PointLight('#FFA94D', 0, 45, 1.8); kbLight.position.set(0, 6, 2); kb.add(kbLight);
+  // Maus
+  var mouse = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), M('#141518', 0.45, 0.2));
+  mouse.scale.set(3.1, 1.9, 6); mouse.position.set(16, TOP + 0.9, 20); mouse.castShadow = true; desk.add(mouse);
+  desk.add(at(box(0.6, 0.2, 1.2, goldGlowMat), 16, TOP + 2.8, 22));
+  desk.add(at(box(0.25, 0.5, 9, goldGlowMat), 16 - 3.0, TOP + 0.6, 20));
+  desk.add(at(box(0.25, 0.5, 9, goldGlowMat), 16 + 3.0, TOP + 0.6, 20));
+  // Tastenfeld (OpenDeck)
+  var deck = new THREE.Group(); deck.position.set(-62, TOP, 12); deck.rotation.x = -0.2; desk.add(deck);
+  deck.add(at(rbox(15, 2.6, 8, 0.6, M('#141518', 0.5, 0.2)), 0, 1.6, 0));
+  ['#2255D4', '#16784A', '#B42318', '#8A5300', '#5B616B', '#2255D4'].forEach(function (c, i) {
+    deck.add(at(box(1.9, 0.35, 1.9, M('#ffffff', 0.4, 0, { emissive: new THREE.Color(c), emissiveIntensity: 0.6 })), -4.6 + (i % 3) * 2.6, 3.0, -1.4 + Math.floor(i / 3) * 2.8));
+  });
+  [4, 6.2].forEach(function (x) { deck.add(at(cyl(0.9, 1.2, steel, 20), x, 3.4, 0)); });
+  // Mikrofon auf Standfuß
+  var mic = new THREE.Group(); mic.position.set(-70, TOP, -6); desk.add(mic);
+  mic.add(at(rbox(13, 1.4, 11, 0.6, dark), 0, 0.7, 0));
+  mic.add(at(cyl(0.8, 9, steel), 0, 5, 0));
+  var capsule = new THREE.Mesh(new THREE.CapsuleGeometry(4.6, 13, 8, 24), M('#121315', 0.55, 0.3)); capsule.position.set(0, 18.5, 0); capsule.castShadow = true; mic.add(capsule);
+  // Kopfhörerständer links
+  var hstand = new THREE.Group(); hstand.position.set(-90, TOP, 14); desk.add(hstand);
+  hstand.add(at(rbox(10, 1.2, 10, 0.5, dark), 0, 0.6, 0)); hstand.add(at(cyl(0.9, 26, dark), 0, 13.5, 0)); hstand.add(at(rbox(10, 1.2, 3, 0.5, dark), 0, 27, 0));
+  // Kopfhörer: schwarzer Bügel, graue Polster
+  var phones = new THREE.Group(); phones.position.set(0, 19.6, 0); hstand.add(phones);
+  var hpBlack = M('#111214', 0.5, 0.25), hpGrey = M('#7D8188', 0.95, 0);
+  var band = new THREE.Mesh(new THREE.TorusGeometry(8.6, 0.75, 12, 48, Math.PI), hpBlack); band.castShadow = true; phones.add(band);
+  var pad = new THREE.Mesh(new THREE.TorusGeometry(7.9, 0.55, 10, 40, Math.PI * 0.6), hpGrey); pad.rotation.z = Math.PI * 0.2; phones.add(pad);
+  [-1, 1].forEach(function (sd) {
+    var yoke = rbox(0.8, 4, 1.6, 0.3, hpBlack); yoke.position.set(sd * 8.6, -1.5, 0); phones.add(yoke);
+    var cup = cyl(4.4, 2.6, hpBlack, 36); cup.rotation.z = Math.PI / 2; cup.position.set(sd * 8.2, -6.2, 0); phones.add(cup);
+    var cushion = new THREE.Mesh(new THREE.TorusGeometry(3.4, 1.15, 14, 36), hpGrey);
+    cushion.rotation.y = Math.PI / 2; cushion.position.set(sd * 6.4, -6.2, 0); cushion.castShadow = true; phones.add(cushion);
+    var inner = cyl(2.6, 0.4, M('#5E6168', 0.95), 28); inner.rotation.z = Math.PI / 2; inner.position.set(sd * 6.7, -6.2, 0); phones.add(inner);
+  });
+
+  // ---------- PC: Zweikammer-Gehäuse, Glas vorne und links ----------
+  // Lokale Koordinaten: x = -15,5 (Glasseite) … +15,5 (Außenwand der Rückkammer), y = Boden … Deckel, z = -21 (Rückseite) … +21 (Glasfront)
+  var pc = new THREE.Group();
+  pc.position.set(80, TOP + 1.6, -14);
+  pc.rotation.y = 0.12;
+  scene.add(pc);
+  var GOLD = '#FFA41C';
+  var TX = 5.5;          // Mainboard-Träger
+  var BX = TX - 0.5;     // Mainboard-Ebene
+
+  var caseMat = M('#0E0F11', 0.5, 0.15);
+  var trayMat = M('#121316', 0.7, 0.1);
+  [[-13, -18], [13, -18], [-13, 18], [13, 18]].forEach(function (p) {
+    var f = cyl(1.4, 1.6, M('#111214', 0.7)); f.position.set(p[0], -0.8, p[1]); pc.add(f);
+  });
+  var shellG = new THREE.Group(); pc.add(shellG);
+  shellG.add(at(rbox(31.2, 1.2, 42.4, 0.4, caseMat), 0, 0.6, 0));
+  shellG.add(at(rbox(31.2, 1.2, 42.4, 0.4, caseMat), 0, 45, 0));
+  shellG.add(at(box(0.8, 44, 42, caseMat), 15.2, 22.6, 0));
+  shellG.add(at(box(31, 44, 0.8, caseMat), 0, 22.6, -20.8));
+  shellG.add(at(box(0.6, 43, 41, trayMat), TX + 0.3, 22.6, 0));
+  // Lochblech-Optik für Deckel und Rückwand
+  var perf = canvasTex(64, 64, function (x) {
+    x.fillStyle = '#1a1b1e'; x.fillRect(0, 0, 64, 64); x.fillStyle = '#2f3136';
+    for (var i = 0; i < 8; i++) for (var j = 0; j < 8; j++) { x.beginPath(); x.arc(i * 8 + 4 + (j % 2) * 4, j * 8 + 4, 2.3, 0, Math.PI * 2); x.fill(); }
+  });
+  perf.wrapS = perf.wrapT = THREE.RepeatWrapping; perf.repeat.set(10, 12);
+  shellG.add(at(box(20, 0.2, 38, M('#ffffff', 0.8, 0.2, { map: perf })), -4.5, 45.65, 0));
+  shellG.add(at(box(9, 30, 0.2, M('#ffffff', 0.8, 0.2, { map: perf })), -9.5, 26, -21.25));
+  // Glasfront und Glasseite ohne Eckstrebe
+  var glassMat = M('#A9B9CC', 0.03, 0.1, { transparent: true, opacity: 0.14, depthWrite: false });
+  shellG.add(at(new THREE.Mesh(new THREE.BoxGeometry(0.4, 43.4, 41.6), glassMat), -15.5, 22.8, 0));
+  shellG.add(at(new THREE.Mesh(new THREE.BoxGeometry(31, 43.4, 0.4), glassMat), 0, 22.8, 21.0));
+  // Front der Rückkammer: schwarz, damit das Netzteil verdeckt bleibt
+  shellG.add(at(box(9.8, 43.4, 0.5, caseMat), TX + 5, 22.8, 20.7));
+  shellG.traverse(function (o) { o.userData.part = 'case'; });
+
+  // Netzteil in der Rückkammer
+  var psu = new THREE.Group(); pc.add(psu);
+  psu.add(at(rbox(8.6, 15, 14, 0.5, M('#16171A', 0.55, 0.3)), TX + 4.9, 8.6, 8));
+  psu.add(at(box(0.1, 3, 10, M('#3A3D42', 0.4, 0.5)), TX + 0.55, 8.6, 8));
+  tag(psu, 'psu');
+
+  // Mainboard MSI B650 GAMING PLUS WIFI
+  var board = new THREE.Group(); pc.add(board);
+  var pcb = M('#0D0E10', 0.75, 0.05);
+  var hsM = M('#4A4E56', 0.35, 0.75);
+  var hsDark = M('#1C1E22', 0.45, 0.4);
+  board.add(at(box(0.16, 30.5, 24.4, pcb), BX, 24.8, -6.8));
+  board.add(at(rbox(3.2, 9.5, 3.6, 0.4, hsDark), BX - 1.7, 35.4, -17.0));
+  board.add(at(rbox(2.4, 2.6, 9.5, 0.3, hsM), BX - 1.3, 38.6, -10.5));
+  board.add(at(rbox(2.4, 8.5, 2.6, 0.3, hsM), BX - 1.3, 32.2, -15.3));
+  board.add(at(rbox(1.1, 6, 6.2, 0.3, hsM), BX - 0.65, 14.6, -0.6));
+  board.add(at(box(0.9, 0.8, 9.2, M('#9AA0A7', 0.3, 0.9)), BX - 0.5, 23.4, -10.5));
+  [-4.3, -3.4, -2.5, -1.6].forEach(function (z) { board.add(at(box(0.7, 13.3, 0.6, M('#1A1B1E', 0.6)), BX - 0.4, 32.2, z)); });
+  board.add(at(box(1.0, 5.2, 1.2, M('#1A1B1E', 0.6)), BX - 0.55, 28.5, 4.4));
+  board.add(at(box(0.4, 4, 4, M('#3B3E44', 0.5, 0.4)), BX - 0.25, 32.2, -10.5));
+  tag(board, 'board');
+
+  // M.2-Kühlblech, darunter die Lexar NM790
+  var nvme = new THREE.Group(); pc.add(nvme);
+  nvme.add(at(rbox(0.6, 2.6, 8.8, 0.2, M('#5C6169', 0.3, 0.8)), BX - 0.4, 26.4, -10.2));
+  nvme.add(at(box(0.1, 0.12, 6, M('#C8CDD3', 0.3, 0.9)), BX - 0.75, 26.4, -10.2));
+  tag(nvme, 'nvme');
+
+  // Arctic Freezer 34 eSports DUO: schwarzer Kühlkörper, weiße Lüfter
+  var cpu = new THREE.Group(); cpu.position.set(BX, 32.2, -10.5); pc.add(cpu);
+  cpu.add(at(box(1.6, 4, 4, M('#2A2C30', 0.3, 0.7)), -1.0, 0, 0));
+  var copper = M('#B87A4E', 0.3, 0.85);
+  [-1.5, -0.5, 0.5, 1.5].forEach(function (d) { var hp = cyl(0.3, 16, copper, 12); hp.rotation.z = Math.PI / 2; hp.position.set(-8.6, d * 0.6, d * 0.9); cpu.add(hp); });
+  var fins = new THREE.InstancedMesh(new THREE.BoxGeometry(13, 12.4, 0.05), M('#141518', 0.45, 0.55), 46);
+  var fd = new THREE.Object3D();
+  for (var f = 0; f < 46; f++) { fd.position.set(-9.2, 0, -2.6 + f * (5.2 / 45)); fd.updateMatrix(); fins.setMatrixAt(f, fd.matrix); }
+  fins.castShadow = true; cpu.add(fins);
+  cpu.add(at(rbox(0.8, 12.8, 5.8, 0.3, M('#0E0F11', 0.5, 0.2)), -16.0, 0, 0));
+  [-3.95, 3.95].forEach(function (z) {
+    var fn = fan(12, { depth: 2.5, frame: '#F2F3F5', blade: '#F7F8FA', hub: '#EDEEF0', speed: 3.0 });
+    fn.position.set(-9.0, 0, z); cpu.add(fn);
+  });
+  tag(cpu, 'cpu');
+
+  // Kingston FURY Beast DDR5, zwei Module
+  var ram = new THREE.Group(); pc.add(ram);
+  [-3.4, -1.6].forEach(function (z) {
+    ram.add(at(rbox(3.4, 13.3, 0.75, 0.12, M('#0E0F11', 0.5, 0.2)), BX - 2.2, 32.2, z));
+    ram.add(at(box(0.25, 9, 0.8, M('#4B4F57', 0.35, 0.7)), BX - 3.95, 33.2, z));
+  });
+  tag(ram, 'ram');
+
+  // ASUS Radeon RX 9070 XT OC: Dreifach-Lüfter nach unten, Backplate oben
+  var gpu = new THREE.Group(); pc.add(gpu);
+  var GX = BX - 7.0;
+  gpu.add(at(rbox(13, 4.8, 30.4, 0.6, M('#1A1C20', 0.42, 0.35)), GX, 20.0, -4.4));
+  gpu.add(at(rbox(12.8, 0.5, 30.2, 0.2, M('#24272C', 0.35, 0.6)), GX, 22.7, -4.4));
+  gpu.add(at(box(0.12, 0.16, 30, M('#B9BFC7', 0.25, 0.9)), GX - 6.55, 21.3, -4.4));
+  gpu.add(at(box(0.12, 0.5, 9, M('#E9EDF3', 0.4, 0, { emissive: new THREE.Color('#FFFFFF'), emissiveIntensity: 0.7 })), GX - 6.55, 19.8, 2.5));
+  gpu.add(at(box(12.4, 6, 0.25, M('#B9BFC7', 0.3, 0.9)), GX + 0.2, 20.4, -19.8));
+  gpu.add(at(box(1.0, 1.6, 4.6, M('#121316', 0.6)), GX - 5.6, 23.2, 2.0));
+  [-14.6, -4.4, 5.8].forEach(function (z) {
+    var gf = fan(9.2, { depth: 1.4, frame: null, blade: '#2A2C30', hub: '#17181B', blades: 11, speed: 2.0 });
+    gf.rotation.x = Math.PI / 2; gf.position.set(GX, 17.45, z); gpu.add(gf);
+  });
+  tag(gpu, 'gpu');
+
+  // Gehäuselüfter: 3 im Boden (Intake), 3 im Deckel (Outtake), Leuchtringe golden
+  var fans = new THREE.Group(); pc.add(fans);
+  [-13, 0, 13].forEach(function (z) {
+    var b = fan(12, { depth: 2.5, frame: '#0E0F11', ring: GOLD, blade: '#F6D9A0', bladeOpacity: 0.5, speed: 1.6 });
+    b.rotation.x = -Math.PI / 2; b.position.set(-5, 2.6, z); fans.add(b);
+    var t = fan(12, { depth: 2.5, frame: '#0E0F11', ring: GOLD, blade: '#F6D9A0', bladeOpacity: 0.5, speed: 1.6 });
+    t.rotation.x = Math.PI / 2; t.position.set(-5, 43.0, z); fans.add(t);
+  });
+  tag(fans, 'fans');
+  var glowB = new THREE.PointLight(GOLD, 1.1, 45, 2); glowB.position.set(-5, 6, 0); pc.add(glowB);
+  var glowT = new THREE.PointLight(GOLD, 0.35, 30, 2); glowT.position.set(-5, 40, 0); pc.add(glowT);
+
+  var partGroups = { cpu: cpu, gpu: gpu, ram: ram, nvme: nvme, board: board, fans: fans, psu: psu };
+
+  // ---------- Hell / Dunkel ----------
+  function applySceneTheme(d) {
+    scene.background.set(d ? '#0C0D10' : '#EDEEF1');
+    scene.environment = d ? null : envTex;
+    hemi.intensity = d ? 0.06 : 0.32;
+    hemi.color.set(d ? '#8A96B8' : '#ffffff'); hemi.groundColor.set(d ? '#1A1612' : '#d9d4cc');
+    sun.intensity = d ? 0.05 : 1.45;
+    renderer.toneMappingExposure = d ? 1.1 : 0.95;
+    lampSpot.intensity = d ? 3.2 : 0.25;
+    lampSpill.intensity = d ? 0.55 : 0;
+    screenGlow.intensity = d ? 0.22 : 0;
+    lampGlowMat.emissiveIntensity = d ? 1.6 : 1.0;
+    keyMat.emissiveIntensity = d ? 0.5 : 0.22; kbLight.intensity = d ? 0.7 : 0;
+    glowB.intensity = d ? 2.2 : 1.1; glowT.intensity = d ? 1.2 : 0.35;
+    SP = screenPalette(d);
+    repaints.forEach(function (f) { f(); });
+  }
+  themeListeners.push(applySceneTheme);
+  applySceneTheme(isDark());
+
+  // ---------- Hervorhebung ----------
+  function localBox(obj) {
+    var rot = pc.rotation.y, pos = pc.position.clone();
+    pc.rotation.y = 0; pc.position.set(0, 0, 0); pc.updateMatrixWorld(true);
+    var b = new THREE.Box3().setFromObject(obj);
+    pc.rotation.y = rot; pc.position.copy(pos); pc.updateMatrixWorld(true);
+    return b;
+  }
+  var selHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color('#2255D4'));
+  var hovHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color('#8FA8EA'));
+  selHelper.visible = false; hovHelper.visible = false;
+  pc.add(selHelper); pc.add(hovHelper);
+  var pcHelper = new THREE.Box3Helper(localBox(shellG).expandByScalar(1.5), new THREE.Color('#2255D4'));
+  pcHelper.visible = false; pc.add(pcHelper);
+
+  function showSelection() {
+    trayMat.transparent = selected === 'psu' && view === 'pc';
+    trayMat.opacity = trayMat.transparent ? 0.25 : 1;
+    trayMat.needsUpdate = true;
+    if (view !== 'pc') { selHelper.visible = false; return; }
+    selHelper.box.copy(localBox(partGroups[selected]).expandByScalar(0.4));
+    selHelper.visible = true;
+  }
+
+  // ---------- Kamera-Fahrten ----------
+  var DESK_POS = new THREE.Vector3(-10, 158, 205), DESK_TGT = new THREE.Vector3(8, 108, -14);
+  var tween = null;
+  function flyTo(pos, tgt) {
+    if (reduceMotion) { camera.position.copy(pos); controls.target.copy(tgt); controls.update(); return; }
+    tween = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos.clone(), t1: tgt.clone(), start: performance.now(), dur: 950 };
+  }
+  function pcView() {
+    return { pos: pc.localToWorld(new THREE.Vector3(-26, 42, 80)), tgt: pc.localToWorld(new THREE.Vector3(-1, 23, -1)) };
+  }
+  var MON_OBJ = {
+    main: { obj: main, center: new THREE.Vector3(0, SY, 0), w: 80, h: SH },
+    top: { obj: top27, center: new THREE.Vector3(0, 0, 0), w: 60, h: 34 },
+    portrait: { obj: pm, center: new THREE.Vector3(0, 0, 0), w: 34, h: 60 }
+  };
+  Object.keys(MON_OBJ).forEach(function (id) { MON_OBJ[id].obj.traverse(function (o) { o.userData.mon = id; }); });
+  function monitorView(id) {
+    var m = MON_OBJ[id];
+    m.obj.updateMatrixWorld(true);
+    var c = m.obj.localToWorld(m.center.clone());
+    var n = new THREE.Vector3(0, 0, 1).transformDirection(m.obj.matrixWorld);
+    var t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    var d = Math.max(m.h * 0.62 / t, m.w * 0.58 / (t * camera.aspect)) + (id === 'main' ? 4 : 0);
+    return { pos: c.clone().add(n.multiplyScalar(d)), tgt: c };
+  }
+  function enterMon(id) {
+    currentMon = id;
+    if (view === 'pc') { setGlass(true); hovHelper.visible = false; }
+    view = 'mon';
+    pcHelper.visible = false;
+    var v = monitorView(id); flyTo(v.pos, v.tgt);
+    controls.minDistance = 15; controls.maxDistance = 480;
+    updateChrome(); showSelection();
+  }
+  function setGlass(on) { glassMat.opacity = on ? 0.14 : 0.05; }
+
+  function enterPc() {
+    view = 'pc';
+    pcHelper.visible = false;
+    setGlass(false);
+    var v = pcView(); flyTo(v.pos, v.tgt);
+    controls.minDistance = 20; controls.maxDistance = 160;
+    updateChrome(); showSelection();
+  }
+  function leavePc() {
+    view = 'desk';
+    setGlass(true); hovHelper.visible = false;
+    controls.minDistance = 25; controls.maxDistance = 480;
+    flyTo(DESK_POS, DESK_TGT);
+    updateChrome(); showSelection();
+  }
+  function select(id) { selected = id; updateChrome(); showSelection(); }
+  api.enterPc = enterPc; api.select = select; api.enterMon = enterMon;
+  backBtn.addEventListener('click', leavePc);
+
+  camera.position.copy(DESK_POS); controls.target.copy(DESK_TGT); controls.update();
+
+  // ---------- Zeigen und Klicken ----------
+  var ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  var pickables = []; pc.traverse(function (o) { if (o.isMesh) pickables.push(o); });
+  Object.keys(MON_OBJ).forEach(function (id) { MON_OBJ[id].obj.traverse(function (o) { if (o.isMesh) pickables.push(o); }); });
+  function partAt(ev) {
+    var r = renderer.domElement.getBoundingClientRect();
+    ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    var hits = ray.intersectObjects(pickables, false);
+    for (var i = 0; i < hits.length; i++) {
+      var ud = hits[i].object.userData, p = ud.part;
+      if (view !== 'pc') { if (ud.mon) return 'mon:' + ud.mon; return p ? 'pc' : null; }
+      if (ud.mon) continue;
+      if (p && p !== 'case') return p;
+    }
+    return null;
+  }
+  var downAt = null;
+  renderer.domElement.addEventListener('pointerdown', function (e) { downAt = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener('pointerup', function (e) {
+    if (!downAt) return;
+    var moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
+    downAt = null;
+    if (moved > 6) return;
+    var p = partAt(e);
+    if (!p) return;
+    if (view !== 'pc' && p.indexOf('mon:') === 0) enterMon(p.slice(4));
+    else if (view !== 'pc' && p === 'pc') enterPc();
+    else if (view === 'pc') select(p);
+  });
+  renderer.domElement.addEventListener('pointermove', function (e) {
+    if (e.pointerType === 'touch') return;
+    var p = partAt(e);
+    var r = stage.getBoundingClientRect();
+    if (p) {
+      renderer.domElement.style.cursor = 'pointer';
+      tip.hidden = false;
+      tip.textContent = p.indexOf('mon:') === 0 ? MONS[p.slice(4)].name + ' – anklicken' : view !== 'pc' ? 'Mein PC · 50,4 °C – anklicken' : PARTS[p].name;
+      tip.style.left = (e.clientX - r.left) + 'px'; tip.style.top = (e.clientY - r.top) + 'px';
+      if (view !== 'pc') pcHelper.visible = p === 'pc';
+      else if (p !== selected) { hovHelper.box.copy(localBox(partGroups[p]).expandByScalar(0.3)); hovHelper.visible = true; }
+      else hovHelper.visible = false;
+    } else {
+      renderer.domElement.style.cursor = '';
+      tip.hidden = true; pcHelper.visible = false; hovHelper.visible = false;
+    }
+  });
+  renderer.domElement.addEventListener('pointerleave', function () { tip.hidden = true; pcHelper.visible = false; hovHelper.visible = false; });
+
+  // ---------- Schleife ----------
+  function resize() {
+    var w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.fov = w < 640 ? 58 : 40;
+    camera.updateProjectionMatrix();
+  }
+  new ResizeObserver(resize).observe(stage);
+  resize();
+
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (tween) {
+      var k = Math.min(1, (now - tween.start) / tween.dur);
+      var e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      camera.position.lerpVectors(tween.p0, tween.p1, e);
+      controls.target.lerpVectors(tween.t0, tween.t1, e);
+      if (k >= 1) tween = null;
+    }
+    if (!reduceMotion) spinning.forEach(function (s) { s.obj.rotation.z += s.speed * dt * 6; });
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

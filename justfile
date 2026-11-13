@@ -31,3 +31,7 @@ run-daemon:
 # GUI lokal starten.
 run-gui:
     cargo run -p logsentry-gui
+
+# 3D-Werkbank-Prototyp im Browser öffnen (offline, ohne Daemon).
+werkbank-vorschau:
+    xdg-open prototypes/werkbank-3d/index.html

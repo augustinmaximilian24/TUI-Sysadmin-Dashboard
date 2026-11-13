@@ -197,6 +197,26 @@ Reverse-DNS-Hinweise (Flughafencodes bei Rechenzentren, Telekom-Backbone).
       verifiziert (Genauigkeit der angezeigten Stadt, Speicherverbrauch der GUI
       mit geladener Datei)
 
+**Phase 17 – 3D-Werkbank als neue Hauptseite (optional, außerhalb des
+ursprünglichen v1.0-Scopes)**
+
+Auf Wunsch: Hauptseite als 3D-Abbild des eigenen Schreibtischs (Monitore,
+PC); Klick auf Monitor oder PC zoomt hinein, im PC ist jedes Bauteil
+anklickbar und zeigt seine Werte; Hell- und Dunkelmodus (im Dunkeln warmes
+Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
+
+- [x] Klickbarer Browser-Prototyp `prototypes/werkbank-3d/` (three.js 0.147
+      mitgeliefert, offline, feste Messwerte), Start mit `just werkbank-vorschau`
+- [ ] Prototyp auf dem Desktop testen (Darstellung, Flüssigkeit, CPU-Last)
+- [ ] Protokoll erweitern (optionale Felder, rückwärtskompatibel): GPU über
+      `amdgpu`-hwmon (edge/junction/mem, Lüfter, Leistung, VRAM),
+      Lüfterdrehzahlen (`fan*_input`), CPU-Takt, Top-N-Prozesse mit fester
+      Obergrenze (Regel 18)
+- [ ] Entscheidung 3D in egui: eigene Zeichnung mit egui-Bordmitteln vs.
+      `egui_wgpu`-Callback mit echtem 3D – Abhängigkeit begründen (Abschnitt 3);
+      Neuzeichnen nur bei Interaktion/Änderung (Regel 20, Idle < 2 %)
+- [ ] Graphen-Tab mit gemeinsamer Zeitachse
+
 ## 6a. Hardware des Desktop-Rechners
 
 Ryzen 5 7600X · Arctic Freezer 34 eSports DUO · MSI B650 GAMING PLUS WIFI ·
