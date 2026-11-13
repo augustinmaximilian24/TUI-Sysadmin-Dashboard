@@ -46,6 +46,10 @@ pub fn trace(target: Ipv4Addr, max_hops: u8, timeout_secs: u64) -> Vec<Hop> {
         .arg("--report")
         .arg("--report-cycles")
         .arg("1")
+        // Standard sind 5 s Nachwarten nach der letzten Probe -- gemessen
+        // 6,4 s statt 2,4 s je Ziel bei identischen Hops (2026-11-12).
+        .arg("--gracetime")
+        .arg("1")
         .arg("--max-ttl")
         .arg(max_hops.to_string())
         .arg(target.to_string())

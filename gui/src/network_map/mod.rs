@@ -71,10 +71,10 @@ const CONNECTION_LIST_HEIGHT_PX: f32 = 150.0;
 /// im Alltag nicht erreicht.
 const MAX_CACHED_ROUTES: usize = 256;
 
-/// Wartezeit zwischen zwei Messläufen des Routen-Threads. Bewusst träge:
-/// ein Messlauf sendet Pakete, und die Route eines Ziels ändert sich
-/// ungleich seltener als die Verbindungsliste selbst.
-const ROUTE_SCAN_INTERVAL: Duration = Duration::from_secs(3);
+/// Wartezeit zwischen zwei Messläufen des Routen-Threads. Kurz genug, dass
+/// eine neue Seite nach wenigen Sekunden ihren Weg zeigt; da immer nur ein
+/// Messlauf gleichzeitig läuft, bleibt die Paketlast trotzdem gering.
+const ROUTE_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 
 /// Ein Zwischenschritt auf dem Weg zu einer Gegenstelle (siehe
@@ -143,6 +143,9 @@ struct ConnectionPoint {
     /// Karte wie zuvor die direkte Verbindung. `Arc`, weil dieselbe Route
     /// bei jedem Frame mitkopiert wird und sich nie mehr ändert.
     route: Arc<Vec<RouteHop>>,
+    /// Erste Sichtung -- bestimmt die Reihenfolge der Routenmessung
+    /// ([`next_route_target`]): die gerade geöffnete Seite zuerst.
+    first_seen: Instant,
     last_seen: Instant,
 }
 
@@ -303,8 +306,32 @@ fn refine_from_route(point: &mut ConnectionPoint) {
     }
 }
 
+/// Fehlschläge in Folge, ab denen der Router als ausgefallen gilt. Ein
+/// einzelner verlorener Ping (z. B. Powerline-Aussetzer) soll die Karte
+/// nicht leeren; zwei bedeuten bei 5 s Poll-Intervall ~10 s Funkstille.
+const ROUTER_FAILURES_UNTIL_OFFLINE: u8 = 2;
+
+/// Zählt aufeinanderfolgende Router-Fehlschläge (siehe
+/// [`connections::router_reachable`]).
+#[derive(Default)]
+struct RouterWatch {
+    failures: u8,
+}
+
+impl RouterWatch {
+    /// Verbucht ein Prüfergebnis und meldet, ob der Router jetzt als
+    /// ausgefallen gilt.
+    fn update(&mut self, reachable: bool) -> bool {
+        self.failures = if reachable { 0 } else { self.failures.saturating_add(1) };
+        self.failures >= ROUTER_FAILURES_UNTIL_OFFLINE
+    }
+}
+
 #[derive(Default)]
 struct Shared {
+    /// Router antwortet nicht (siehe [`RouterWatch`]) -- die Karte blendet
+    /// dann alle Verbindungen aus, die der Kernel noch für offen hält.
+    router_offline: bool,
     /// `ip -> ConnectionPoint`, damit ein Re-Scan bestehende Einträge nur
     /// auffrischt statt sie neu anzulegen (hält `last_seen` stabil für
     /// [`CONNECTION_HOLD`]).
@@ -375,7 +402,21 @@ fn spawn_watcher(
             });
         }
 
+        let mut router_watch = RouterWatch::default();
         loop {
+            // Ohne Sperre (Regel 21): der Ping dauert bei Ausfall bis 1 s.
+            if router_watch.update(connections::router_reachable()) {
+                let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                guard.router_offline = true;
+                guard.points.clear();
+                guard.unresolved_count = 0;
+                drop(guard);
+                ctx.request_repaint();
+                std::thread::sleep(poll_interval);
+                continue;
+            }
+            shared.lock().unwrap_or_else(PoisonError::into_inner).router_offline = false;
+
             let now = Instant::now();
             let seen = connections::read_established_remote_ipv4();
 
@@ -448,6 +489,7 @@ fn spawn_watcher(
                         source: located.source,
                         program: program_names.get(&ip).cloned(),
                         route: Arc::new(Vec::new()),
+                        first_seen: now,
                         last_seen: now,
                     }),
                     None => unresolved += 1,
@@ -503,15 +545,7 @@ fn spawn_route_watcher(
                 if guard.routes.len() >= MAX_CACHED_ROUTES {
                     None
                 } else {
-                    // Kleinste noch unvermessene IP zuerst -- nur damit
-                    // die Reihenfolge deterministisch ist und nicht von
-                    // der HashMap-Iterationsreihenfolge abhängt.
-                    guard
-                        .points
-                        .keys()
-                        .filter(|ip| !guard.routes.contains_key(ip))
-                        .min()
-                        .copied()
+                    next_route_target(&guard.points, &guard.routes)
                 }
             };
 
@@ -541,6 +575,22 @@ fn spawn_route_watcher(
             std::thread::sleep(ROUTE_SCAN_INTERVAL);
         }
     });
+}
+
+/// Wählt das nächste zu vermessende Ziel: die **zuletzt** aufgetauchte
+/// Gegenstelle ohne Route. Wer gerade eine Seite öffnet, will deren Weg
+/// sehen und nicht warten, bis ältere Verbindungen abgearbeitet sind.
+/// Gleichstand (mehrere Ziele im selben Poll) löst die kleinere IP auf,
+/// damit die Reihenfolge nicht von der HashMap abhängt.
+fn next_route_target(
+    points: &HashMap<Ipv4Addr, ConnectionPoint>,
+    routes: &HashMap<Ipv4Addr, Arc<Vec<RouteHop>>>,
+) -> Option<Ipv4Addr> {
+    points
+        .values()
+        .filter(|p| !routes.contains_key(&p.ip))
+        .max_by_key(|p| (p.first_seen, std::cmp::Reverse(p.ip)))
+        .map(|p| p.ip)
 }
 
 /// Verortet jeden gemessenen Hop, soweit möglich -- ohne einen davon
@@ -728,7 +778,7 @@ impl NetworkMapPanel {
         self.last_frame = now;
         self.pulse_phase = (self.pulse_phase + dt * 1.4) % std::f32::consts::TAU;
 
-        let (points, error, unresolved, countries) = {
+        let (points, error, unresolved, countries, router_offline) = {
             let guard = self.shared.lock().unwrap_or_else(PoisonError::into_inner);
             let mut points: Vec<ConnectionPoint> = guard.points.values().cloned().collect();
             points.sort_by_key(|a| a.ip);
@@ -737,11 +787,15 @@ impl NetworkMapPanel {
                 guard.error.clone(),
                 guard.unresolved_count,
                 Arc::clone(&guard.countries),
+                guard.router_offline,
             )
         };
 
         if let Some(err) = &error {
             ui.colored_label(theme_warn(), err);
+        }
+        if router_offline {
+            ui.colored_label(theme_warn(), "Router nicht erreichbar -- Verbindungen ausgeblendet");
         }
 
         // `available_height` ist vor der Überschrift und der Fußzeile
@@ -1377,6 +1431,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn router_gilt_erst_nach_zwei_fehlschlaegen_in_folge_als_ausgefallen() {
+        let mut watch = RouterWatch::default();
+        assert!(!watch.update(false), "ein verlorener Ping ist noch kein Ausfall");
+        assert!(watch.update(false));
+        assert!(watch.update(false));
+        assert!(!watch.update(true), "eine Antwort beendet den Ausfall sofort");
+        assert!(!watch.update(false), "Zähler beginnt nach einer Antwort neu");
+    }
+
+    #[test]
+    fn routen_messung_nimmt_die_neueste_unvermessene_verbindung_zuerst() {
+        let start = Instant::now();
+        let mut alt = test_point(LocationSource::Country, Vec::new());
+        alt.ip = Ipv4Addr::new(1, 1, 1, 1);
+        alt.first_seen = start;
+        let mut neu = test_point(LocationSource::Country, Vec::new());
+        neu.ip = Ipv4Addr::new(200, 1, 1, 1);
+        neu.first_seen = start + Duration::from_secs(10);
+        let mut neuer_aber_vermessen = test_point(LocationSource::Country, Vec::new());
+        neuer_aber_vermessen.ip = Ipv4Addr::new(100, 1, 1, 1);
+        neuer_aber_vermessen.first_seen = start + Duration::from_secs(20);
+
+        let points: HashMap<_, _> =
+            [alt, neu, neuer_aber_vermessen].into_iter().map(|p| (p.ip, p)).collect();
+        let routes = HashMap::from([(Ipv4Addr::new(100, 1, 1, 1), Arc::new(Vec::new()))]);
+
+        assert_eq!(next_route_target(&points, &routes), Some(Ipv4Addr::new(200, 1, 1, 1)));
+    }
+
+    #[test]
     fn declump_laesst_weit_entfernte_punkte_unveraendert() {
         let positions = vec![Pos2::new(0.0, 0.0), Pos2::new(200.0, 200.0)];
         let result = declump(&positions);
@@ -1598,6 +1682,7 @@ mod tests {
             source,
             program: None,
             route: Arc::new(route),
+            first_seen: Instant::now(),
             last_seen: Instant::now(),
         }
     }
