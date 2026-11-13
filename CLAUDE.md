@@ -197,6 +197,41 @@ Reverse-DNS-Hinweise (Flughafencodes bei Rechenzentren, Telekom-Backbone).
       verifiziert (Genauigkeit der angezeigten Stadt, Speicherverbrauch der GUI
       mit geladener Datei)
 
+**Phase 17 – 3D-Werkbank als neue Hauptseite (optional, außerhalb des
+ursprünglichen v1.0-Scopes)**
+
+Auf Wunsch: Hauptseite als 3D-Abbild des eigenen Schreibtischs (Monitore,
+PC); Klick auf Monitor oder PC zoomt hinein, im PC ist jedes Bauteil
+anklickbar und zeigt seine Werte; Hell- und Dunkelmodus (im Dunkeln warmes
+Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
+
+- [x] Klickbarer Browser-Prototyp `prototypes/werkbank-3d/` (three.js 0.147
+      mitgeliefert, offline, feste Messwerte), Start mit `just werkbank-vorschau`
+- [x] Prototyp auf dem Desktop testen (Darstellung, Flüssigkeit, CPU-Last);
+      läuft als eigenes Programm (`just werkbank`, GTK + WebKitGTK), Leerlauf
+      mit Live-Daten ≈ 2,3 % eines Kerns
+- [ ] Protokoll erweitern (optionale Felder, rückwärtskompatibel): GPU über
+      `amdgpu`-hwmon (edge/junction/mem, Lüfter, Leistung, VRAM),
+      Lüfterdrehzahlen (`fan*_input`), CPU-Takt, Top-N-Prozesse mit fester
+      Obergrenze (Regel 18)
+- [ ] Entscheidung 3D in egui: eigene Zeichnung mit egui-Bordmitteln vs.
+      `egui_wgpu`-Callback mit echtem 3D – Abhängigkeit begründen (Abschnitt 3);
+      Neuzeichnen nur bei Interaktion/Änderung (Regel 20, Idle < 2 %)
+- [ ] Graphen-Tab mit gemeinsamer Zeitachse
+- [x] Inhalte der drei Monitore überarbeiten: 34" Wissensgraph + Home-Übersicht,
+      27" Weltkugel (Daten per `logsentry-gui --netzkarte-json`), hochkant
+      Entropie + Anzahl je Stufe; Klick öffnet jeweils eine Detailseite statt
+      eigener Tabs; Entropie, Anomalien und Systemwerte live vom Daemon
+
+## 6a. Hardware des Desktop-Rechners
+
+Ryzen 5 7600X · Arctic Freezer 34 eSports DUO · MSI B650 GAMING PLUS WIFI ·
+32 GB DDR5-6000 Kingston FURY Beast · **ASUS Prime Radeon RX 9070 XT OC** (nicht mehr
+die RTX 4060 Ti) · Lexar NM790 2 TB · Gigabyte UD750GM · Gehäuse Systemtreff
+Plexus-ST-801 (Zweikammer, Glasfront, 3 Lüfter Boden + 3 Deckel, golden).
+Monitore: 34" Curved unten mittig, 27" darüber, 27" hochkant rechts.
+Details und Sensorzuordnung: `docs/hardware-desktop.md`.
+
 ## 7. Definition of Done (v1.0)
 
 - Daemon läuft 72 h ohne Absturz und ohne Speicherwachstum

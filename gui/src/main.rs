@@ -10,6 +10,9 @@
 //!   (Default: derselbe Pfad wie beim Daemon, `/etc/logsentry/logsentry.toml`).
 //! - `--socket <pfad>`: Socket-Pfad direkt angeben, überschreibt die Konfiguration
 //!   (praktisch für Entwicklung ohne installierte Konfigurationsdatei).
+//! - `--netzkarte-json`: kein Fenster; schreibt den Zustand der Weltkugel
+//!   (Ziele, Orte, Routen) alle 2 s als JSON-Zeile auf stdout -- Datenquelle
+//!   der 3D-Werkbank (`prototypes/werkbank-3d/werkbank.py`).
 
 mod app;
 mod client;
@@ -66,6 +69,9 @@ fn main() -> anyhow::Result<()> {
 
     let args: Vec<String> = std::env::args().collect();
     let config = load_config(&args);
+    if args.iter().any(|arg| arg == "--netzkarte-json") {
+        return network_map::run_json_export(&config.network_map);
+    }
     let socket_path = resolve_socket_path(&args, &config);
     let knowledge_graph_config = config.knowledge_graph.clone();
     let home_overview_config = logsentry_core::config::KnowledgeGraphConfig {

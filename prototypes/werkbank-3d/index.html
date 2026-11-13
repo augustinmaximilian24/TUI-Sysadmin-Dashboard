@@ -1,0 +1,1773 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>logsentry Werkbank 3D</title>
+<style>
+/* Layout: Kopfzeile, Kennzahlen-Leiste, darunter 3D-Bühne links und Detail-Panel rechts (auf dem Handy untereinander). */
+:root {
+  --bg: #F3F4F6;
+  --surface: #FFFFFF;
+  --line: #E1E3E8;
+  --fg: #17191D;
+  --muted: #5B616B;
+  --accent: #2255D4;
+  --accent-soft: #E8EEFC;
+  --ok: #16784A; --ok-soft: #E6F4EC;
+  --warn: #8A5300; --warn-soft: #FFF3DC;
+  --crit: #B42318; --crit-soft: #FDECEA;
+  --font: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+  --stage: #EDEEF1;
+  --overlay: rgba(255,255,255,0.88);
+  --line-soft: #EEF0F3;
+  --tag-bg: #EEF0F3;
+  --fg2: #3A3F47;
+  --on-accent: #FFFFFF;
+  --tip-bg: #17191D; --tip-fg: #FFFFFF;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101216; --surface: #191C21; --line: #2A2E35; --fg: #ECEEF1; --muted: #A2A8B2;
+    --accent: #86A6FF; --accent-soft: #1D2944;
+    --ok: #5BCB94; --ok-soft: #12301F; --warn: #F2B55C; --warn-soft: #33270F; --crit: #FF8A7E; --crit-soft: #3A1714;
+    --stage: #0C0D10; --overlay: rgba(25,28,33,0.88); --line-soft: #23272D; --tag-bg: #262A31; --fg2: #C9CED6;
+    --on-accent: #0B1020; --tip-bg: #ECEEF1; --tip-fg: #101216;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101216; --surface: #191C21; --line: #2A2E35; --fg: #ECEEF1; --muted: #A2A8B2;
+  --accent: #86A6FF; --accent-soft: #1D2944;
+  --ok: #5BCB94; --ok-soft: #12301F; --warn: #F2B55C; --warn-soft: #33270F; --crit: #FF8A7E; --crit-soft: #3A1714;
+  --stage: #0C0D10; --overlay: rgba(25,28,33,0.88); --line-soft: #23272D; --tag-bg: #262A31; --fg2: #C9CED6;
+  --on-accent: #0B1020; --tip-bg: #ECEEF1; --tip-fg: #101216;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 14px; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 20px; display: flex; flex-direction: column; gap: 14px; max-width: 2400px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.brand { font-weight: 700; font-size: 18px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--ok-soft); color: var(--ok); font-size: 12px; font-weight: 500; }
+.pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; display: block; }
+nav { display: flex; flex-wrap: wrap; gap: 2px; margin-left: auto; }
+.theme-btn { min-height: 40px; }
+nav a { padding: 9px 14px; border-radius: 8px; color: var(--muted); text-decoration: none; }
+nav a[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+.kpi .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+.kpi .s { font-size: 12px; color: var(--muted); }
+.kpi.crit .v { color: var(--crit); }
+.kpi.pending .v { color: var(--muted); }
+
+.main { display: flex; flex-wrap: wrap; gap: 14px; }
+.stage { position: relative; flex: 999 1 640px; min-width: 0; height: clamp(440px, calc(100vh - 230px), 1300px); background: var(--stage); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.overlay-top { position: absolute; left: 12px; top: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.crumb { font-size: 13px; color: var(--muted); background: var(--overlay); padding: 6px 10px; border-radius: 8px; }
+.btn { min-height: 44px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); font: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.overlay-bottom { position: absolute; left: 12px; right: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.hint { position: absolute; right: 12px; top: 12px; font-size: 12px; color: var(--muted); background: var(--overlay); padding: 6px 10px; border-radius: 8px; max-width: 260px; }
+.tip { position: absolute; pointer-events: none; background: var(--tip-bg); color: var(--tip-fg); font-size: 12px; padding: 5px 9px; border-radius: 6px; white-space: nowrap; transform: translate(12px, -28px); }
+.loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+
+aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.card h2 { margin: 0; font-size: 20px; text-wrap: balance; }
+.card h3 { margin: 0; font-size: 14px; }
+.eyebrow { font-size: 12px; color: var(--muted); }
+.model { font-size: 13px; color: var(--fg2); margin-top: 2px; }
+.rows { display: flex; flex-direction: column; }
+.row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); }
+.row .k { flex: 1 1 0; color: var(--fg2); min-width: 72px; }
+.row .v { font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; max-width: 65%; }
+.tag { font-size: 11px; padding: 2px 6px; border-radius: 6px; background: var(--tag-bg); color: var(--muted); white-space: nowrap; }
+.src { font-size: 12px; color: var(--muted); }
+.anom { display: flex; gap: 10px; align-items: flex-start; padding: 10px; border-radius: 8px; font-size: 12px; }
+.anom b { flex: none; }
+.anom span { font-family: var(--mono); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.anom.WARN { background: var(--warn-soft); } .anom.WARN b { color: var(--warn); }
+.anom.INFO { background: var(--accent-soft); } .anom.INFO b { color: var(--accent); }
+.anom.CRIT { background: var(--crit-soft); } .anom.CRIT b { color: var(--crit); }
+.list { display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.list div { display: flex; justify-content: space-between; gap: 10px; }
+.list span:last-child { color: var(--muted); text-align: right; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
+/* Interaktive Graph-Seite: immer dunkel wie der Wissensgraph-Tab der GUI */
+.gpage { position: absolute; inset: 0; background: #03060A; z-index: 5; color-scheme: dark; }
+.gpage canvas { cursor: grab; }
+.ginfo { position: absolute; right: 12px; top: 12px; width: min(340px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; background: rgba(6,24,34,0.88); border: 1px solid #28292E; border-radius: 10px; padding: 12px 14px; color: #F0F2F5; font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.ginfo h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.ginfo .m { color: #949AA3; font-size: 12px; overflow-wrap: anywhere; }
+.ginfo ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+.ginfo li { display: flex; gap: 8px; align-items: baseline; overflow-wrap: anywhere; }
+.ginfo li i { flex: none; width: 9px; height: 9px; border-radius: 50%; display: block; }
+.ginfo button { all: unset; cursor: pointer; overflow-wrap: anywhere; }
+.ginfo button:hover, .ginfo button:focus-visible { color: #3DDCFF; }
+.gpage .overlay-top, .gpage .ginfo { z-index: 1; }
+.pill.off { background: var(--tag-bg); color: var(--muted); }
+.ginfo .glink { color: #3DDCFF; font-size: 12px; }
+.ginfo .warn { color: #FFC24D; font-size: 12px; }
+.ginfo .conn { color: #949AA3; font-size: 11px; overflow-wrap: anywhere; padding-top: 4px; }
+.ginfo .conn.on { color: #F0F2F5; }
+.ginfo .hop { color: #4E8F8C; font-size: 10px; padding-left: 2em; overflow-wrap: anywhere; }
+.ginfo .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; }
+.ginfo .kv span { color: #949AA3; } .ginfo .kv b { text-align: right; font-weight: 600; overflow-wrap: anywhere; }
+.ginfo pre.msg { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 var(--mono); background: #0B0D10; border: 1px solid #28292E; border-radius: 6px; padding: 8px; }
+.apage { position: absolute; inset: 0; padding: 68px 12px 12px; display: flex; flex-direction: column; gap: 10px; color: #F0F2F5; }
+@media (min-width: 761px) { .apage { padding-right: 384px; } }
+.ehead { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.ehead b { font-size: 26px; color: #3DDCFF; font-variant-numeric: tabular-nums; }
+.apage .m { color: #949AA3; font-size: 12px; }
+#echart { flex: none; height: 170px; width: 100%; border: 1px solid #28292E; border-radius: 10px; touch-action: auto; }
+.afilter { display: flex; gap: 6px; flex-wrap: wrap; }
+.afilter .btn { background: #141518; border-color: #28292E; color: #F0F2F5; min-height: 36px; }
+.afilter .btn[aria-pressed="true"] { border-color: #3DDCFF; color: #3DDCFF; background: #0B2A33; }
+.alist { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.arow { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 62px 72px minmax(80px, 180px) 46px 1fr; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; background: #141518; border: 1px solid #28292E; font-size: 13px; }
+.arow:hover, .arow:focus-visible, .arow.on { border-color: #3DDCFF; }
+.arow .lv { border: 1.5px solid; border-radius: 6px; text-align: center; font-size: 11px; padding: 2px 0; }
+.arow .t, .arow .s { font-variant-numeric: tabular-nums; color: #949AA3; }
+.arow .s { font-family: var(--mono); font-weight: 700; }
+.arow .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.arow .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); color: #949AA3; }
+@media (max-width: 700px) { .arow { grid-template-columns: 54px 1fr 40px; } .arow .t, .arow .p { display: none; } }
+@media (max-width: 700px) { .hint { display: none; } .ginfo { top: auto; bottom: 12px; max-height: 40%; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="brand">logsentry</div>
+    <span class="pill off" id="pill"><i></i><span>Beispielwerte</span></span>
+    <nav aria-label="Bereiche">
+      <a href="#werkbank" aria-current="page">Werkbank</a>
+      <a href="#graphen">Graphen</a>
+      <a href="#anomalien">Anomalien</a>
+      <a href="#netzwerk">Netzwerk</a>
+    </nav>
+    <button class="btn theme-btn" id="fanBtn" type="button" aria-pressed="true" title="Aus: die Szene zeichnet nur noch bei Bedienung neu (spart CPU)">Lüfter: an</button>
+    <button class="btn theme-btn" id="themeBtn" type="button" aria-label="Darstellung wechseln">Darstellung: System</button>
+  </header>
+
+  <section class="kpis" aria-label="Wichtigste Werte">
+    <div class="kpi"><div class="l">CPU-Last</div><div class="v">1 %</div><div class="s">Load 0,49</div></div>
+    <div class="kpi"><div class="l">CPU-Temperatur</div><div class="v">50,4 °C</div><div class="s">Ryzen 5 7600X · Tctl</div></div>
+    <div class="kpi"><div class="l">Grafikkarte</div><div class="v">48 °C</div><div class="s">RX 9070 XT · 18 % · von Hand ausgelesen</div></div>
+    <div class="kpi"><div class="l">Arbeitsspeicher</div><div class="v">21 %</div><div class="s">≈ 6,7 von 32 GB · 34,2 °C</div></div>
+    <div class="kpi"><div class="l">SSD</div><div class="v">33,8 °C</div><div class="s">Lexar NM790 · / zu 47 % belegt</div></div>
+    <div class="kpi"><div class="l">Netzwerk</div><div class="v">40,0 °C</div><div class="s">LAN und WLAN</div></div>
+    <div class="kpi crit" id="kpiAnom"><div class="l">Anomalien (60 min)</div><div class="v">31</div><div class="s">davon 1 kritisch</div></div>
+  </section>
+
+  <div class="main">
+    <section class="stage" id="stage" aria-label="3D-Ansicht des Arbeitsplatzes">
+      <div class="loading" id="loading">3D-Ansicht wird geladen …</div>
+      <div class="overlay-top">
+        <button class="btn" id="back" type="button" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+          Schreibtisch
+        </button>
+        <div class="crumb" id="crumb">Schreibtisch</div>
+      </div>
+      <div class="hint" id="hint">Ziehen dreht die Ansicht, Mausrad zoomt. Klick auf den PC oder einen Monitor zoomt hinein.</div>
+      <div class="overlay-bottom" id="chips"></div>
+      <div class="tip" id="tip" hidden></div>
+      <div class="gpage" id="gpage" hidden>
+        <canvas id="gcanvas"></canvas>
+        <div class="overlay-top">
+          <button class="btn" id="gback" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+            Werkbank
+          </button>
+          <div class="crumb" id="gcrumb"></div>
+        </div>
+        <div class="apage" id="apage" hidden>
+          <div class="ehead"><span class="m">Entropie</span><b id="ecur"></b><span class="m" id="emeta"></span></div>
+          <canvas id="echart"></canvas>
+          <div class="afilter" id="afilter" role="group" aria-label="Nach Stufe filtern"></div>
+          <div class="alist" id="alist"></div>
+        </div>
+        <div class="ginfo" id="ginfo" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <aside id="panel" aria-live="polite"></aside>
+  </div>
+  <p class="note">Messwerte sind eine Momentaufnahme aus deinem Dashboard; im fertigen Programm kommen sie live vom Daemon. „Noch nicht erfasst" heißt: der Sensor existiert unter Linux, steht aber noch nicht im Snapshot. Anordnung und Farben folgen deinen Fotos und Angaben; die Bauteile sind im Code nachgebaut und lassen sich später gegen fertige 3D-Modelle (glTF) austauschen.</p>
+</div>
+
+<script src="vendor/three-0.147.0/three.min.js"></script>
+<script src="vendor/three-0.147.0/OrbitControls.js"></script>
+<script src="vendor/three-0.147.0/RoomEnvironment.js"></script>
+<script src="vendor/three-0.147.0/RoundedBoxGeometry.js"></script>
+<script src="world-110m.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var PARTS = {
+    cpu: { name: 'Prozessor & Kühler', model: 'AMD Ryzen 5 7600X · Arctic Freezer 34 eSports DUO (schwarz, weiße Lüfter)',
+      rows: [['Temperatur Tctl', '50,4 °C'], ['Temperatur Tccd1', '37,8 °C'], ['Auslastung', '1 %'], ['Load 1 / 5 / 15 min', '0,49 / 0,64 / 0,79'], ['Takt', '– GHz', 1], ['Kühler-Lüfter (2 ×)', '– U/min', 1]],
+      src: 'k10temp, sysinfo; Lüfter über Mainboard-hwmon',
+      procs: [['firefox', '0,9 %'], ['cinnamon', '0,6 %'], ['logsentry', '0,4 %']],
+      anom: ['WARN', '<*> Consumed <*> CPU time, <*> memory peak, 0B memory swap peak.'] },
+    gpu: { name: 'Grafikkarte', model: 'ASUS Prime Radeon RX 9070 XT OC · 16 GB GDDR6',
+      rows: [['Temperatur (Edge)', '48 °C', 2], ['Hotspot (Junction)', '49 °C', 2], ['Speicher', '72 °C', 2], ['Auslastung', '18 %', 2], ['Lüfter (Leerlauf)', '0 U/min', 2], ['Leistungsaufnahme', '52 W', 2], ['Grafikspeicher belegt', '1,8 von 16 GB', 2]],
+      src: 'amdgpu-Treiber (hwmon), einmal von Hand ausgelesen – noch nicht im Snapshot des Daemons',
+      procs: [['firefox', '–'], ['cinnamon', '–']], anom: null },
+    ram: { name: 'Arbeitsspeicher', model: 'Kingston FURY Beast DDR5-6000 CL30 · 2 × 16 GB',
+      rows: [['Temperatur', '34,2 °C'], ['Belegt', '21 % (≈ 6,7 GB)']],
+      src: 'spd5118, sysinfo',
+      procs: [['firefox', '1,2 GB'], ['steam', '640 MB'], ['cinnamon', '310 MB']], anom: null },
+    nvme: { name: 'SSD', model: 'Lexar NM790 · 2 TB · PCIe 4.0 (unter dem M.2-Kühlblech)',
+      rows: [['Composite', '33,8 °C'], ['Sensor 1', '33,8 °C'], ['Sensor 2', '31,9 °C'], ['/', '47 % belegt'], ['/var/lib/logsentry', '47 % belegt'], ['/boot/efi', '1 % belegt']],
+      src: 'nvme-Sensoren, sysinfo', procs: [], anom: null },
+    board: { name: 'Mainboard', model: 'MSI B650 GAMING PLUS WIFI · AM5',
+      rows: [['LAN-Chip (Realtek)', '40,0 °C'], ['WLAN-Chip (MediaTek)', '40,0 °C']],
+      src: 'r8169, mt7921', procs: [],
+      anom: ['INFO', 'wlp13s0: WPA: Group rekeying completed with <MAC> [GTK=CCMP]'] },
+    fans: { name: 'Gehäuselüfter', model: '3 × 120 mm im Boden (Intake), 3 × 120 mm im Deckel (Outtake), Leuchtringe golden',
+      rows: [['Boden vorne', '– U/min', 1], ['Boden Mitte', '– U/min', 1], ['Boden hinten', '– U/min', 1], ['Deckel vorne', '– U/min', 1], ['Deckel Mitte', '– U/min', 1], ['Deckel hinten', '– U/min', 1]],
+      src: 'Mainboard-hwmon (fan*_input) – noch nicht erfasst', procs: [], anom: null },
+    psu: { name: 'Netzteil', model: 'Gigabyte UD750GM · 750 W · 80+ Gold · modular (hintere Kammer)',
+      rows: [], src: 'Keine Sensoren – bei Netzteilen ohne Datenkabel normal.', procs: [], anom: null }
+  };
+  var ORDER = ['cpu', 'gpu', 'ram', 'nvme', 'board', 'fans', 'psu'];
+  var MONS = {
+    main: { name: '34" Curved', role: 'Hauptmonitor, unten mittig', shows: [['Links', 'Wissensgraph'], ['Rechts', 'Home-Übersicht'], ['Klick auf einen Graphen', 'öffnet ihn mit seinen Gruppen']] },
+    top: { name: '27" oben', role: 'mittig über dem Hauptmonitor, mit Monitorlampe', shows: [['Inhalt', 'Weltkugel mit Verbindungen'], ['Aktiv', '6 Verbindungen (Beispielwerte)'], ['Klick auf den Bildschirm', 'Weltkugel mit Details']] },
+    portrait: { name: '27" hochkant', role: 'rechts neben beiden', shows: [['Inhalt', 'Entropie live, letzte 2 min'], ['Darunter', 'Anzahl CRIT, WARN und INFO'], ['Klick auf den Bildschirm', 'alle Anomalien']] }
+  };
+  var MON_ORDER = ['main', 'top', 'portrait'];
+  var currentMon = 'main';
+
+  var stage = document.getElementById('stage');
+  var panel = document.getElementById('panel');
+  var chipsEl = document.getElementById('chips');
+  var crumb = document.getElementById('crumb');
+  var backBtn = document.getElementById('back');
+  var tip = document.getElementById('tip');
+  var hint = document.getElementById('hint');
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Lüfter-Animation: an = Dauer-Rendern, aus = Neuzeichnen nur bei Bedienung (Vorbild für Regel 20 in der GUI)
+  var animateFans = !reduceMotion;
+  try { var fs = localStorage.getItem('werkbank-fans'); if (fs) animateFans = fs === '1'; } catch (e) {}
+  var fanBtn = document.getElementById('fanBtn');
+  function showFanBtn() { fanBtn.textContent = 'Lüfter: ' + (animateFans ? 'an' : 'aus'); fanBtn.setAttribute('aria-pressed', String(animateFans)); }
+  showFanBtn();
+  fanBtn.addEventListener('click', function () {
+    animateFans = !animateFans; showFanBtn();
+    try { localStorage.setItem('werkbank-fans', animateFans ? '1' : '0'); } catch (e) {}
+    requestRender();
+  });
+
+  var view = 'desk';
+  var selected = 'cpu';
+  var themeListeners = [];
+  var darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+  function isDark() {
+    var t = document.documentElement.getAttribute('data-theme');
+    return t === 'dark' || (t !== 'light' && darkMq.matches);
+  }
+  function fireTheme() { var d = isDark(); themeListeners.forEach(function (f) { f(d); }); }
+  var themeBtn = document.getElementById('themeBtn');
+  var THEME_LABEL = { '': 'Darstellung: System', light: 'Darstellung: Hell', dark: 'Darstellung: Dunkel' };
+  function setThemeChoice(v) {
+    if (v) document.documentElement.setAttribute('data-theme', v); else document.documentElement.removeAttribute('data-theme');
+    themeBtn.textContent = THEME_LABEL[v || ''];
+    try { localStorage.setItem('werkbank-theme', v || ''); } catch (e) {}
+    fireTheme();
+  }
+  (function () { var v = ''; try { v = localStorage.getItem('werkbank-theme') || ''; } catch (e) {} if (v) setThemeChoice(v); })();
+  themeBtn.addEventListener('click', function () {
+    var cur = document.documentElement.getAttribute('data-theme') || '';
+    setThemeChoice(cur === '' ? 'light' : cur === 'light' ? 'dark' : '');
+  });
+  if (darkMq.addEventListener) darkMq.addEventListener('change', fireTheme);
+  new MutationObserver(fireTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  var api = { enterPc: function () {}, select: function () {}, enterMon: function () {} };
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  function renderPanel() {
+    panel.textContent = '';
+    if (view === 'desk') {
+      var c = el('section', 'card');
+      c.appendChild(el('h2', null, 'Dein Arbeitsplatz'));
+      var l = el('div', 'list');
+      [['PC (rechts auf dem Tisch)', 'läuft · ' + (typeof pcTemp === 'string' ? pcTemp : '50,4 °C')], ['34" Curved, unten mittig', 'Wissensgraph & Home'], ['27" darüber', 'Weltkugel'], ['27" hochkant rechts', 'Entropie & Anomalien'], ['Tastatur & Maus', 'Razer (openrazer)'], ['Tastenfeld', 'über OpenDeck']].forEach(function (r) {
+        var d = el('div'); d.appendChild(el('span', null, r[0])); d.appendChild(el('span', null, r[1])); l.appendChild(d);
+      });
+      c.appendChild(l);
+      var go = el('button', 'btn primary', 'In den PC zoomen'); go.type = 'button'; go.addEventListener('click', function () { api.enterPc(); });
+      c.appendChild(go);
+      panel.appendChild(c);
+      var a = el('section', 'card');
+      a.appendChild(el('h3', null, 'Letzte Anomalien'));
+      latestByLevel().forEach(function (x) {
+        var d = el('div', 'anom ' + x.level); d.appendChild(el('b', null, x.level)); d.appendChild(el('span', null, x.tpl)); a.appendChild(d);
+      });
+      var all = el('button', 'btn', 'Alle Anomalien'); all.type = 'button'; all.addEventListener('click', function () { openPage('anom'); });
+      a.appendChild(all);
+      panel.appendChild(a);
+      return;
+    }
+    if (view === 'mon') {
+      var mo = MONS[currentMon];
+      var mc = el('section', 'card');
+      var mh = el('div'); mh.appendChild(el('div', 'eyebrow', 'Monitor')); mh.appendChild(el('h2', null, mo.name)); mh.appendChild(el('div', 'model', mo.role)); mc.appendChild(mh);
+      var mr = el('div', 'rows');
+      mo.shows.forEach(function (r) { var row = el('div', 'row'); row.appendChild(el('span', 'k', r[0])); row.appendChild(el('span', 'v', r[1])); mr.appendChild(row); });
+      mc.appendChild(mr);
+      var op = el('button', 'btn primary', currentMon === 'main' ? 'Wissensgraph öffnen' : currentMon === 'top' ? 'Weltkugel öffnen' : 'Alle Anomalien');
+      op.type = 'button'; op.addEventListener('click', function () { if (currentMon === 'main') openPage('graph', 'kg'); else openPage(currentMon === 'top' ? 'globe' : 'anom'); });
+      mc.appendChild(op);
+      panel.appendChild(mc);
+      return;
+    }
+    var p = PARTS[selected];
+    var card = el('section', 'card');
+    var head = el('div');
+    head.appendChild(el('div', 'eyebrow', 'Bauteil'));
+    head.appendChild(el('h2', null, p.name));
+    head.appendChild(el('div', 'model', p.model));
+    card.appendChild(head);
+    if (p.rows.length) {
+      var rows = el('div', 'rows');
+      p.rows.forEach(function (r) {
+        var row = el('div', 'row');
+        row.appendChild(el('span', 'k', r[0]));
+        if (r[2]) row.appendChild(el('span', 'tag', r[2] === 1 ? 'noch nicht erfasst' : 'nicht im Daemon'));
+        row.appendChild(el('span', 'v', r[1]));
+        rows.appendChild(row);
+      });
+      card.appendChild(rows);
+    }
+    card.appendChild(el('div', 'src', 'Quelle: ' + p.src));
+    if (p.procs.length) {
+      var pr = el('div');
+      var h = el('div'); h.style.cssText = 'display:flex;justify-content:space-between;margin-bottom:4px';
+      h.appendChild(el('h3', null, 'Größte Verbraucher')); h.appendChild(el('span', 'eyebrow', 'Beispielwerte'));
+      pr.appendChild(h);
+      var l2 = el('div', 'list');
+      p.procs.forEach(function (x) { var d = el('div'); d.appendChild(el('span', null, x[0])); d.appendChild(el('span', null, x[1])); l2.appendChild(d); });
+      pr.appendChild(l2);
+      card.appendChild(pr);
+    }
+    if (p.anom) {
+      var an = el('div', 'anom ' + p.anom[0]); an.appendChild(el('b', null, p.anom[0])); an.appendChild(el('span', null, p.anom[1])); card.appendChild(an);
+    }
+    panel.appendChild(card);
+  }
+
+  function renderChips() {
+    chipsEl.textContent = '';
+    if (view === 'mon') {
+      MON_ORDER.forEach(function (id) {
+        var mb = el('button', 'btn', MONS[id].name); mb.type = 'button';
+        mb.setAttribute('aria-pressed', String(id === currentMon));
+        mb.addEventListener('click', function () { api.enterMon(id); });
+        chipsEl.appendChild(mb);
+      });
+      var pb = el('button', 'btn', 'PC'); pb.type = 'button'; pb.addEventListener('click', function () { api.enterPc(); }); chipsEl.appendChild(pb);
+      return;
+    }
+    if (view !== 'pc') return;
+    ORDER.forEach(function (id) {
+      var b = el('button', 'btn', PARTS[id].name);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(id === selected));
+      b.addEventListener('click', function () { api.select(id); });
+      chipsEl.appendChild(b);
+    });
+  }
+
+  function updateChrome() {
+    backBtn.hidden = view === 'desk';
+    crumb.textContent = view === 'pc' ? 'Schreibtisch › PC › ' + PARTS[selected].name : view === 'mon' ? 'Schreibtisch › ' + MONS[currentMon].name : 'Schreibtisch';
+    hint.textContent = view === 'pc' ? 'Klick auf ein Bauteil zeigt seine Werte. Ziehen dreht, Mausrad zoomt.' : view === 'mon' ? 'Klick auf einen anderen Monitor oder den PC wechselt dorthin.' : 'Ziehen dreht die Ansicht, Mausrad zoomt. Klick auf den PC oder einen Monitor zoomt hinein.';
+    renderChips();
+    renderPanel();
+  }
+
+  renderPanel();
+
+  if (!window.THREE || !THREE.OrbitControls || !THREE.RoundedBoxGeometry) {
+    document.getElementById('loading').textContent = '3D-Bibliothek konnte nicht geladen werden.';
+    return;
+  }
+
+  // ---------- Renderer, Szene, Kamera ----------
+  var renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+  } catch (e) {
+    document.getElementById('loading').textContent = 'Dieser Browser kann kein WebGL darstellen.';
+    return;
+  }
+  document.getElementById('loading').remove();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 0.95;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.domElement.setAttribute('aria-label', '3D-Modell von Schreibtisch und PC');
+  stage.insertBefore(renderer.domElement, stage.firstChild);
+
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color('#EDEEF1');
+  var pmrem = new THREE.PMREMGenerator(renderer);
+  var envTex = THREE.RoomEnvironment ? pmrem.fromScene(new THREE.RoomEnvironment(), 0.04).texture : null;
+  scene.environment = envTex;
+
+  var camera = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+  var controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.minDistance = 25;
+  controls.maxDistance = 480;
+  controls.maxPolarAngle = Math.PI * 0.49;
+
+  var hemi = new THREE.HemisphereLight(0xffffff, 0xd9d4cc, 0.32); scene.add(hemi);
+  var sun = new THREE.DirectionalLight(0xffffff, 1.45);
+  sun.position.set(-120, 260, 220);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -160; sun.shadow.camera.right = 160;
+  sun.shadow.camera.top = 220; sun.shadow.camera.bottom = -80;
+  sun.shadow.camera.near = 10; sun.shadow.camera.far = 700;
+  sun.shadow.bias = -0.0004;
+  scene.add(sun);
+
+  // ---------- Bausteine ----------
+  function M(color, rough, metal, extra) {
+    var o = { color: color, roughness: rough == null ? 0.5 : rough, metalness: metal || 0, envMapIntensity: 0.38 };
+    if (extra) for (var k in extra) o[k] = extra[k];
+    return new THREE.MeshStandardMaterial(o);
+  }
+  function rbox(w, h, d, r, mat) {
+    var rr = Math.max(0.01, Math.min(r, Math.min(w, h, d) / 2 - 0.01));
+    var m = new THREE.Mesh(new THREE.RoundedBoxGeometry(w, h, d, 3, rr), mat);
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
+  function box(w, h, d, mat) {
+    var m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.castShadow = true; m.receiveShadow = true;
+    return m;
+  }
+  function at(m, x, y, z) { m.position.set(x, y, z); return m; }
+  function cyl(r, len, mat, seg) { var m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, seg || 24), mat); m.castShadow = true; return m; }
+  function canvasTex(w, h, draw) {
+    var c = document.createElement('canvas'); c.width = w; c.height = h;
+    var t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; t.anisotropy = 8;
+    var paint = function () { draw(c.getContext('2d'), w, h); t.needsUpdate = true; };
+    t.repaint = paint;
+    paint();
+    repaints.push(paint);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(requestRender);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(paint);
+    return t;
+  }
+
+  var repaints = [];
+  var spinning = [];
+  // Lüfter mit Achse +z. opts: depth, frame (Farbe oder null), ring (Leuchtfarbe), blade, hub, bladeOpacity, blades, speed
+  function fan(size, opts) {
+    var g = new THREE.Group();
+    var s = size / 2, depth = opts.depth || 2.5;
+    if (opts.frame) {
+      var shape = new THREE.Shape();
+      var r = 0.9;
+      shape.moveTo(-s + r, -s); shape.lineTo(s - r, -s); shape.quadraticCurveTo(s, -s, s, -s + r);
+      shape.lineTo(s, s - r); shape.quadraticCurveTo(s, s, s - r, s); shape.lineTo(-s + r, s);
+      shape.quadraticCurveTo(-s, s, -s, s - r); shape.lineTo(-s, -s + r); shape.quadraticCurveTo(-s, -s, -s + r, -s);
+      var hole = new THREE.Path(); hole.absarc(0, 0, s * 0.93, 0, Math.PI * 2, true); shape.holes.push(hole);
+      var fg = new THREE.ExtrudeGeometry(shape, { depth: depth, bevelEnabled: false, curveSegments: 40 });
+      fg.translate(0, 0, -depth / 2);
+      var fm = new THREE.Mesh(fg, M(opts.frame, 0.55, 0.05)); fm.castShadow = true; g.add(fm);
+    }
+    if (opts.ring) {
+      var ringMat = M('#6B4206', 0.4, 0.2, { emissive: new THREE.Color(opts.ring), emissiveIntensity: 0.95, toneMapped: false });
+      [-depth / 2 + 0.15, depth / 2 - 0.15].forEach(function (z) {
+        var t = new THREE.Mesh(new THREE.TorusGeometry(s * 0.9, 0.24, 10, 64), ringMat); t.position.z = z; g.add(t);
+      });
+      g.add(new THREE.Mesh(new THREE.TorusGeometry(s * 0.32, 0.18, 8, 40), ringMat));
+    }
+    var rotor = new THREE.Group();
+    var hub = cyl(s * 0.3, depth * 0.85, M(opts.hub || '#1d1e21', 0.5, 0.1), 32);
+    hub.rotation.x = Math.PI / 2; rotor.add(hub);
+    var bladeMat = M(opts.blade || '#2a2c30', 0.55, 0, opts.bladeOpacity ? { transparent: true, opacity: opts.bladeOpacity } : null);
+    var n = opts.blades || 9;
+    for (var i = 0; i < n; i++) {
+      var pivot = new THREE.Group();
+      var bl = new THREE.Mesh(new THREE.BoxGeometry(s * 0.6, s * 0.36, 0.12), bladeMat);
+      bl.position.x = s * 0.6; bl.rotation.x = 0.55; bl.rotation.z = 0.25; bl.castShadow = true;
+      pivot.add(bl); pivot.rotation.z = (i / n) * Math.PI * 2; rotor.add(pivot);
+    }
+    g.add(rotor);
+    spinning.push({ obj: rotor, speed: opts.speed || 2.2 });
+    return g;
+  }
+  function tag(obj, part) { obj.traverse(function (o) { o.userData.part = part; }); return obj; }
+
+  // ---------- Raum: Boden, Holzwand ----------
+  var floor = new THREE.Mesh(new THREE.PlaneGeometry(2400, 2400), M('#D9D4CB', 0.95));
+  floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+  var planks = canvasTex(1024, 512, function (x, w, h) {
+    var cols = ['#9A6A3B', '#916236', '#A27142', '#8C5F33', '#986A3E'];
+    var pw = w / 10;
+    for (var i = 0; i < 10; i++) {
+      x.fillStyle = cols[i % cols.length]; x.fillRect(i * pw, 0, pw, h);
+      x.strokeStyle = 'rgba(90,55,25,0.18)'; x.lineWidth = 1;
+      for (var g = 0; g < 7; g++) { x.beginPath(); var gx = i * pw + 8 + g * (pw - 16) / 6; x.moveTo(gx, 0); x.bezierCurveTo(gx + 6, h * 0.3, gx - 6, h * 0.6, gx + 3, h); x.stroke(); }
+      x.fillStyle = 'rgba(70,40,15,0.45)'; x.fillRect(i * pw, 0, 2, h);
+    }
+  });
+  planks.wrapS = planks.wrapT = THREE.RepeatWrapping; planks.repeat.set(3, 1);
+  var wall = new THREE.Mesh(new THREE.PlaneGeometry(330, 300), M('#C4C4C4', 0.85, 0, { map: planks }));
+  wall.position.set(0, 150, -48); wall.receiveShadow = true; scene.add(wall);
+  var wall2 = new THREE.Mesh(new THREE.PlaneGeometry(200, 300), M('#F2F1EE', 0.95));
+  wall2.position.set(165, 150, 52); wall2.rotation.y = -Math.PI / 2; wall2.receiveShadow = true; scene.add(wall2);
+
+  // ---------- Schreibtisch ----------
+  var desk = new THREE.Group(); scene.add(desk);
+  var TOP = 75;
+  // Helle Holzoptik mit Maserung
+  var deskTex = canvasTex(1024, 512, function (x, w, h) {
+    x.fillStyle = '#E6D3B1'; x.fillRect(0, 0, w, h);
+    for (var i = 0; i < 140; i++) {
+      var y0 = Math.random() * h, a = 0.04 + Math.random() * 0.08;
+      x.strokeStyle = (i % 3 ? 'rgba(150,110,60,' : 'rgba(255,245,225,') + a + ')';
+      x.lineWidth = 0.6 + Math.random() * 1.8;
+      x.beginPath(); x.moveTo(0, y0);
+      x.bezierCurveTo(w * 0.3, y0 + (Math.random() - 0.5) * 18, w * 0.7, y0 + (Math.random() - 0.5) * 18, w, y0 + (Math.random() - 0.5) * 10);
+      x.stroke();
+    }
+  });
+  var deskWood = M('#ffffff', 0.55, 0, { map: deskTex });
+  var dark = M('#18191C', 0.45, 0.2);
+  var steel = M('#1F2125', 0.45, 0.35);
+  desk.add(at(rbox(200, 3, 82, 0.8, deskWood), 0, TOP - 1.5, 0));
+  [[-94, -36], [94, -36], [-94, 36], [94, 36]].forEach(function (p) { desk.add(at(rbox(5, TOP - 3, 5, 0.6, steel), p[0], (TOP - 3) / 2, p[1])); });
+  desk.add(at(box(186, 6, 3, steel), 0, TOP - 7, -36));
+  // Schreibtischunterlage im Pergament-Ton
+  desk.add(at(rbox(130, 0.3, 46, 0.12, M('#1C1D20', 0.92)), -20, TOP + 0.15, 16));
+
+  // Bildschirminhalte im Stil der logsentry-GUI („Holographic HUD", gui/src/theme.rs): immer dunkel wie
+  // die echte App, Glas-Karten mit Eck-Klammern, Ring-Gauges, Cyan-Akzent. Schriften bewusst sehr groß,
+  // damit die Werte auch in der Schreibtisch-Ansicht ohne Hineinzoomen lesbar sind.
+  var HUD = { bg: '#09090A', card: '#141518', border: '#28292E', fg: '#F0F2F5', muted: '#949AA3',
+    accent: '#3DDCFF', ok: '#4DFFB0', warn: '#FFC24D', crit: '#FF5D7A',
+    ocean: '#1F1F1F', land: '#333333', limb: '#353535', landBorder: '#696969', label: '#A8A8A8', halo: '#080808' };
+  var LEVEL = { CRIT: HUD.crit, WARN: HUD.warn, INFO: HUD.accent };
+  var FONT = 'Inter, system-ui, sans-serif', MONO = '"JetBrains Mono", ui-monospace, monospace';
+  function usageColor(f) { return f >= 0.9 ? HUD.crit : f >= 0.75 ? HUD.warn : HUD.ok; }
+  function tempColor(t) { return t >= 85 ? HUD.crit : t >= 70 ? HUD.warn : HUD.fg; }
+  function txt(x, s, px, py, size, color, weight, align, font) {
+    x.font = (weight || 400) + ' ' + size + 'px ' + (font || FONT); x.fillStyle = color; x.textAlign = align || 'left'; x.fillText(s, px, py); x.textAlign = 'left';
+  }
+  function fit(x, s, maxW) { if (x.measureText(s).width <= maxW) return s; while (s.length > 1 && x.measureText(s + '…').width > maxW) s = s.slice(0, -1); return s + '…'; }
+  function hudCard(x, cx, cy, w, h) {
+    x.save(); x.shadowColor = 'rgba(61,220,255,0.16)'; x.shadowBlur = 40;
+    x.fillStyle = HUD.card; x.beginPath(); x.roundRect(cx, cy, w, h, 14); x.fill(); x.restore();
+    x.strokeStyle = HUD.border; x.lineWidth = 3; x.beginPath(); x.roundRect(cx, cy, w, h, 14); x.stroke();
+    x.strokeStyle = HUD.accent; x.lineWidth = 5; x.lineCap = 'square';
+    [[cx, cy, 1, 1], [cx + w, cy, -1, 1], [cx, cy + h, 1, -1], [cx + w, cy + h, -1, -1]].forEach(function (c) {
+      x.beginPath(); x.moveTo(c[0] + 40 * c[2], c[1]); x.lineTo(c[0], c[1]); x.lineTo(c[0], c[1] + 40 * c[3]); x.stroke();
+    });
+  }
+
+  // ---------- Live-Daten: Entropie und Anomalien ----------
+  // Im Programm reicht werkbank.py die Werte des Daemons (nur lesend) über window.werkbankLive herein; im Browser
+  // laufen Beispielwerte. Ein Update pro Sekunde zeichnet nur die Hochkant-Textur und einen Frame neu (Regel 20).
+  var ENTROPY_MAX = 300, ANOM_MAX = 500;  // 5 min bei 1 Hz, feste Obergrenzen (Regel 18)
+  var LIVE = { on: false, entropy: [], z: 0, events: 0 };
+  var anoms = [];  // neueste zuerst: { id, ts (ms), level 'CRIT' | 'WARN' | 'INFO', unit, score, tpl, msg }
+  var SAMPLE_TPL = [
+    ['CRIT', 'sudo', '(max) LIST (max)', 'sudo: (max) LIST (max)'],
+    ['WARN', 'sudo', 'max : TTY=pts/<*> ; USER=root ; COMMAND=<*>', 'max : TTY=pts/4 ; USER=root ; COMMAND=/usr/bin/apt update'],
+    ['WARN', 'user@1000.service', '<*> Consumed <*> CPU time, <*> memory peak', 'app-firefox.scope: Consumed 3min 12.441s CPU time, 1.2G memory peak'],
+    ['INFO', 'wpa_supplicant', 'wlp13s0: WPA: Group rekeying completed with <MAC> [GTK=CCMP]', 'wlp13s0: WPA: Group rekeying completed with 00:00:5e:00:53:01 [GTK=CCMP]'],
+    ['INFO', 'kernel', 'audit: type=<*> audit(<*>): apparmor="DENIED" operation=<*>', 'audit: type=1400 audit(1794597682.613:412): apparmor="DENIED" operation="open"'],
+    ['WARN', 'systemd-resolved', 'Using degraded feature set <*> for DNS server <*>', 'Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 192.0.2.1']
+  ];
+  (function () {
+    var now = Date.now();
+    for (var i = 0; i < 31; i++) {
+      var t = SAMPLE_TPL[i % SAMPLE_TPL.length], base = t[0] === 'CRIT' ? 0.97 : t[0] === 'WARN' ? 0.8 : 0.55;
+      anoms.push({ id: 31 - i, ts: now - i * 113000, level: t[0], unit: t[1], score: base - (i % 5) * 0.02, tpl: t[2], msg: t[3] });
+    }
+    for (var k = 0; k < 120; k++) LIVE.entropy.push(1.8 + Math.sin(k * 0.21) * 0.15 + Math.sin(k * 0.05) * 0.1);
+  })();
+  function fmtNum(v, d) { return Number(v).toFixed(d).replace('.', ','); }
+  function fmtTime(ms) { var d = new Date(ms); return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  function anomsLastHour() { var t = Date.now() - 3600e3; return anoms.filter(function (a) { return a.ts >= t; }); }
+  // Die jeweils neueste Anomalie je Stufe, für Hochkant-Monitor und Seitenleiste
+  function latestByLevel() {
+    return ['CRIT', 'WARN', 'INFO'].map(function (l) { for (var i = 0; i < (anoms || []).length; i++) if (anoms[i].level === l) return anoms[i]; return null; }).filter(Boolean);
+  }
+  var liveListeners = [], anomListeners = [];
+  function liveChanged() {
+    if (texPortrait) { texPortrait.repaint(); requestRender(); }
+    liveListeners.forEach(function (f) { f(); });
+  }
+  function anomsChanged() { liveChanged(); anomListeners.forEach(function (f) { f(); }); }
+  var pill = document.getElementById('pill');
+  function setPill(text, ok) { pill.lastChild.textContent = text; pill.classList.toggle('off', !ok); }
+  window.werkbankLive = function (m) {
+    if (m.t === 'snap') {
+      if (!LIVE.on) { LIVE.on = true; LIVE.entropy = []; setPill('Daemon live', true); }
+      LIVE.entropy.push(m.e); if (LIVE.entropy.length > ENTROPY_MAX) LIVE.entropy.shift();
+      LIVE.z = m.z; LIVE.events = m.n; liveChanged();
+    } else if (m.t === 'recent' || m.t === 'anom') {
+      var conv = function (a) { return { id: a[0], ts: a[1], level: a[2], unit: a[3], score: a[4], tpl: a[5], msg: a[6] }; };
+      if (m.t === 'recent') anoms = m.a.map(conv).reverse().slice(0, ANOM_MAX);
+      else { anoms.unshift(conv(m.a)); if (anoms.length > ANOM_MAX) anoms.pop(); }
+      anomsChanged();
+    } else if (m.t === 'sys') { applySys(m.s);
+    } else if (m.t === 'net') { applyNet(m.d);
+    } else if (m.t === 'offline') { LIVE.on = false; setPill('Daemon getrennt', false); }
+  };
+  // Browser ohne Daemon: Entropie als langsamer Zufallslauf um 1,85 bit
+  var simTimer = setInterval(function () {
+    if (LIVE.on) { clearInterval(simTimer); return; }
+    if (document.hidden || window.WERKBANK_GRAPHS) return;  // im Programm kommen die Werte vom Daemon
+    var last = LIVE.entropy[LIVE.entropy.length - 1];
+    LIVE.entropy.push(Math.max(0.3, Math.min(3.2, last + (Math.random() - 0.5) * 0.18 + (1.85 - last) * 0.08)));
+    if (LIVE.entropy.length > ENTROPY_MAX) LIVE.entropy.shift();
+    liveChanged();
+  }, 1000);
+  // Entropie-Verlauf: die letzten `count` Werte, rechtsbündig, der aktuelle Wert als leuchtender Punkt
+  function drawEntropy(x, l, top, r, bot, count, lw, axisFont) {
+    var vals = LIVE.entropy.slice(-count), vmax = Math.max(2.4, Math.max.apply(null, vals.concat([0])) * 1.15);
+    function py(v) { return bot - v / vmax * (bot - top); }
+    x.strokeStyle = HUD.border; x.lineWidth = Math.max(1, lw / 3);
+    x.font = '500 ' + (axisFont || 10) + 'px ' + FONT; x.fillStyle = HUD.muted; x.textAlign = 'right';
+    for (var g = 0; g < 4; g++) {
+      var gy = top + g * (bot - top) / 3; x.beginPath(); x.moveTo(l, gy); x.lineTo(r, gy); x.stroke();
+      if (axisFont) x.fillText(fmtNum(vmax * (3 - g) / 3, 1), l - 8, gy + axisFont * 0.35);
+    }
+    x.textAlign = 'left';
+    if (vals.length < 2) return;
+    var step = (r - l) / (count - 1), x0 = r - (vals.length - 1) * step;
+    var grad = x.createLinearGradient(0, top, 0, bot); grad.addColorStop(0, 'rgba(61,220,255,0.30)'); grad.addColorStop(1, 'rgba(61,220,255,0)');
+    x.beginPath(); x.moveTo(x0, bot);
+    vals.forEach(function (v, i) { x.lineTo(x0 + i * step, py(v)); });
+    x.lineTo(r, bot); x.closePath(); x.fillStyle = grad; x.fill();
+    x.save(); x.strokeStyle = HUD.accent; x.lineWidth = lw; x.lineJoin = 'round'; x.shadowColor = HUD.accent; x.shadowBlur = lw * 2; x.beginPath();
+    vals.forEach(function (v, i) { if (i) x.lineTo(x0 + i * step, py(v)); else x.moveTo(x0, py(v)); });
+    x.stroke();
+    x.fillStyle = '#FFFFFF'; x.beginPath(); x.arc(r, py(vals[vals.length - 1]), lw * 1.3, 0, Math.PI * 2); x.fill(); x.restore();
+  }
+
+  // ---------- Systemwerte live (dieselben wie die GUI, vom Daemon; GPU-Auslastung/VRAM/Leistung aus amdgpu-sysfs) ----------
+  var pcTemp = '50,4 °C';
+  function temp(s, prefix) { for (var k in s.temps) if (k.indexOf(prefix) === 0) return s.temps[k]; return null; }
+  function degC(v) { return v == null ? '–' : fmtNum(v, 1) + ' °C'; }
+  function gb(b) { return fmtNum(b / 1e9, 1); }
+  function setKpi(i, v, sub) { var k = document.querySelectorAll('.kpi')[i]; k.querySelector('.v').textContent = v; k.querySelector('.s').textContent = sub; }
+  function applySys(s) {
+    var tctl = temp(s, 'k10temp Tctl'), g = s.gpu || {}, vram = g.vram || [], disk = s.disks['/'], gpuEdge = temp(s, 'amdgpu edge');
+    var load = s.load.map(function (v) { return fmtNum(v, 2); }).join(' / ');
+    pcTemp = degC(tctl);
+    setKpi(0, fmtNum(s.cpu, 0) + ' %', 'Load ' + fmtNum(s.load[0], 2));
+    setKpi(1, pcTemp, 'Ryzen 5 7600X · Tctl');
+    setKpi(2, degC(gpuEdge), 'RX 9070 XT' + (g.busy != null ? ' · ' + fmtNum(g.busy, 0) + ' % Last' : ''));
+    setKpi(3, fmtNum(s.mem[2], 0) + ' %', gb(s.mem[0]) + ' von ' + gb(s.mem[1]) + ' GB · ' + degC(temp(s, 'spd5118')));
+    setKpi(4, degC(temp(s, 'nvme Composite')), 'Lexar NM790' + (disk != null ? ' · / zu ' + fmtNum(disk, 0) + ' % belegt' : ''));
+    setKpi(5, degC(temp(s, 'r8169')), 'LAN · WLAN ' + degC(temp(s, 'mt7921')));
+    PARTS.cpu.rows = [['Temperatur Tctl', degC(tctl)], ['Temperatur Tccd1', degC(temp(s, 'k10temp Tccd1'))], ['Auslastung', fmtNum(s.cpu, 1) + ' %'],
+      ['Load 1 / 5 / 15 min', load], ['Takt', '– GHz', 1], ['Kühler-Lüfter (2 ×)', '– U/min', 1]];
+    PARTS.gpu.rows = [['Temperatur (Edge)', degC(gpuEdge)], ['Hotspot (Junction)', degC(temp(s, 'amdgpu junction'))], ['Speicher', degC(temp(s, 'amdgpu mem'))],
+      ['Auslastung', g.busy != null ? fmtNum(g.busy, 0) + ' %' : '–', 2], ['Lüfter', g.fan != null ? fmtNum(g.fan, 0) + ' U/min' : '–', 2],
+      ['Leistungsaufnahme', g.power != null ? fmtNum(g.power, 0) + ' W' : '–', 2], ['Grafikspeicher belegt', vram[0] != null ? gb(vram[0]) + ' von ' + gb(vram[1]) + ' GB' : '–', 2]];
+    PARTS.gpu.src = 'Temperaturen vom Daemon (amdgpu-hwmon); Auslastung, Lüfter, Leistung und VRAM liest die Werkbank selbst aus amdgpu-sysfs';
+    PARTS.ram.rows = [['Temperatur', degC(temp(s, 'spd5118'))], ['Belegt', fmtNum(s.mem[2], 0) + ' % (' + gb(s.mem[0]) + ' von ' + gb(s.mem[1]) + ' GB)']];
+    PARTS.nvme.rows = [['Composite', degC(temp(s, 'nvme Composite'))], ['Sensor 1', degC(temp(s, 'nvme Sensor 1'))], ['Sensor 2', degC(temp(s, 'nvme Sensor 2'))]]
+      .concat(Object.keys(s.disks).map(function (m) { return [m, fmtNum(s.disks[m], 0) + ' % belegt']; }));
+    PARTS.board.rows = [['LAN-Chip (Realtek)', degC(temp(s, 'r8169'))], ['WLAN-Chip (MediaTek)', degC(temp(s, 'mt7921'))]];
+    // Seitenleiste nur neu aufbauen, wenn sich ein angezeigter Wert geändert hat (sonst springt jede Sekunde der Fokus)
+    var sig = view === 'pc' ? JSON.stringify(PARTS[selected].rows) : view === 'desk' ? pcTemp : '';
+    if (sig !== applySys.sig) { applySys.sig = sig; if (view !== 'mon') renderPanel(); }
+  }
+
+  // ---------- Graphen: Wissensgraph (graphify) und Home-Übersicht (homegraph) ----------
+  // Die echten Graphen spielt werkbank.py beim Start als window.WERKBANK_GRAPHS ein (bleiben lokal, nicht im Repo);
+  // im Browser zeigt der Prototyp Beispieldaten.
+  // Format: { groups: [Name], nodes: [[Label, Gruppenindex]], links: [[von, nach, 1 = EXTRACTED / 0 = INFERRED]] }
+  function sampleGraph(names, n) {
+    var nodes = [], links = [];
+    for (var i = 0; i < n; i++) {
+      var g = i % names.length;
+      nodes.push([i < names.length ? names[g] : 'Beispiel ' + (i + 1), g]);
+      if (i >= names.length) links.push([i, g, 1]);
+      if (i > names.length && i % 3 === 0) links.push([i, i - 4, 0]);
+    }
+    return { groups: names, nodes: nodes, links: links, sample: true };
+  }
+  var GRAPHS = window.WERKBANK_GRAPHS || {};
+  var GRAPH_DEF = {
+    kg: { title: 'Wissensgraph', src: 'graphify · ~/.claude/activity-log/graphify-out/graph.json',
+      d: GRAPHS.kg || sampleGraph(['logsentry', 'Hardware', 'Netzwerk', 'Audio', 'Spiele', 'Heimserver'], 70) },
+    home: { title: 'Home-Übersicht', src: 'homegraph · ~/.local/share/homegraph/graph.json',
+      d: GRAPHS.home || sampleGraph(['~', 'Projekte', '.config', '.local', 'Dokumente', 'Downloads', 'Bilder'], 110) }
+  };
+  // Farben wie die GUI (gui/src/knowledge_graph/holo.rs): Gruppen in Cyan/Türkis/Blau, Kanten grün (sicher) / orange (vermutet)
+  function holoColor(g, a) { return 'hsla(' + Math.round((0.47 + 0.17 * ((g * 0.618034) % 1)) * 360) + ',84%,69%,' + (a == null ? 1 : a) + ')'; }
+  function edgeColor(t, a) { function m(p, q) { return Math.round(p + (q - p) * t); } return 'rgba(' + m(255, 90) + ',' + m(176, 235) + ',' + m(64, 150) + ',' + a + ')'; }
+  function fib(i, n) { var y = n < 2 ? 0 : 1 - 2 * (i + 0.5) / n, r = Math.sqrt(1 - y * y), t = i * 2.39996; return [Math.cos(t) * r, y, Math.sin(t) * r]; }
+  // Wie die GUI: jede Gruppe ist zuerst ein großer Überpunkt, Kanten zwischen Gruppen sind zusammengefasst;
+  // erst ein Klick fächert eine Gruppe in ihre Knoten auf.
+  // ponytail: feste Kugel-Anordnung statt Force-Layout wie layout.rs; reicht für den Prototyp.
+  Object.keys(GRAPH_DEF).forEach(function (id) {
+    var d = GRAPH_DEF[id].d;
+    d.members = d.groups.map(function () { return []; });
+    d.nodes.forEach(function (n, i) { d.members[n[1]].push(i); });
+    d.adj = d.nodes.map(function () { return []; });
+    d.links.forEach(function (l) { d.adj[l[0]].push(l[1]); d.adj[l[1]].push(l[0]); });
+    d.gpos = [];
+    d.members.map(function (m, g) { return g; }).sort(function (a, b) { return d.members[b].length - d.members[a].length; })
+      .forEach(function (g, k) { d.gpos[g] = fib(k, d.groups.length); });
+    d.lpos = [];
+    d.members.forEach(function (m) {
+      m.sort(function (a, b) { return d.adj[b].length - d.adj[a].length; });
+      m.forEach(function (i, k) { d.lpos[i] = fib(k, m.length); });
+    });
+    var agg = {};
+    d.links.forEach(function (l) {
+      var a = d.nodes[l[0]][1], b = d.nodes[l[1]][1]; if (a === b) return;
+      var key = Math.min(a, b) + ',' + Math.max(a, b);
+      if (!agg[key]) agg[key] = [Math.min(a, b), Math.max(a, b), 0, 0];
+      agg[key][2]++; agg[key][3] += l[2];
+    });
+    d.gedges = Object.keys(agg).map(function (k) { return agg[k]; });
+    d.maxMembers = Math.max.apply(null, d.members.map(function (m) { return m.length; }).concat([1]));
+    d.maxShared = Math.max.apply(null, d.gedges.map(function (e) { return e[2]; }).concat([1]));
+  });
+  function project(points, yaw, pitch, cx, cy, scale) {
+    var ca = Math.cos(yaw), sa = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    return points.map(function (p) {
+      if (!p) return null;
+      var x = p[0] * ca + p[2] * sa, z = -p[0] * sa + p[2] * ca, y = p[1] * cp - z * sp, f;
+      z = p[1] * sp + z * cp; f = 3 / (3 + z);
+      return [cx + x * scale * f, cy - y * scale * f, z, f];
+    });
+  }
+  function hubRadius(d, g, base, f) { return base * (0.4 + Math.sqrt(d.members[g].length / d.maxMembers)) * f; }
+  function short(s, n) { return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+  // Übersicht: Gruppen als große Punkte, Linienstärke = Zahl der Kanten zwischen zwei Gruppen
+  function drawHubs(x, d, P, o) {
+    d.gedges.forEach(function (e) {
+      var on = o.focus === e[0] || o.focus === e[1];
+      x.strokeStyle = edgeColor(e[3] / e[2], on ? 0.95 : o.focus >= 0 ? 0.06 : 0.4);
+      x.lineWidth = o.lw * (0.5 + 3.5 * e[2] / d.maxShared);
+      x.beginPath(); x.moveTo(P[e[0]][0], P[e[0]][1]); x.lineTo(P[e[1]][0], P[e[1]][1]); x.stroke();
+    });
+    var order = P.map(function (p, i) { return i; }).sort(function (a, b) { return P[b][2] - P[a][2]; });
+    order.forEach(function (g) {
+      var r = hubRadius(d, g, o.r, P[g][3]), dim = o.focus >= 0 && o.focus !== g;
+      x.save(); x.shadowColor = holoColor(g); x.shadowBlur = dim ? 0 : r * 0.8;
+      x.fillStyle = holoColor(g, dim ? 0.2 : 0.85); x.beginPath(); x.arc(P[g][0], P[g][1], r, 0, Math.PI * 2); x.fill(); x.restore();
+      x.strokeStyle = o.focus === g ? '#FFFFFF' : 'rgba(255,255,255,0.35)'; x.lineWidth = Math.max(1, o.lw); x.stroke();
+    });
+    if (!o.font) return;
+    x.textAlign = 'center';
+    order.forEach(function (g) {
+      var r = hubRadius(d, g, o.r, P[g][3]), px = P[g][0], py = P[g][1] + r + o.font * 1.1;
+      if (o.focus >= 0 && o.focus !== g) return;
+      x.font = '600 ' + o.font + 'px ' + FONT;
+      var s = short(d.groups[g], 28) + ' · ' + d.members[g].length;
+      x.fillStyle = 'rgba(0,0,0,0.8)'; x.fillText(s, px + 1, py + 1);
+      x.fillStyle = 'rgba(220,245,250,0.97)'; x.fillText(s, px, py);
+    });
+    x.textAlign = 'left';
+  }
+  // Aufgefächerte Gruppe: ihre Knoten mit den Kanten innerhalb der Gruppe; focus = Knoten mit Nachbarn
+  function drawMembers(x, d, g, P, o) {
+    var hl = null;
+    if (o.focus >= 0) { hl = {}; hl[o.focus] = 1; d.adj[o.focus].forEach(function (n) { hl[n] = 1; }); }
+    x.lineWidth = o.lw;
+    d.links.forEach(function (l) {
+      if (!P[l[0]] || !P[l[1]]) return;
+      var on = hl && (l[0] === o.focus || l[1] === o.focus);
+      x.strokeStyle = edgeColor(l[2], on ? 0.9 : hl ? 0.05 : 0.3);
+      x.beginPath(); x.moveTo(P[l[0]][0], P[l[0]][1]); x.lineTo(P[l[1]][0], P[l[1]][1]); x.stroke();
+    });
+    var ids = d.members[g].slice().sort(function (a, b) { return P[b][2] - P[a][2]; });
+    ids.forEach(function (i) {
+      var r = o.r * (1 + Math.sqrt(d.adj[i].length) * 0.3) * P[i][3];
+      x.fillStyle = holoColor(g, hl && !hl[i] ? 0.15 : 1);
+      x.beginPath(); x.arc(P[i][0], P[i][1], r, 0, Math.PI * 2); x.fill();
+      if (i === o.focus) { x.strokeStyle = '#FFFFFF'; x.lineWidth = 2; x.stroke(); x.lineWidth = o.lw; }
+    });
+    // Beschriftungen ohne Überlappung: gewählter Knoten zuerst, dann nach Zahl der Verbindungen
+    var show = hl ? Object.keys(hl).map(Number).filter(function (i) { return P[i]; }) : d.members[g].slice(0, 20);
+    show.sort(function (a, b) { return (b === o.focus) - (a === o.focus) || d.adj[b].length - d.adj[a].length; });
+    x.font = '500 ' + o.font + 'px ' + FONT; x.textAlign = 'center';
+    var placed = [];
+    show.forEach(function (i) {
+      var s = short(d.nodes[i][0], 42), px = P[i][0], py = P[i][1] - o.r * 2.8, bw = x.measureText(s).width;
+      var box = [px - bw / 2 - 2, py - o.font, bw + 4, o.font + 4];
+      if (placed.some(function (q) { return box[0] < q[0] + q[2] && q[0] < box[0] + box[2] && box[1] < q[1] + q[3] && q[1] < box[1] + box[3]; })) return;
+      placed.push(box);
+      x.fillStyle = 'rgba(0,0,0,0.8)'; x.fillText(s, px + 1, py + 1);
+      x.fillStyle = i === o.focus ? '#FFFFFF' : 'rgba(190,235,245,0.95)'; x.fillText(s, px, py);
+    });
+    x.textAlign = 'left';
+  }
+
+  // 34" Curved: Wissensgraph und Home-Übersicht nebeneinander (CPU/GPU/RAM/SSD stehen schon in der Kopfzeile).
+  // Ein Klick auf eine Karte öffnet die interaktive Seite (MAIN_REGIONS, in Pixeln der Textur).
+  var MAIN_W = 2100, MAIN_H = 880, MAIN_REGIONS = { kg: [30, 30, 1005, 820], home: [1065, 30, 1005, 820] };
+  var texMain = canvasTex(MAIN_W, MAIN_H, function (x, w, h) {
+    x.fillStyle = HUD.bg; x.fillRect(0, 0, w, h);
+    Object.keys(MAIN_REGIONS).forEach(function (id) {
+      var R0 = MAIN_REGIONS[id], def = GRAPH_DEF[id], d = def.d, cx = R0[0], cy = R0[1], gw = R0[2], gh = R0[3];
+      hudCard(x, cx, cy, gw, gh);
+      txt(x, def.title, cx + 44, cy + 92, 72, HUD.fg, 700);
+      txt(x, d.groups.length + ' Gruppen · ' + d.nodes.length + ' Knoten · ' + d.links.length + ' Kanten' + (d.sample ? ' · Beispiel' : ''), cx + 44, cy + 148, 38, HUD.muted, 500);
+      var top = cy + 180, ah = gh - 270;
+      x.save(); x.beginPath(); x.rect(cx + 12, top, gw - 24, ah); x.clip();
+      drawHubs(x, d, project(d.gpos, 0.6, 0.35, cx + gw / 2, top + ah / 2 - 14, Math.min(gw - 220, ah - 90) * 0.5), { focus: -1, r: 44, lw: 2.4, font: d.groups.length > 10 ? 24 : 30 });
+      x.restore();
+      txt(x, 'Klicken zum Öffnen ›', cx + gw / 2, cy + gh - 38, 44, HUD.accent, 600, 'center');
+    });
+  });
+
+  // 27" oben: Weltkugel. Daten wie der Netzwerk-Tab der GUI: werkbank.py startet `logsentry-gui --netzkarte-json`
+  // und reicht dessen Zeilen herein (applyNet). Im Browser ohne Programm: Beispielwerte.
+  var NET = { live: false, home: { code: 'DE', lat: 51.0, lon: 10.0 }, points: [], unresolved: 0, offline: false, error: null };
+  [['Frankfurt, Germany', 50.1, 8.7, 'firefox'], ['Frankfurt, Germany', 50.1, 8.7, 'firefox'], ['Amsterdam, Netherlands', 52.4, 4.9, 'steam'],
+    ['London, United Kingdom', 51.5, -0.1, 'discord'], ['Stockholm, Sweden', 59.3, 18.1, 'spotify'], ['Ashburn, United States', 39.0, -77.5, 'claude']]
+    .forEach(function (c, i) { NET.points.push({ ip: '192.0.2.' + (i + 10), program: c[3], place: c[0], detail: c[0] + ' (Beispiel)', lat: c[1], lon: c[2], route: [] }); });
+  // Endstandorte mit Anzahl der Verbindungen, häufigste zuerst
+  function netPlaces() {
+    var by = {};
+    NET.points.forEach(function (p) { (by[p.place] = by[p.place] || { place: p.place, lat: p.lat, lon: p.lon, n: 0 }).n++; });
+    return Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return b.n - a.n || (a.place < b.place ? -1 : 1); });
+  }
+  function applyNet(d) {
+    NET = { live: true, home: d.home || NET.home, points: d.points || [], unresolved: d.unresolved || 0, offline: !!d.router_offline, error: d.error };
+    var sig = JSON.stringify(netPlaces().map(function (p) { return [p.place, p.n]; })) + NET.offline;
+    if (sig !== applyNet.sig) { applyNet.sig = sig; texTop.repaint(); requestRender(); if (pg.kind === 'globe') showInfo(); }
+  }
+  function sphere(lat, lon, lat0, lon0) {
+    var p = lat * Math.PI / 180, l = (lon - lon0) * Math.PI / 180, a = lat0 * Math.PI / 180;
+    return [Math.cos(p) * Math.sin(l), Math.cos(a) * Math.sin(p) - Math.sin(a) * Math.cos(p) * Math.cos(l), Math.sin(a) * Math.sin(p) + Math.cos(a) * Math.cos(p) * Math.cos(l)];
+  }
+  // Monitor-Ansicht (unverändert im Stil): Kugel mit Bögen vom Zuhause zu jedem Endstandort
+  function drawGlobe(x, o) {
+    var gx = o.gx, gy = o.gy, R = o.R;
+    function vec(lat, lon) { return sphere(lat, lon, o.lat0, o.lon0); }
+    function scr(v) { return [gx + R * v[0], gy - R * v[1]]; }
+    x.fillStyle = HUD.ocean; x.beginPath(); x.arc(gx, gy, R, 0, Math.PI * 2); x.fill();
+    x.save(); x.beginPath(); x.arc(gx, gy, R, 0, Math.PI * 2); x.clip();
+    (window.WORLD_RINGS || []).forEach(function (ring) {
+      var pts = ring.map(function (c) { return vec(c[1], c[0]); });
+      if (!pts.some(function (v) { return v[2] > 0; })) return;
+      x.beginPath();
+      pts.forEach(function (v, i) {
+        // Punkte auf der Rückseite auf den Rand schieben, damit angeschnittene Länder bis zum Horizont reichen
+        if (v[2] < 0) { var n = Math.hypot(v[0], v[1]) || 1; v = [v[0] / n, v[1] / n]; }
+        var s = scr(v); if (i) x.lineTo(s[0], s[1]); else x.moveTo(s[0], s[1]);
+      });
+      x.closePath(); x.fillStyle = HUD.land; x.fill(); x.strokeStyle = HUD.landBorder; x.lineWidth = o.thin; x.stroke();
+    });
+    x.restore();
+    x.strokeStyle = HUD.limb; x.lineWidth = o.thin * 2; x.beginPath(); x.arc(gx, gy, R, 0, Math.PI * 2); x.stroke();
+    var home = vec(NET.home.lat, NET.home.lon);
+    netPlaces().forEach(function (c) {
+      var t = vec(c.lat, c.lon), om = Math.acos(Math.max(-1, Math.min(1, home[0] * t[0] + home[1] * t[1] + home[2] * t[2])));
+      x.save(); x.strokeStyle = HUD.accent; x.lineWidth = o.lw; x.shadowColor = HUD.accent; x.shadowBlur = o.lw * 3;
+      x.beginPath(); var pen = false;
+      for (var i = 0; i <= 48 && om > 1e-4; i++) {
+        var k = i / 48, a = Math.sin((1 - k) * om) / Math.sin(om), b = Math.sin(k * om) / Math.sin(om), lift = 1 + 0.25 * om * Math.sin(Math.PI * k);
+        var v = [(a * home[0] + b * t[0]) * lift, (a * home[1] + b * t[1]) * lift, (a * home[2] + b * t[2]) * lift];
+        if (v[2] < 0 && Math.hypot(v[0], v[1]) < 1) { pen = false; continue; }  // hinter der Kugel
+        var s = scr(v); if (pen) x.lineTo(s[0], s[1]); else x.moveTo(s[0], s[1]); pen = true;
+      }
+      x.stroke(); x.restore();
+      if (t[2] <= 0) return;
+      var e = scr(t);
+      x.fillStyle = HUD.accent; x.beginPath(); x.arc(e[0], e[1], o.dot, 0, Math.PI * 2); x.fill();
+      x.strokeStyle = HUD.ocean; x.lineWidth = o.thin * 2; x.stroke();
+    });
+    if (home[2] > 0) {
+      var hs = scr(home);
+      x.save(); x.fillStyle = HUD.ok; x.shadowColor = HUD.ok; x.shadowBlur = o.dot * 2; x.beginPath(); x.arc(hs[0], hs[1], o.dot * 1.3, 0, Math.PI * 2); x.fill(); x.restore();
+      x.strokeStyle = HUD.ok; x.lineWidth = o.thin * 2; x.beginPath(); x.arc(hs[0], hs[1], o.dot * 2.4, 0, Math.PI * 2); x.stroke();
+    }
+  }
+  var texTop = canvasTex(1200, 680, function (x, w, h) {
+    x.fillStyle = HUD.bg; x.fillRect(0, 0, w, h);
+    // Blickrichtung: Mitte zwischen Zuhause und allen Zielen, damit möglichst viele Bögen vorne liegen
+    var places = netPlaces(), sx = 0, sy = 0, sz = 0;
+    [{ lat: NET.home.lat, lon: NET.home.lon }].concat(places).forEach(function (p) { var v = sphere(p.lat, p.lon, 0, 0); sx += v[0]; sy += v[1]; sz += v[2]; });
+    var lat0 = Math.atan2(sy, Math.hypot(sx, sz)) * 180 / Math.PI, lon0 = Math.atan2(sx, sz) * 180 / Math.PI;
+    drawGlobe(x, { gx: 355, gy: 340, R: 322, lat0: Math.max(-60, Math.min(60, lat0)), lon0: lon0, lw: 5, thin: 1.5, dot: 10 });
+    // Rechte Spalte: Anzahl groß, darunter alle Endstandorte mit ihrer Zahl an Verbindungen
+    hudCard(x, 704, 20, 476, 640);
+    txt(x, 'Verbindungen', 744, 96, 50, HUD.muted, 600);
+    var total = String(NET.offline ? 0 : NET.points.length);
+    txt(x, total, 744, 236, 150, HUD.accent, 700);
+    txt(x, NET.offline ? 'Router weg' : 'aktiv', 744 + x.measureText(total).width + 24, 236, 54, NET.offline ? HUD.warn : HUD.muted, 500);
+    var rows = places.length > 8 ? places.slice(0, 7) : places, step = Math.min(62, 360 / Math.max(1, rows.length)), fs = Math.round(step * 0.72);
+    rows.forEach(function (c, i) {
+      var y = 300 + (i + 0.8) * step;
+      // Auf dem Monitor nur die Stadt ("ca. San Francisco (Financial District), United States" -> "San Francisco"), sonst das Land
+      var parts = c.place.replace(/^ca\. /, '').replace(/ \(via Router\)$/, '').split(', '), name = parts.length > 1 ? parts[0].replace(/ \(.*\)$/, '') : parts[0];
+      x.font = '500 ' + fs + 'px ' + FONT; txt(x, fit(x, name, 360), 744, y, fs, HUD.fg, 500);
+      txt(x, String(c.n), 1140, y, fs, HUD.accent, 700, 'right');
+    });
+    if (places.length > 8) txt(x, '+ ' + (places.length - 7) + ' weitere Orte', 744, 300 + 7.8 * step, Math.round(fs * 0.85), HUD.muted, 500);
+    if (!places.length) txt(x, NET.live ? 'keine Verbindungen' : 'warte auf Daten …', 744, 360, 40, HUD.muted, 500);
+  });
+
+  // Detailseite: Nachbau der Weltkugel aus dem Netzwerk-Tab (gui/src/network_map/mod.rs draw_map, globe.rs):
+  // orthografische Kugel, Kamera yaw/pitch auf Zuhause, Länder #333 mit Grenzen #696969, Routen über die gemessenen
+  // Zwischenstationen mit wanderndem Lichtpunkt, Länderkürzel ab Zoom 1,6, überlappungsfreie Beschriftung.
+  var GUI_MAP = { ocean: '#1F1F1F', land: '#333333', limb: '#353535', border: '#696969', label: '#A8A8A8', hop: '#4E8F8C', halo: '#080808',
+    accent: '#3DDCFF', text: '#F0F2F5', muted: '#949AA3', frame: '#28292E' };
+  var DEG = Math.PI / 180;
+  function unitLL(lat, lon) { var a = lat * DEG, b = lon * DEG; return [Math.cos(a) * Math.sin(b), Math.sin(a), -Math.cos(a) * Math.cos(b)]; }
+  function slerp(a, b, t) {
+    var d = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2])), om = Math.acos(d);
+    if (om < 1e-4 || Math.PI - om < 1e-4) return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+    var s = Math.sin(om), wa = Math.sin((1 - t) * om) / s, wb = Math.sin(t * om) / s;
+    return [wa * a[0] + wb * b[0], wa * a[1] + wb * b[1], wa * a[2] + wb * b[2]];
+  }
+  function arcPoint(a, b, t, bulge) { var p = slerp(a, b, t), l = 1 + bulge * Math.sin(Math.PI * t); return [p[0] * l, p[1] * l, p[2] * l]; }
+  function segBulge(a, b) { return 0.18 * Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))) / Math.PI; }
+  function declump(pts) {
+    var placed = [];
+    return pts.map(function (b) {
+      var c = b, ring = 0;
+      while (placed.some(function (p) { return Math.hypot(p[0] - c[0], p[1] - c[1]) < 7; })) {
+        ring++; var ang = ring * 2.399963, r = 7 * 0.9 * Math.sqrt(ring); c = [b[0] + Math.cos(ang) * r, b[1] + Math.sin(ang) * r];
+      }
+      placed.push(c); return c;
+    });
+  }
+  function declutter(anchors, texts) {
+    var rects = [];
+    return anchors.map(function (a, i) {
+      var w = Math.max(1, texts[i].length * 5.4), pos = [a[0] + 6, a[1] + 1];
+      for (;;) {
+        var r = [pos[0] - w / 2, pos[1] - 6, w, 12];
+        if (!rects.some(function (q) { return r[0] < q[0] + q[2] && q[0] < r[0] + r[2] && r[1] < q[1] + q[3] && q[1] < r[1] + r[3]; })) { rects.push(r); return pos; }
+        pos = [pos[0], pos[1] + 12];
+      }
+    });
+  }
+  function haloText(x, s, p, color, size) {
+    x.font = size + 'px ' + FONT; x.textBaseline = 'middle'; x.fillStyle = GUI_MAP.halo;
+    [[-1, 0], [1, 0], [0, -1], [0, 1]].forEach(function (o) { x.fillText(s, p[0] + o[0], p[1] + o[1]); });
+    x.fillStyle = color; x.fillText(s, p[0], p[1]); x.textBaseline = 'alphabetic';
+  }
+  function drawGuiGlobe(x, c) {
+    var cam = pg.cam, R = Math.min(c.w, c.h) / 2 * 0.92 * cam.zoom, cx = c.w / 2, cy = c.h / 2;
+    var sy = Math.sin(cam.yaw), cyw = Math.cos(cam.yaw), sp = Math.sin(cam.pitch), cp = Math.cos(cam.pitch);
+    function proj(p) { var x1 = p[0] * cyw + p[2] * sy, z1 = -p[0] * sy + p[2] * cyw, y2 = p[1] * cp - z1 * sp, z2 = p[1] * sp + z1 * cp; return [cx + x1 * R, cy - y2 * R, z2 <= 0]; }
+    function runs(samples, color, w) {  // Linie, die an der Sichtkante abbricht
+      x.strokeStyle = color; x.lineWidth = w; var on = false; x.beginPath();
+      samples.forEach(function (s) { if (s[2]) { if (on) x.lineTo(s[0], s[1]); else x.moveTo(s[0], s[1]); on = true; } else on = false; });
+      x.stroke();
+    }
+    x.strokeStyle = GUI_MAP.frame; x.lineWidth = 1; x.beginPath(); x.roundRect(0.5, 0.5, c.w - 1, c.h - 1, 4); x.stroke();
+    x.save(); x.beginPath(); x.rect(0, 0, c.w, c.h); x.clip();
+    x.fillStyle = GUI_MAP.ocean; x.beginPath(); x.arc(cx, cy, R, 0, Math.PI * 2); x.fill();
+    x.strokeStyle = GUI_MAP.limb; x.lineWidth = 1; x.stroke();
+    var rings = (window.WORLD_RINGS || []).map(function (ring) { return ring.map(function (q) { return proj(unitLL(q[1], q[0])); }); });
+    x.fillStyle = GUI_MAP.land;
+    rings.forEach(function (pts) {
+      if (!pts.some(function (p) { return p[2]; })) return;
+      x.beginPath();
+      pts.forEach(function (p, i) {
+        var q = p;
+        if (!p[2]) { var dx = p[0] - cx, dy = p[1] - cy, n = Math.hypot(dx, dy) || 1; q = [cx + dx / n * R, cy + dy / n * R]; }
+        if (i) x.lineTo(q[0], q[1]); else x.moveTo(q[0], q[1]);
+      });
+      x.closePath(); x.fill();
+    });
+    rings.forEach(function (pts) { runs(pts.concat([pts[0]]), GUI_MAP.border, 1); });
+    var homeV = unitLL(NET.home.lat, NET.home.lon), hopPos = [], hopLabels = [], seenHop = {}, targets = [];
+    var points = NET.offline ? [] : NET.points;
+    points.forEach(function (p) {
+      var tgt = unitLL(p.lat, p.lon), stops = (p.route || []).filter(function (h) { return !h.is_target && h.lat != null; });
+      var wp = [homeV].concat(stops.map(function (h) { return unitLL(h.lat, h.lon); }), [tgt]);
+      for (var i = 0; i + 1 < wp.length; i++) {
+        var bul = segBulge(wp[i], wp[i + 1]), smp = [];
+        for (var k = 0; k <= 24; k++) smp.push(proj(arcPoint(wp[i], wp[i + 1], k / 24, bul)));
+        runs(smp, 'rgba(61,220,255,0.4)', 1);
+      }
+      var segs = wp.length - 1, prog = ((pg.phase / (2 * Math.PI)) % 1) * segs, idx = Math.min(segs - 1, Math.floor(prog));
+      var lp = proj(arcPoint(wp[idx], wp[idx + 1], prog - idx, segBulge(wp[idx], wp[idx + 1])));
+      if (lp[2]) { x.fillStyle = GUI_MAP.accent; x.beginPath(); x.arc(lp[0], lp[1], 2, 0, Math.PI * 2); x.fill(); }
+      stops.forEach(function (h, j) {
+        var hp = proj(wp[j + 1]); if (!hp[2]) return;
+        hopPos.push(hp); var pl = h.place || 'unbekannter Ort';
+        if (!seenHop[pl]) { seenHop[pl] = 1; hopLabels.push([hp, pl]); }
+      });
+      var tp = proj(tgt); if (tp[2]) targets.push([p, tp]);
+    });
+    x.fillStyle = GUI_MAP.hop;
+    declump(hopPos).forEach(function (q) { x.beginPath(); x.arc(q[0], q[1], 2, 0, Math.PI * 2); x.fill(); });
+    var tpos = declump(targets.map(function (t) { return t[1]; })), anchors = [], texts = [];
+    pg.hits = [];
+    tpos.forEach(function (q, i) {
+      x.fillStyle = GUI_MAP.accent; x.beginPath(); x.arc(q[0], q[1], 3, 0, Math.PI * 2); x.fill();
+      x.strokeStyle = GUI_MAP.ocean; x.lineWidth = 1; x.stroke();
+      anchors.push(q); texts.push(targets[i][0].place); pg.hits.push([q[0], q[1], targets[i][0]]);
+    });
+    var hp0 = proj(homeV);
+    if (hp0[2]) {
+      var pulse = (Math.sin(pg.phase) * 0.5 + 0.5) * 6;
+      x.strokeStyle = 'rgba(61,220,255,0.5)'; x.lineWidth = 1; x.beginPath(); x.arc(hp0[0], hp0[1], 5 + pulse, 0, Math.PI * 2); x.stroke();
+      x.fillStyle = GUI_MAP.accent; x.beginPath(); x.arc(hp0[0], hp0[1], 3.5, 0, Math.PI * 2); x.fill();
+      x.font = '10px ' + FONT; x.fillStyle = GUI_MAP.muted; x.fillText('Zuhause (' + NET.home.code + ')', hp0[0] + 7, hp0[1] - 7);
+    }
+    var nConn = anchors.length;
+    hopLabels.forEach(function (h) { anchors.push(h[0]); texts.push(h[1]); });
+    var nHop = anchors.length;
+    if (cam.zoom >= 1.6) (window.WORLD_LABELS || []).forEach(function (l) { var q = proj(unitLL(l[1], l[2])); if (q[2]) { anchors.push(q); texts.push(l[0]); } });
+    declutter(anchors, texts).forEach(function (q, i) {
+      if (i < nConn) { x.font = '9.5px ' + FONT; x.textBaseline = 'middle'; x.fillStyle = GUI_MAP.text; x.fillText(texts[i], q[0], q[1]); x.textBaseline = 'alphabetic'; }
+      else haloText(x, texts[i], q, i < nHop ? GUI_MAP.hop : GUI_MAP.label, 9);
+    });
+    if (pg.hover) {  // Tooltip wie in der GUI: Programm (IP, Ort)
+      var hv = pg.hits.filter(function (h) { return h[2] === pg.hover; })[0];
+      if (hv) {
+        var tt = (pg.hover.program || 'unbekanntes Programm') + ' (' + pg.hover.ip + ', ' + pg.hover.place + ')';
+        x.font = '13px ' + FONT; var tw = x.measureText(tt).width + 16, tx = Math.min(hv[0] + 10, c.w - tw - 4), ty = hv[1] + 12;
+        x.fillStyle = '#1B1C20'; x.strokeStyle = GUI_MAP.frame; x.beginPath(); x.roundRect(tx, ty, tw, 26, 5); x.fill(); x.stroke();
+        x.fillStyle = GUI_MAP.text; x.fillText(tt, tx + 8, ty + 17);
+      }
+    }
+    x.restore();
+  }
+
+  // 27" hochkant: Entropie live (letzte 2 min) und darunter die neueste Anomalie je Stufe; Klick öffnet alle
+  var texPortrait = canvasTex(680, 1200, function (x, w, h) {
+    x.fillStyle = HUD.bg; x.fillRect(0, 0, w, h);
+    hudCard(x, 24, 24, w - 48, 520);
+    txt(x, 'Entropie', 56, 100, 52, HUD.muted, 600);
+    txt(x, fmtNum(LIVE.entropy[LIVE.entropy.length - 1] || 0, 2) + ' bit', w - 56, 104, 70, HUD.accent, 700, 'right');
+    txt(x, (LIVE.on ? 'live' : 'Beispielwerte') + ' · letzte 2 min', 56, 152, 32, HUD.muted, 500);
+    drawEntropy(x, 56, 190, w - 56, 510, 120, 7, 0);
+    // Darunter nur die Anzahl je Stufe (letzte 60 min); Inhalte erst nach dem Klick
+    var hour = anomsLastHour(), cnt = { CRIT: 0, WARN: 0, INFO: 0 };
+    hour.forEach(function (a) { cnt[a.level]++; });
+    txt(x, 'Anomalien', 40, 630, 54, HUD.muted, 600);
+    txt(x, 'letzte 60 min', w - 40, 630, 34, HUD.muted, 500, 'right');
+    ['CRIT', 'WARN', 'INFO'].forEach(function (l, i) {
+      var y = 668 + i * 152, c = LEVEL[l];
+      x.fillStyle = HUD.card; x.beginPath(); x.roundRect(24, y, w - 48, 136, 14); x.fill();
+      x.strokeStyle = HUD.border; x.lineWidth = 2; x.stroke();
+      x.fillStyle = c; x.fillRect(24, y + 14, 10, 108);
+      x.fillStyle = c + '29'; x.strokeStyle = c; x.lineWidth = 3; x.beginPath(); x.roundRect(64, y + 38, 190, 62, 10); x.fill(); x.stroke();
+      txt(x, l, 159, y + 84, 44, c, 700, 'center');
+      txt(x, String(cnt[l]), w - 64, y + 100, 96, cnt[l] ? c : HUD.muted, 700, 'right');
+    });
+    txt(x, 'Klicken für alle Anomalien ›', w / 2, h - 22, 36, HUD.accent, 600, 'center');
+  });
+
+  function flatMonitor(w, h, tex) {
+    var g = new THREE.Group();
+    g.add(at(rbox(w + 1.4, h + 1.4, 2.2, 0.5, dark), 0, 0, -1.2));
+    g.add(at(rbox(w * 0.45, h * 0.5, 3, 1.2, dark), 0, 0, -3.2));
+    var s = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }));
+    s.position.z = -0.08; s.userData.screen = true; g.add(s);
+    return g;
+  }
+
+  // 34" Curved-Ultrawide (Radius 180 cm), unten mittig
+  var MAIN_X = -32;
+  var main = new THREE.Group(); main.position.set(MAIN_X, TOP, -14); desk.add(main);
+  var R = 180, arc = 80 / R, SH = 33.5, SY = 30;
+  texMain.wrapS = THREE.RepeatWrapping; texMain.repeat.x = -1; texMain.offset.x = 1;
+  var scr = new THREE.Mesh(new THREE.CylinderGeometry(R, R, SH, 64, 1, true, Math.PI - arc / 2, arc), new THREE.MeshBasicMaterial({ map: texMain, toneMapped: false, side: THREE.BackSide }));
+  scr.position.set(0, SY, R); main.add(scr);
+  var shell = new THREE.Mesh(new THREE.CylinderGeometry(R + 1.6, R + 1.6, SH + 1.6, 64, 1, true, Math.PI - (arc + 0.012) / 2, arc + 0.012), M('#18191C', 0.45, 0.2, { side: THREE.DoubleSide }));
+  shell.position.set(0, SY, R); shell.castShadow = true; main.add(shell);
+  main.add(at(rbox(16, 12, 4, 1.5, dark), 0, SY, -4.2));
+  main.add(at(rbox(6, 22, 3, 1, steel), 0, 13, -7));
+  main.add(at(rbox(34, 1.2, 20, 0.5, steel), 0, 0.6, -6));
+
+  // 27" darüber, am Arm, mit Monitorlampe
+  var top27 = flatMonitor(60, 34, texTop); top27.position.set(MAIN_X, TOP + 70, -24); desk.add(top27);
+  desk.add(at(cyl(1.6, 60, steel), MAIN_X, TOP + 30, -32));
+  desk.add(at(rbox(8, 3, 6, 1, steel), MAIN_X, TOP + 60, -28));
+  var lamp = cyl(1.1, 48, M('#1C1D20', 0.4, 0.5));
+  lamp.rotation.z = Math.PI / 2; lamp.position.set(MAIN_X, TOP + 89, -22); desk.add(lamp);
+  var lampGlowMat = M('#FFE2B8', 0.4, 0, { emissive: new THREE.Color('#FFC27A'), emissiveIntensity: 1.0, toneMapped: false });
+  desk.add(at(box(46, 0.3, 1.2, lampGlowMat), MAIN_X, TOP + 87.8, -21.4));
+  // Warmes Licht der Monitorlampe auf den Schreibtisch (ca. 2700 K)
+  var lampSpot = new THREE.SpotLight('#FFC27A', 0.25, 260, 0.95, 0.85, 1.1);
+  lampSpot.position.set(MAIN_X, TOP + 87, -19);
+  lampSpot.target.position.set(MAIN_X + 4, TOP, 20);
+  lampSpot.castShadow = true; lampSpot.shadow.mapSize.set(1024, 1024); lampSpot.shadow.bias = -0.0006;
+  scene.add(lampSpot); scene.add(lampSpot.target);
+  var lampSpill = new THREE.PointLight('#FFB866', 0, 140, 1.6); lampSpill.position.set(MAIN_X, TOP + 92, -30); scene.add(lampSpill);
+  var screenGlow = new THREE.PointLight('#AFC4FF', 0, 120, 1.8); screenGlow.position.set(MAIN_X + 10, TOP + 40, 10); scene.add(screenGlow);
+
+  // 27" hochkant rechts
+  var portrait = new THREE.Group(); portrait.position.set(26, TOP, -18); portrait.rotation.y = -0.32; desk.add(portrait);
+  var pm = flatMonitor(34, 60, texPortrait); pm.position.set(0, 42, 0); portrait.add(pm);
+  portrait.add(at(rbox(5, 14, 3, 1, steel), 0, 7, -4));
+  portrait.add(at(rbox(24, 1.2, 18, 0.5, steel), 0, 0.6, -4));
+
+  // Lautsprecher (Marshall) vor dem Fuß des Hauptmonitors: schwarzes Gehäuse, Stoffgitter mit Messingrahmen,
+  // weißer Schriftzug vorne (Schreibschrift Z003 als Annäherung, nicht das Original-Logo)
+  var marshallTex = canvasTex(720, 320, function (x, w, h) {
+    x.fillStyle = '#0B0B0C'; x.fillRect(0, 0, w, h);
+    x.strokeStyle = 'rgba(255,255,255,0.05)'; x.lineWidth = 1;
+    for (var i = -h; i < w; i += 6) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i + h, h); x.stroke(); x.beginPath(); x.moveTo(i + h, 0); x.lineTo(i, h); x.stroke(); }
+    x.strokeStyle = '#B8955A'; x.lineWidth = 7; x.beginPath(); x.roundRect(14, 14, w - 28, h - 28, 18); x.stroke();
+    x.font = 'italic 150px "Z003", "URW Chancery L", cursive'; x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillStyle = '#F4F1EA'; x.fillText('Marshall', w / 2, h / 2 + 6); x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  });
+  desk.add(at(rbox(18, 8, 9, 1, M('#151618', 0.7, 0.1)), MAIN_X, TOP + 4, 0));
+  var marshallFront = new THREE.Mesh(new THREE.PlaneGeometry(16.6, 7.2), M('#ffffff', 0.85, 0, { map: marshallTex }));
+  marshallFront.position.set(MAIN_X, TOP + 4, 4.52); desk.add(marshallFront);
+  desk.add(at(box(14, 0.2, 0.2, M('#B8955A', 0.3, 0.8)), MAIN_X, TOP + 8.05, 2.5));
+
+  // Tastatur (Razer): schwarz mit schwarzen Tastenkappen, golden hinterleuchtet (Beschriftung und Licht zwischen den Tasten)
+  var kb = new THREE.Group(); kb.position.set(MAIN_X, TOP, 18); desk.add(kb);
+  kb.add(at(rbox(45, 2.4, 15, 0.7, M('#0D0E10', 0.5, 0.2)), 0, 1.2, 0));
+  var goldGlowMat = M('#6B4206', 0.5, 0, { emissive: new THREE.Color('#FFA41C'), emissiveIntensity: 0.9, toneMapped: false });
+  var kbGlowMat = M('#3A2404', 0.6, 0, { emissive: new THREE.Color('#FFA41C'), emissiveIntensity: 0.5, toneMapped: false });
+  kb.add(at(box(43.2, 0.15, 13.6, kbGlowMat), 0, 2.47, -0.1));
+  var keyMat = M('#0A0B0D', 0.45, 0.1);
+  var keys = new THREE.InstancedMesh(new THREE.BoxGeometry(1.75, 0.9, 1.75), keyMat, 6 * 18);
+  var legends = new THREE.InstancedMesh(new THREE.BoxGeometry(0.62, 0.04, 0.34), goldGlowMat, 6 * 18);
+  var dm = new THREE.Object3D(), ki = 0;
+  for (var row = 0; row < 6; row++) for (var col = 0; col < 18; col++) {
+    dm.position.set(-19.8 + col * 2.33, 2.8, -5.6 + row * 2.2); dm.updateMatrix(); keys.setMatrixAt(ki, dm.matrix);
+    dm.position.y = 3.27; dm.position.z -= 0.3; dm.updateMatrix(); legends.setMatrixAt(ki++, dm.matrix);
+  }
+  keys.castShadow = true; kb.add(keys); kb.add(legends);
+  kb.add(at(rbox(44, 1.4, 7, 0.6, M('#0D0E10', 0.85)), 0, 0.7, 11.5));
+  kb.add(at(box(45.6, 0.3, 15.6, goldGlowMat), 0, 0.2, 0));
+  var kbLight = new THREE.PointLight('#FFA94D', 0, 45, 1.8); kbLight.position.set(0, 6, 2); kb.add(kbLight);
+  // Maus: schwarz, goldene Seitenstreifen, leuchtendes Logo und Mausrad
+  var mouse = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), M('#0D0E10', 0.4, 0.2));
+  mouse.scale.set(3.1, 1.9, 6); mouse.position.set(6, TOP + 0.9, 20); mouse.castShadow = true; desk.add(mouse);
+  var wheel = cyl(0.45, 0.5, goldGlowMat, 20); wheel.rotation.z = Math.PI / 2; wheel.position.set(6, TOP + 2.75, 17.6); desk.add(wheel);
+  var logo = cyl(0.75, 0.1, goldGlowMat, 24); logo.position.set(6, TOP + 2.66, 22.4); logo.rotation.x = -0.35; desk.add(logo);
+  desk.add(at(box(0.25, 0.5, 9, goldGlowMat), 6 - 3.0, TOP + 0.6, 20));
+  desk.add(at(box(0.25, 0.5, 9, goldGlowMat), 6 + 3.0, TOP + 0.6, 20));
+  // Tastenfeld (OpenDeck)
+  var deck = new THREE.Group(); deck.position.set(-66, TOP, 12); deck.rotation.x = -0.2; desk.add(deck);
+  deck.add(at(rbox(15, 2.6, 8, 0.6, M('#141518', 0.5, 0.2)), 0, 1.6, 0));
+  ['#2255D4', '#16784A', '#B42318', '#8A5300', '#5B616B', '#2255D4'].forEach(function (c, i) {
+    deck.add(at(box(1.9, 0.35, 1.9, M('#ffffff', 0.4, 0, { emissive: new THREE.Color(c), emissiveIntensity: 0.6 })), -4.6 + (i % 3) * 2.6, 3.0, -1.4 + Math.floor(i / 3) * 2.8));
+  });
+  [4, 6.2].forEach(function (x) { deck.add(at(cyl(0.9, 1.2, steel, 20), x, 3.4, 0)); });
+  // Mikrofon auf Standfuß
+  var mic = new THREE.Group(); mic.position.set(-78, TOP, -6); desk.add(mic);
+  mic.add(at(rbox(13, 1.4, 11, 0.6, dark), 0, 0.7, 0));
+  mic.add(at(cyl(0.8, 9, steel), 0, 5, 0));
+  var capsule = new THREE.Mesh(new THREE.CapsuleGeometry(4.6, 13, 8, 24), M('#121315', 0.55, 0.3)); capsule.position.set(0, 18.5, 0); capsule.castShadow = true; mic.add(capsule);
+  // Kopfhörerständer links
+  var hstand = new THREE.Group(); hstand.position.set(-90, TOP, 14); desk.add(hstand);
+  hstand.add(at(rbox(10, 1.2, 10, 0.5, dark), 0, 0.6, 0)); hstand.add(at(cyl(0.9, 26, dark), 0, 13.5, 0)); hstand.add(at(rbox(10, 1.2, 3, 0.5, dark), 0, 27, 0));
+  // Kopfhörer: schwarzer Bügel, graue Polster
+  var phones = new THREE.Group(); phones.position.set(0, 19.6, 0); hstand.add(phones);
+  var hpBlack = M('#111214', 0.5, 0.25), hpGrey = M('#7D8188', 0.95, 0);
+  var band = new THREE.Mesh(new THREE.TorusGeometry(8.6, 0.75, 12, 48, Math.PI), hpBlack); band.castShadow = true; phones.add(band);
+  var pad = new THREE.Mesh(new THREE.TorusGeometry(7.9, 0.55, 10, 40, Math.PI * 0.6), hpGrey); pad.rotation.z = Math.PI * 0.2; phones.add(pad);
+  [-1, 1].forEach(function (sd) {
+    var yoke = rbox(0.8, 4, 1.6, 0.3, hpBlack); yoke.position.set(sd * 8.6, -1.5, 0); phones.add(yoke);
+    var cup = cyl(4.4, 2.6, hpBlack, 36); cup.rotation.z = Math.PI / 2; cup.position.set(sd * 8.2, -6.2, 0); phones.add(cup);
+    var cushion = new THREE.Mesh(new THREE.TorusGeometry(3.4, 1.15, 14, 36), hpGrey);
+    cushion.rotation.y = Math.PI / 2; cushion.position.set(sd * 6.4, -6.2, 0); cushion.castShadow = true; phones.add(cushion);
+    var inner = cyl(2.6, 0.4, M('#5E6168', 0.95), 28); inner.rotation.z = Math.PI / 2; inner.position.set(sd * 6.7, -6.2, 0); phones.add(inner);
+  });
+
+  // ---------- PC: Zweikammer-Gehäuse, Glas vorne und links ----------
+  // Lokale Koordinaten: x = -15,5 (Glasseite) … +15,5 (Außenwand der Rückkammer), y = Boden … Deckel, z = -21 (Rückseite) … +21 (Glasfront)
+  var pc = new THREE.Group();
+  pc.position.set(80, TOP + 1.6, -14);
+  pc.rotation.y = 0.12;
+  scene.add(pc);
+  var GOLD = '#FFA41C';
+  var TX = 5.5;          // Mainboard-Träger
+  var BX = TX - 0.5;     // Mainboard-Ebene
+
+  var caseMat = M('#0E0F11', 0.5, 0.15);
+  var trayMat = M('#121316', 0.7, 0.1);
+  [[-13, -18], [13, -18], [-13, 18], [13, 18]].forEach(function (p) {
+    var f = cyl(1.4, 1.6, M('#111214', 0.7)); f.position.set(p[0], -0.8, p[1]); pc.add(f);
+  });
+  var shellG = new THREE.Group(); pc.add(shellG);
+  shellG.add(at(rbox(31.2, 1.2, 42.4, 0.4, caseMat), 0, 0.6, 0));
+  shellG.add(at(rbox(31.2, 1.2, 42.4, 0.4, caseMat), 0, 45, 0));
+  shellG.add(at(box(0.8, 44, 42, caseMat), 15.2, 22.6, 0));
+  shellG.add(at(box(31, 44, 0.8, caseMat), 0, 22.6, -20.8));
+  shellG.add(at(box(0.6, 43, 41, trayMat), TX + 0.3, 22.6, 0));
+  // Lochblech-Optik für Deckel und Rückwand
+  var perf = canvasTex(64, 64, function (x) {
+    x.fillStyle = '#1a1b1e'; x.fillRect(0, 0, 64, 64); x.fillStyle = '#2f3136';
+    for (var i = 0; i < 8; i++) for (var j = 0; j < 8; j++) { x.beginPath(); x.arc(i * 8 + 4 + (j % 2) * 4, j * 8 + 4, 2.3, 0, Math.PI * 2); x.fill(); }
+  });
+  perf.wrapS = perf.wrapT = THREE.RepeatWrapping; perf.repeat.set(10, 12);
+  shellG.add(at(box(20, 0.2, 38, M('#ffffff', 0.8, 0.2, { map: perf })), -4.5, 45.65, 0));
+  shellG.add(at(box(9, 30, 0.2, M('#ffffff', 0.8, 0.2, { map: perf })), -9.5, 26, -21.25));
+  // Glasfront und Glasseite ohne Eckstrebe
+  var glassMat = M('#A9B9CC', 0.03, 0.1, { transparent: true, opacity: 0.14, depthWrite: false });
+  shellG.add(at(new THREE.Mesh(new THREE.BoxGeometry(0.4, 43.4, 41.6), glassMat), -15.5, 22.8, 0));
+  shellG.add(at(new THREE.Mesh(new THREE.BoxGeometry(31, 43.4, 0.4), glassMat), 0, 22.8, 21.0));
+  // Front der Rückkammer: schwarz, damit das Netzteil verdeckt bleibt
+  shellG.add(at(box(9.8, 43.4, 0.5, caseMat), TX + 5, 22.8, 20.7));
+  shellG.traverse(function (o) { o.userData.part = 'case'; });
+
+  // Netzteil in der Rückkammer
+  var psu = new THREE.Group(); pc.add(psu);
+  psu.add(at(rbox(8.6, 15, 14, 0.5, M('#16171A', 0.55, 0.3)), TX + 4.9, 8.6, 8));
+  psu.add(at(box(0.1, 3, 10, M('#3A3D42', 0.4, 0.5)), TX + 0.55, 8.6, 8));
+  tag(psu, 'psu');
+
+  // Mainboard MSI B650 GAMING PLUS WIFI
+  var board = new THREE.Group(); pc.add(board);
+  var pcb = M('#0D0E10', 0.75, 0.05);
+  var hsM = M('#4A4E56', 0.35, 0.75);
+  var hsDark = M('#1C1E22', 0.45, 0.4);
+  board.add(at(box(0.16, 30.5, 24.4, pcb), BX, 24.8, -6.8));
+  board.add(at(rbox(3.2, 9.5, 3.6, 0.4, hsDark), BX - 1.7, 35.4, -17.0));
+  board.add(at(rbox(2.4, 2.6, 9.5, 0.3, hsM), BX - 1.3, 38.6, -10.5));
+  board.add(at(rbox(2.4, 8.5, 2.6, 0.3, hsM), BX - 1.3, 32.2, -15.3));
+  board.add(at(rbox(1.1, 6, 6.2, 0.3, hsM), BX - 0.65, 14.6, -0.6));
+  board.add(at(box(0.9, 0.8, 9.2, M('#9AA0A7', 0.3, 0.9)), BX - 0.5, 23.4, -10.5));
+  [-4.3, -3.4, -2.5, -1.6].forEach(function (z) { board.add(at(box(0.7, 13.3, 0.6, M('#1A1B1E', 0.6)), BX - 0.4, 32.2, z)); });
+  board.add(at(box(1.0, 5.2, 1.2, M('#1A1B1E', 0.6)), BX - 0.55, 28.5, 4.4));
+  board.add(at(box(0.4, 4, 4, M('#3B3E44', 0.5, 0.4)), BX - 0.25, 32.2, -10.5));
+  tag(board, 'board');
+
+  // M.2-Kühlblech, darunter die Lexar NM790
+  var nvme = new THREE.Group(); pc.add(nvme);
+  nvme.add(at(rbox(0.6, 2.6, 8.8, 0.2, M('#5C6169', 0.3, 0.8)), BX - 0.4, 26.4, -10.2));
+  nvme.add(at(box(0.1, 0.12, 6, M('#C8CDD3', 0.3, 0.9)), BX - 0.75, 26.4, -10.2));
+  tag(nvme, 'nvme');
+
+  // Arctic Freezer 34 eSports DUO: schwarzer Kühlkörper, weiße Lüfter
+  var cpu = new THREE.Group(); cpu.position.set(BX, 32.2, -10.5); pc.add(cpu);
+  cpu.add(at(box(1.6, 4, 4, M('#2A2C30', 0.3, 0.7)), -1.0, 0, 0));
+  var copper = M('#B87A4E', 0.3, 0.85);
+  [-1.5, -0.5, 0.5, 1.5].forEach(function (d) { var hp = cyl(0.3, 16, copper, 12); hp.rotation.z = Math.PI / 2; hp.position.set(-8.6, d * 0.6, d * 0.9); cpu.add(hp); });
+  var fins = new THREE.InstancedMesh(new THREE.BoxGeometry(13, 12.4, 0.05), M('#141518', 0.45, 0.55), 46);
+  var fd = new THREE.Object3D();
+  for (var f = 0; f < 46; f++) { fd.position.set(-9.2, 0, -2.6 + f * (5.2 / 45)); fd.updateMatrix(); fins.setMatrixAt(f, fd.matrix); }
+  fins.castShadow = true; cpu.add(fins);
+  cpu.add(at(rbox(0.8, 12.8, 5.8, 0.3, M('#0E0F11', 0.5, 0.2)), -16.0, 0, 0));
+  [-3.95, 3.95].forEach(function (z) {
+    var fn = fan(12, { depth: 2.5, frame: '#F2F3F5', blade: '#F7F8FA', hub: '#EDEEF0', speed: 3.0 });
+    fn.position.set(-9.0, 0, z); cpu.add(fn);
+  });
+  tag(cpu, 'cpu');
+
+  // Kingston FURY Beast DDR5, zwei Module
+  var ram = new THREE.Group(); pc.add(ram);
+  [-3.4, -1.6].forEach(function (z) {
+    ram.add(at(rbox(3.4, 13.3, 0.75, 0.12, M('#0E0F11', 0.5, 0.2)), BX - 2.2, 32.2, z));
+    ram.add(at(box(0.25, 9, 0.8, M('#4B4F57', 0.35, 0.7)), BX - 3.95, 33.2, z));
+  });
+  tag(ram, 'ram');
+
+  // ASUS Prime Radeon RX 9070 XT OC: schwarz mit silbernen Akzenten, Dreifach-Lüfter nach unten, Backplate oben
+  var gpu = new THREE.Group(); pc.add(gpu);
+  var GX = BX - 7.0;
+  gpu.add(at(rbox(13, 5.0, 31.2, 0.6, M('#111214', 0.45, 0.3)), GX, 20.1, -4.0));
+  gpu.add(at(rbox(12.8, 0.5, 31.0, 0.2, M('#1C1E22', 0.3, 0.7)), GX, 22.85, -4.0));
+  gpu.add(at(box(0.12, 0.16, 30.8, M('#B9BFC7', 0.25, 0.9)), GX - 6.55, 21.4, -4.0));
+  var primeSilver = M('#C3C8CF', 0.22, 0.95);
+  gpu.add(at(box(0.12, 0.28, 13, primeSilver), GX - 6.55, 19.2, 4.0));
+  gpu.add(at(box(0.12, 0.28, 7, primeSilver), GX - 6.55, 18.5, -13.5));
+  gpu.add(at(box(12.6, 0.08, 0.3, primeSilver), GX, 23.15, -16.0));
+  gpu.add(at(box(12.4, 6, 0.25, M('#B9BFC7', 0.3, 0.9)), GX + 0.2, 20.4, -19.8));
+  gpu.add(at(box(1.0, 1.6, 4.6, M('#121316', 0.6)), GX - 5.6, 23.2, 2.0));
+  [-14.2, -4.0, 6.2].forEach(function (z) {
+    var gf = fan(9.2, { depth: 1.4, frame: null, blade: '#2A2C30', hub: '#17181B', blades: 11, speed: 2.0 });
+    gf.rotation.x = Math.PI / 2; gf.position.set(GX, 17.45, z); gpu.add(gf);
+  });
+  tag(gpu, 'gpu');
+
+  // Gehäuselüfter: 3 im Boden (Intake), 3 im Deckel (Outtake), Leuchtringe golden
+  var fans = new THREE.Group(); pc.add(fans);
+  [-13, 0, 13].forEach(function (z) {
+    var b = fan(12, { depth: 2.5, frame: '#0E0F11', ring: GOLD, blade: '#F6D9A0', bladeOpacity: 0.5, speed: 1.6 });
+    b.rotation.x = -Math.PI / 2; b.position.set(-5, 2.6, z); fans.add(b);
+    var t = fan(12, { depth: 2.5, frame: '#0E0F11', ring: GOLD, blade: '#F6D9A0', bladeOpacity: 0.5, speed: 1.6 });
+    t.rotation.x = Math.PI / 2; t.position.set(-5, 43.0, z); fans.add(t);
+  });
+  tag(fans, 'fans');
+  var glowB = new THREE.PointLight(GOLD, 1.1, 45, 2); glowB.position.set(-5, 6, 0); pc.add(glowB);
+  var glowT = new THREE.PointLight(GOLD, 0.35, 30, 2); glowT.position.set(-5, 40, 0); pc.add(glowT);
+
+  var partGroups = { cpu: cpu, gpu: gpu, ram: ram, nvme: nvme, board: board, fans: fans, psu: psu };
+
+  // ---------- Hell / Dunkel ----------
+  function applySceneTheme(d) {
+    scene.background.set(d ? '#0C0D10' : '#EDEEF1');
+    scene.environment = d ? null : envTex;
+    hemi.intensity = d ? 0.06 : 0.32;
+    hemi.color.set(d ? '#8A96B8' : '#ffffff'); hemi.groundColor.set(d ? '#1A1612' : '#d9d4cc');
+    sun.intensity = d ? 0.05 : 1.45;
+    renderer.toneMappingExposure = d ? 1.1 : 0.95;
+    lampSpot.intensity = d ? 3.2 : 0.25;
+    lampSpill.intensity = d ? 0.55 : 0;
+    screenGlow.intensity = d ? 0.22 : 0;
+    lampGlowMat.emissiveIntensity = d ? 1.6 : 1.0;
+    kbGlowMat.emissiveIntensity = d ? 1.1 : 0.5; kbLight.intensity = d ? 0.7 : 0;
+    glowB.intensity = d ? 2.2 : 1.1; glowT.intensity = d ? 1.2 : 0.35;
+    repaints.forEach(function (f) { f(); });
+  }
+  themeListeners.push(applySceneTheme);
+  applySceneTheme(isDark());
+
+  // ---------- Hervorhebung ----------
+  function localBox(obj) {
+    var rot = pc.rotation.y, pos = pc.position.clone();
+    pc.rotation.y = 0; pc.position.set(0, 0, 0); pc.updateMatrixWorld(true);
+    var b = new THREE.Box3().setFromObject(obj);
+    pc.rotation.y = rot; pc.position.copy(pos); pc.updateMatrixWorld(true);
+    return b;
+  }
+  var selHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color('#2255D4'));
+  var hovHelper = new THREE.Box3Helper(new THREE.Box3(), new THREE.Color('#8FA8EA'));
+  selHelper.visible = false; hovHelper.visible = false;
+  pc.add(selHelper); pc.add(hovHelper);
+  var pcHelper = new THREE.Box3Helper(localBox(shellG).expandByScalar(1.5), new THREE.Color('#2255D4'));
+  pcHelper.visible = false; pc.add(pcHelper);
+
+  function showSelection() {
+    trayMat.transparent = selected === 'psu' && view === 'pc';
+    trayMat.opacity = trayMat.transparent ? 0.25 : 1;
+    trayMat.needsUpdate = true;
+    if (view !== 'pc') { selHelper.visible = false; return; }
+    selHelper.box.copy(localBox(partGroups[selected]).expandByScalar(0.4));
+    selHelper.visible = true;
+  }
+
+  // ---------- Kamera-Fahrten ----------
+  var DESK_POS = new THREE.Vector3(-10, 158, 205), DESK_TGT = new THREE.Vector3(8, 108, -14);
+  var tween = null;
+  function flyTo(pos, tgt) {
+    if (reduceMotion) { camera.position.copy(pos); controls.target.copy(tgt); controls.update(); return; }
+    tween = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos.clone(), t1: tgt.clone(), start: performance.now(), dur: 950 };
+  }
+  function pcView() {
+    return { pos: pc.localToWorld(new THREE.Vector3(-26, 42, 80)), tgt: pc.localToWorld(new THREE.Vector3(-1, 23, -1)) };
+  }
+  var MON_OBJ = {
+    main: { obj: main, center: new THREE.Vector3(0, SY, 0), w: 80, h: SH },
+    top: { obj: top27, center: new THREE.Vector3(0, 0, 0), w: 60, h: 34 },
+    portrait: { obj: pm, center: new THREE.Vector3(0, 0, 0), w: 34, h: 60 }
+  };
+  Object.keys(MON_OBJ).forEach(function (id) { MON_OBJ[id].obj.traverse(function (o) { o.userData.mon = id; }); });
+  function monitorView(id) {
+    var m = MON_OBJ[id];
+    m.obj.updateMatrixWorld(true);
+    var c = m.obj.localToWorld(m.center.clone());
+    var n = new THREE.Vector3(0, 0, 1).transformDirection(m.obj.matrixWorld);
+    var t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+    var d = Math.max(m.h * 0.62 / t, m.w * 0.58 / (t * camera.aspect)) + (id === 'main' ? 4 : 0);
+    return { pos: c.clone().add(n.multiplyScalar(d)), tgt: c };
+  }
+  function enterMon(id) {
+    currentMon = id;
+    if (view === 'pc') { setGlass(true); hovHelper.visible = false; }
+    view = 'mon';
+    pcHelper.visible = false;
+    var v = monitorView(id); flyTo(v.pos, v.tgt);
+    controls.minDistance = 15; controls.maxDistance = 480;
+    updateChrome(); showSelection();
+  }
+  function setGlass(on) { glassMat.opacity = on ? 0.14 : 0.05; }
+
+  function enterPc() {
+    view = 'pc';
+    pcHelper.visible = false;
+    setGlass(false);
+    var v = pcView(); flyTo(v.pos, v.tgt);
+    controls.minDistance = 20; controls.maxDistance = 160;
+    updateChrome(); showSelection();
+  }
+  function leavePc() {
+    view = 'desk';
+    setGlass(true); hovHelper.visible = false;
+    controls.minDistance = 25; controls.maxDistance = 480;
+    flyTo(DESK_POS, DESK_TGT);
+    updateChrome(); showSelection();
+  }
+  function select(id) { selected = id; updateChrome(); showSelection(); }
+  api.enterPc = enterPc; api.select = select; api.enterMon = enterMon;
+  backBtn.addEventListener('click', leavePc);
+
+  camera.position.copy(DESK_POS); controls.target.copy(DESK_TGT); controls.update();
+
+  // ---------- Zeigen und Klicken ----------
+  var ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+  var pickables = []; pc.traverse(function (o) { if (o.isMesh) pickables.push(o); });
+  Object.keys(MON_OBJ).forEach(function (id) { MON_OBJ[id].obj.traverse(function (o) { if (o.isMesh) pickables.push(o); }); });
+  function partAt(ev) {
+    var r = renderer.domElement.getBoundingClientRect();
+    ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    var hits = ray.intersectObjects(pickables, false);
+    for (var i = 0; i < hits.length; i++) {
+      var ud = hits[i].object.userData, p = ud.part;
+      if (view !== 'pc') {
+        if (hits[i].object === scr) { var g = mainRegionAt(hits[i].uv); if (g) return 'graph:' + g; }
+        if (ud.screen && ud.mon === 'top') return 'page:globe';
+        if (ud.screen && ud.mon === 'portrait') return 'page:anom';
+        if (ud.mon) return 'mon:' + ud.mon;
+        return p ? 'pc' : null;
+      }
+      if (ud.mon) continue;
+      if (p && p !== 'case') return p;
+    }
+    return null;
+  }
+  var downAt = null;
+  renderer.domElement.addEventListener('pointerdown', function (e) { downAt = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener('pointerup', function (e) {
+    if (!downAt) return;
+    var moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
+    downAt = null;
+    if (moved > 6) return;
+    var p = partAt(e);
+    if (!p) return;
+    if (p.indexOf('graph:') === 0) openPage('graph', p.slice(6));
+    else if (p.indexOf('page:') === 0) openPage(p.slice(5));
+    else if (view !== 'pc' && p.indexOf('mon:') === 0) enterMon(p.slice(4));
+    else if (view !== 'pc' && p === 'pc') enterPc();
+    else if (view === 'pc') select(p);
+  });
+  renderer.domElement.addEventListener('pointermove', function (e) {
+    if (e.pointerType === 'touch') return;
+    var p = partAt(e);
+    var r = stage.getBoundingClientRect();
+    if (p) {
+      renderer.domElement.style.cursor = 'pointer';
+      tip.hidden = false;
+      tip.textContent = p.indexOf('graph:') === 0 ? GRAPH_DEF[p.slice(6)].title + ' – öffnen' : p.indexOf('page:') === 0 ? PAGE_TIP[p.slice(5)] : p.indexOf('mon:') === 0 ? MONS[p.slice(4)].name + ' – anklicken' : view !== 'pc' ? 'Mein PC · ' + pcTemp + ' – anklicken' : PARTS[p].name;
+      tip.style.left = (e.clientX - r.left) + 'px'; tip.style.top = (e.clientY - r.top) + 'px';
+      if (view !== 'pc') pcHelper.visible = p === 'pc';
+      else if (p !== selected) { hovHelper.box.copy(localBox(partGroups[p]).expandByScalar(0.3)); hovHelper.visible = true; }
+      else hovHelper.visible = false;
+    } else {
+      renderer.domElement.style.cursor = '';
+      tip.hidden = true; pcHelper.visible = false; hovHelper.visible = false;
+    }
+  });
+  renderer.domElement.addEventListener('pointerleave', function () { tip.hidden = true; pcHelper.visible = false; hovHelper.visible = false; });
+
+  // ---------- Detailseiten: Klick auf einen Bildschirminhalt ----------
+  // graph = Wissensgraph/Home-Übersicht (34"), globe = Weltkugel (27" oben), anom = Entropie und alle Anomalien (hochkant).
+  // Texturkoordinate des 34" -> Graph-Karte. Die Textur ist gespiegelt (repeat.x = -1), daher 1 - u.
+  function mainRegionAt(uv) {
+    if (!uv) return null;
+    var px = (1 - uv.x) * MAIN_W, py = (1 - uv.y) * MAIN_H;
+    for (var id in MAIN_REGIONS) { var r = MAIN_REGIONS[id]; if (px >= r[0] && px <= r[0] + r[2] && py >= r[1] && py <= r[1] + r[3]) return id; }
+    return null;
+  }
+  var PAGE_TIP = { globe: 'Weltkugel & Verbindungen – öffnen', anom: 'Entropie & alle Anomalien – öffnen' };
+  var gpage = document.getElementById('gpage'), gcv = document.getElementById('gcanvas'), ginfo = document.getElementById('ginfo');
+  var apage = document.getElementById('apage'), echart = document.getElementById('echart'), alist = document.getElementById('alist');
+  var pg = { kind: null };
+  function openPage(kind, arg) {
+    pg = { kind: kind, id: arg, d: arg ? GRAPH_DEF[arg].d : null, yaw: 0.6, pitch: 0.35, zoom: 1, hover: -1, sel: -1, group: -1,
+      filter: 'ALLE', drag: null, P: [], hits: [], phase: 0,
+      // Kamera wie GlobeCamera::centered_on(Zuhause): yaw = Länge, pitch = -Breite
+      cam: { yaw: NET.home.lon * DEG, pitch: Math.max(-1.3, Math.min(1.3, -NET.home.lat * DEG)), zoom: 1, vy: 0, vp: 0, idle: performance.now() } };
+    pg.cam.y0 = pg.cam.yaw; pg.cam.p0 = pg.cam.pitch;
+    gpage.hidden = false; tip.hidden = true;
+    gcv.hidden = kind === 'anom'; apage.hidden = kind !== 'anom';
+    setNav(kind);
+    document.getElementById('gcrumb').textContent = 'Schreibtisch › ' + (kind === 'graph' ? '34" › ' + GRAPH_DEF[arg].title : kind === 'globe' ? '27" oben › Verbindungen' : '27" hochkant › Anomalien');
+    if (kind === 'anom') renderAnomList();
+    showInfo(); drawPage();
+    document.getElementById('gback').focus();
+  }
+  function closePage() { gpage.hidden = true; pg = { kind: null }; setNav(null); requestRender(); }
+  // Tabs oben rechts als Schnellzugriff auf dieselben Seiten wie die Bildschirme
+  var NAV = { werkbank: null, graphen: 'graph', anomalien: 'anom', netzwerk: 'globe' };
+  function setNav(kind) {
+    document.querySelectorAll('nav a').forEach(function (a) {
+      var on = NAV[a.getAttribute('href').slice(1)] === kind;
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+  }
+  document.querySelectorAll('nav a').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      e.preventDefault();
+      var kind = NAV[a.getAttribute('href').slice(1)];
+      if (!kind) { if (pg.kind) closePage(); if (view !== 'desk') leavePc(); return; }
+      if (pg.kind !== kind) openPage(kind, kind === 'graph' ? 'kg' : undefined);
+    });
+  });
+  document.getElementById('gback').addEventListener('click', closePage);
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pg.kind) closePage(); });
+  liveListeners.push(function () { if (pg.kind === 'anom') drawPage(); });
+  anomListeners.push(function () { if (pg.kind === 'anom') { renderAnomList(); if (pg.sel < 0) showInfo(); } });
+
+  function sizeCanvas(cv) {
+    var dpr = Math.min(2, window.devicePixelRatio || 1), w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+    var x = cv.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return { x: x, w: w, h: h, side: w > 760 ? 360 : 0 };  // side: Platz für die Infokarte rechts
+  }
+  function drawPage() {
+    if (!pg.kind) return;
+    if (pg.kind === 'anom') {
+      var e = sizeCanvas(echart); e.x.fillStyle = '#03060A'; e.x.fillRect(0, 0, e.w, e.h);
+      drawEntropy(e.x, 44, 12, e.w - 14, e.h - 10, ENTROPY_MAX, 2.5, 11);
+      document.getElementById('ecur').textContent = fmtNum(LIVE.entropy[LIVE.entropy.length - 1] || 0, 2) + ' bit';
+      document.getElementById('emeta').textContent = (LIVE.on ? 'live vom Daemon · z = ' + fmtNum(LIVE.z, 2) + ' · ' + LIVE.events + ' Ereignisse im 60-s-Fenster' : 'Beispielwerte') + ' · letzte 5 min';
+      return;
+    }
+    var c = sizeCanvas(gcv), x = c.x, cx = (c.w - c.side) / 2, cy = c.h / 2, size = Math.min(c.w - c.side, c.h);
+    x.fillStyle = '#03060A'; x.fillRect(0, 0, c.w, c.h);
+    if (pg.kind === 'globe') { drawGuiGlobe(x, { w: c.w - c.side - (c.side ? 12 : 0), h: c.h }); return; }
+    var d = pg.d;
+    if (pg.group < 0) {
+      pg.P = project(d.gpos, pg.yaw, pg.pitch, cx, cy, size * 0.36 * pg.zoom);
+      drawHubs(x, d, pg.P, { focus: pg.hover, r: 30, lw: 1.5, font: 13 });
+    } else {
+      var pts = []; d.members[pg.group].forEach(function (i) { pts[i] = d.lpos[i]; });
+      pg.P = project(pts, pg.yaw, pg.pitch, cx, cy, size * 0.38 * pg.zoom);
+      drawMembers(x, d, pg.group, pg.P, { focus: pg.sel >= 0 ? pg.sel : pg.hover, r: 4, lw: 1, font: 12 });
+    }
+  }
+  new ResizeObserver(drawPage).observe(gpage);
+  // Was liegt unter dem Zeiger? Graph-Übersicht: Gruppe, aufgefächert: Knoten, Weltkugel: Verbindung
+  function itemAt(e) {
+    var r = gcv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top, best = -1, bd = 14 * 14;
+    if (pg.kind === 'globe') { pg.hits.forEach(function (h) { var dd = (h[0] - mx) * (h[0] - mx) + (h[1] - my) * (h[1] - my); if (dd < bd) { bd = dd; best = h[2]; } }); return best; }
+    pg.P.forEach(function (p, i) {
+      if (!p) return;
+      var rr = pg.group < 0 ? hubRadius(pg.d, i, 30, p[3]) : 10, dd = (p[0] - mx) * (p[0] - mx) + (p[1] - my) * (p[1] - my);
+      if (dd < Math.max(bd, rr * rr) && (best < 0 || dd < bd)) { bd = dd; best = i; }
+    });
+    return best;
+  }
+  gcv.addEventListener('pointerdown', function (e) {
+    pg.drag = [e.clientX, e.clientY, 0]; gcv.setPointerCapture(e.pointerId);
+    if (pg.cam) { pg.cam.vy = pg.cam.vp = 0; pg.cam.idle = performance.now(); }
+  });
+  gcv.addEventListener('pointermove', function (e) {
+    if (pg.drag) {
+      var dx = e.clientX - pg.drag[0], dy = e.clientY - pg.drag[1];
+      pg.drag[2] += Math.abs(dx) + Math.abs(dy); pg.drag[0] = e.clientX; pg.drag[1] = e.clientY;
+      if (pg.kind === 'globe') {  // wie GlobeCamera::apply_drag (0,3 °/px, invertiert, Pol-Sperre)
+        var cam = pg.cam, now = performance.now(), dts = Math.max(0.008, (now - cam.idle) / 1000);
+        cam.yaw -= dx * 0.3 * DEG; cam.pitch = Math.max(-1.3, Math.min(1.3, cam.pitch - dy * 0.3 * DEG));
+        cam.vy = -dx * 0.3 * DEG / dts; cam.vp = -dy * 0.3 * DEG / dts; cam.idle = now;
+      }
+      else { pg.yaw += dx * 0.008; pg.pitch = Math.max(-1.4, Math.min(1.4, pg.pitch + dy * 0.008)); }
+      gcv.style.cursor = 'grabbing'; drawPage(); return;
+    }
+    var n = itemAt(e);
+    gcv.style.cursor = n !== -1 ? 'pointer' : 'grab';
+    if (n !== pg.hover) { pg.hover = n; drawPage(); }
+  });
+  gcv.addEventListener('pointerup', function (e) {
+    var moved = pg.drag ? pg.drag[2] : 0; pg.drag = null; gcv.style.cursor = 'grab';
+    if (moved > 5) return;
+    var n = itemAt(e);
+    if (pg.kind === 'graph' && pg.group < 0) { if (n >= 0) openGroup(n); return; }
+    if (pg.kind === 'graph' && n < 0 && pg.sel < 0) { openGroup(-1); return; }  // Klick ins Leere: zurück zur Übersicht
+    pg.sel = n; pg.hover = -1; showInfo(); drawPage();
+  });
+  gcv.addEventListener('wheel', function (e) {
+    if (pg.kind !== 'globe') return;
+    pg.cam.zoom = Math.max(0.5, Math.min(4, pg.cam.zoom - e.deltaY * 0.005)); pg.cam.idle = performance.now(); drawPage();  // MIN/MAX_ZOOM wie globe.rs
+  }, { passive: false });
+  // Weltkugel-Seite: wandernder Lichtpunkt, Puls am Zuhause, Nachdrehen und Rückkehr zur Ursprungsansicht nach 4 s
+  // (REPAINT_INTERVAL 120 ms wie die GUI; läuft nur, solange die Seite offen ist)
+  var globeLast = performance.now();
+  setInterval(function () {
+    var now = performance.now(), dt = Math.min(0.5, (now - globeLast) / 1000); globeLast = now;
+    if (pg.kind !== 'globe' || document.hidden || pg.drag) return;
+    var cam = pg.cam;
+    pg.phase = (pg.phase + dt * 1.4) % (2 * Math.PI);
+    if (Math.abs(cam.vy) > DEG || Math.abs(cam.vp) > DEG) {
+      cam.yaw += cam.vy * dt; cam.pitch = Math.max(-1.3, Math.min(1.3, cam.pitch + cam.vp * dt));
+      var decay = Math.exp(-2.2 * dt); cam.vy *= decay; cam.vp *= decay; cam.idle = now;
+    } else if ((now - cam.idle) / 1000 >= 4) {
+      var t = 1 - Math.exp(-3 * dt), dy = ((cam.y0 - cam.yaw) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+      cam.yaw += dy * t; cam.pitch += (cam.p0 - cam.pitch) * t;
+    }
+    drawPage();
+  }, 120);
+  gcv.addEventListener('wheel', function (e) { e.preventDefault(); if (pg.kind === 'globe') return; pg.zoom = Math.max(0.4, Math.min(6, pg.zoom * Math.exp(-e.deltaY * 0.0015))); drawPage(); }, { passive: false });
+  function openGroup(g) { pg.group = g; pg.sel = -1; pg.hover = -1; pg.zoom = 1; showInfo(); drawPage(); }
+  function selectNode(i) { pg.group = pg.d.nodes[i][1]; pg.sel = i; showInfo(); drawPage(); }
+
+  // Infokarte rechts: Inhalt je nach Seite und Auswahl
+  function li(ul, color, text, onClick) {
+    var item = document.createElement('li'), dot = document.createElement('i'); dot.style.background = color; item.appendChild(dot);
+    var t = document.createElement(onClick ? 'button' : 'span'); t.textContent = text;
+    if (onClick) { t.type = 'button'; t.addEventListener('click', onClick); }
+    item.appendChild(t); ul.appendChild(item);
+  }
+  function infoRows(rows) {
+    var dl = el('div', 'kv');
+    rows.forEach(function (r) { dl.appendChild(el('span', null, r[0])); dl.appendChild(el('b', null, r[1])); });
+    return dl;
+  }
+  function backLink(text, fn) { var b = el('button', 'glink', '‹ ' + text); b.type = 'button'; b.addEventListener('click', fn); return b; }
+  function showInfo() {
+    ginfo.textContent = '';
+    var help = el('div', 'm'), ul = el('ul');
+    if (pg.kind === 'graph') {
+      var def = GRAPH_DEF[pg.id], d = pg.d;
+      if (pg.group < 0) {
+        var other = pg.id === 'kg' ? 'home' : 'kg';
+        ginfo.append(backLink(GRAPH_DEF[other].title + ' öffnen', function () { openPage('graph', other); }));
+        ginfo.lastChild.textContent = GRAPH_DEF[other].title + ' öffnen ›';
+        ginfo.append(el('h3', null, def.title), el('div', 'm', d.groups.length + ' Gruppen · ' + d.nodes.length + ' Knoten · ' + d.links.length + ' Kanten · ' + (d.sample ? 'Beispieldaten – echte Daten zeigt das Programm (just werkbank)' : def.src)));
+        d.members.map(function (m, g) { return g; }).sort(function (a, b) { return d.members[b].length - d.members[a].length; })
+          .forEach(function (g) { li(ul, holoColor(g), d.groups[g] + ' (' + d.members[g].length + ')', function () { openGroup(g); }); });
+        help.textContent = 'Jeder große Punkt ist eine Gruppe, die Linienstärke zeigt, wie viele Kanten zwei Gruppen verbinden (grün sicher, orange vermutet). Klick auf eine Gruppe zeigt ihre Knoten. Ziehen dreht, Mausrad zoomt, Esc führt zurück.';
+      } else if (pg.sel < 0) {
+        var g = pg.group;
+        ginfo.append(backLink('Alle Gruppen', function () { openGroup(-1); }), el('h3', null, d.groups[g]), el('div', 'm', d.members[g].length + ' Knoten'));
+        d.members[g].slice(0, 60).forEach(function (i) { li(ul, holoColor(g), d.nodes[i][0] + ' (' + d.adj[i].length + ')', function () { selectNode(i); }); });
+        var linked = d.gedges.filter(function (e) { return e[0] === g || e[1] === g; }).sort(function (a, b) { return b[2] - a[2]; });
+        if (linked.length) {
+          var ul2 = el('ul');
+          linked.forEach(function (e) { var o = e[0] === g ? e[1] : e[0]; li(ul2, holoColor(o), d.groups[o] + ' · ' + e[2] + ' Kanten', function () { openGroup(o); }); });
+          ginfo.append(ul, el('div', 'm', 'Verbunden mit'), ul2); ul = null;
+        }
+        help.textContent = 'Klick auf einen Knoten zeigt seine Nachbarn, Klick ins Leere führt zur Übersicht.';
+      } else {
+        var n = d.nodes[pg.sel];
+        ginfo.append(backLink(d.groups[n[1]], function () { openGroup(n[1]); }), el('h3', null, n[0]), el('div', 'm', d.groups[n[1]] + ' · ' + d.adj[pg.sel].length + ' Verbindungen'));
+        d.adj[pg.sel].slice(0, 40).forEach(function (j) {
+          var other = d.nodes[j][1] !== n[1];
+          li(ul, holoColor(d.nodes[j][1]), d.nodes[j][0] + (other ? ' · ' + d.groups[d.nodes[j][1]] : ''), function () { selectNode(j); });
+        });
+        help.textContent = 'Nachbarn aus anderen Gruppen tragen den Gruppennamen; ein Klick springt dorthin.';
+      }
+    } else if (pg.kind === 'globe') {
+      // Texte wie im Netzwerk-Tab der GUI (Zusammenfassung, dann "Programm → zu Server: IP in Ort" mit Route)
+      if (NET.error) ginfo.appendChild(el('div', 'warn', NET.error));
+      if (NET.offline) ginfo.appendChild(el('div', 'warn', 'Router nicht erreichbar -- Verbindungen ausgeblendet'));
+      var pts = NET.offline ? [] : NET.points.slice().sort(function (a, b) { return a === pg.sel ? -1 : b === pg.sel ? 1 : 0; });
+      ginfo.append(el('h3', null, pts.length + ' aktive Verbindung(en)' + (NET.unresolved ? ', ' + NET.unresolved + ' ohne Kartenposition' : '')),
+        el('div', 'm', NET.live ? 'live, dieselben Daten wie der Netzwerk-Tab' : 'Beispielwerte – echte Daten zeigt das Programm (just werkbank)'));
+      netPlaces().forEach(function (c) { li(ul, GUI_MAP.accent, c.place + ' · ' + c.n); });
+      ginfo.append(el('div', 'm', 'Endstandorte'), ul); ul = null;
+      pts.forEach(function (p) {
+        var row = el('div', 'conn' + (p === pg.sel ? ' on' : ''), (p.program || 'Unbekanntes Programm') + ' → zu Server: ' + p.ip + ' in ' + p.detail);
+        ginfo.appendChild(row);
+        (p.route || []).forEach(function (h, i) { ginfo.appendChild(el('div', 'hop', (i + 1) + '. ' + h.text)); });
+      });
+      help.textContent = 'Ziehen dreht die Kugel, Mausrad zoomt (ab 1,6-fach mit Länderkürzeln), Klick auf einen Zielpunkt stellt seine Verbindung nach oben. Esc führt zurück.';
+    } else if (pg.kind === 'anom') {
+      if (pg.sel < 0) {
+        var hour = anomsLastHour(), cnt = { CRIT: 0, WARN: 0, INFO: 0 };
+        anoms.forEach(function (a) { cnt[a.level]++; });
+        ginfo.append(el('h3', null, anoms.length + ' Anomalien'), el('div', 'm', hour.length + ' in den letzten 60 min · ' + (LIVE.on ? 'live vom Daemon' : 'Beispielwerte')));
+        ['CRIT', 'WARN', 'INFO'].forEach(function (l) { li(ul, LEVEL[l], l + ': ' + cnt[l], function () { setFilter(l); }); });
+        help.textContent = 'Klick auf eine Zeile zeigt die Details. Esc führt zurück.';
+      } else {
+        var a = anoms.filter(function (q) { return q.id === pg.sel; })[0];
+        if (!a) { pg.sel = -1; showInfo(); return; }
+        var pre = el('pre', 'msg', a.msg);
+        ginfo.append(backLink('Übersicht', function () { pg.sel = -1; renderAnomList(); showInfo(); }), el('h3', null, a.level + ' · ' + a.unit),
+          infoRows([['Zeit', new Date(a.ts).toLocaleString('de-DE')], ['Score', fmtNum(a.score, 2)], ['Nr.', String(a.id)]]),
+          el('div', 'm', 'Template'), el('pre', 'msg', a.tpl), el('div', 'm', 'Auslösende Zeile'), pre);
+        ul = null; help.textContent = 'Aktionen (stummschalten, Unit neu starten) bleiben in der GUI mit Bestätigung (Regel 12).';
+      }
+    }
+    if (ul) ginfo.appendChild(ul);
+    ginfo.appendChild(help);
+  }
+  function setFilter(l) { pg.filter = l; renderAnomList(); }
+  // Vollständige Anomalie-Liste mit Filter nach Stufe
+  function renderAnomList() {
+    var bar = document.getElementById('afilter'); bar.textContent = '';
+    ['ALLE', 'CRIT', 'WARN', 'INFO'].forEach(function (l) {
+      var n = l === 'ALLE' ? anoms.length : anoms.filter(function (a) { return a.level === l; }).length;
+      var b = el('button', 'btn', (l === 'ALLE' ? 'Alle' : l) + ' (' + n + ')'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(pg.filter === l)); b.addEventListener('click', function () { setFilter(l); });
+      bar.appendChild(b);
+    });
+    alist.textContent = '';
+    var rows = anoms.filter(function (a) { return pg.filter === 'ALLE' || a.level === pg.filter; });
+    if (!rows.length) alist.appendChild(el('div', 'm', 'Keine Anomalien.'));
+    rows.forEach(function (a) {
+      var r = el('button', 'arow' + (a.id === pg.sel ? ' on' : '')); r.type = 'button';
+      var lv = el('b', 'lv', a.level); lv.style.color = LEVEL[a.level]; lv.style.borderColor = LEVEL[a.level];
+      r.append(lv, el('span', 't', fmtTime(a.ts)), el('span', 'u', a.unit), el('span', 's', fmtNum(a.score, 2)), el('span', 'p', a.tpl));
+      r.querySelector('.s').style.color = LEVEL[a.level];
+      r.addEventListener('click', function () { pg.sel = a.id; renderAnomList(); showInfo(); });
+      alist.appendChild(r);
+    });
+  }
+  // Kopfzeile und Seitenleiste folgen den Live-Anomalien
+  function updateAnomKpi() {
+    var k = document.getElementById('kpiAnom'), hour = anomsLastHour();
+    k.querySelector('.v').textContent = String(hour.length);
+    k.querySelector('.s').textContent = 'davon ' + hour.filter(function (a) { return a.level === 'CRIT'; }).length + ' kritisch';
+  }
+  anomListeners.push(updateAnomKpi, function () { if (view === 'desk') renderPanel(); });
+  updateAnomKpi();
+  if (view === 'desk') renderPanel();  // beim ersten Aufbau standen die Anomalien noch nicht fest
+
+  // ---------- Schleife ----------
+  function resize() {
+    var w = stage.clientWidth, h = stage.clientHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.fov = w < 640 ? 58 : 40;
+    camera.updateProjectionMatrix();
+    requestRender();
+  }
+  new ResizeObserver(resize).observe(stage);
+  resize();
+
+  // Gezeichnet wird nur, solange sich etwas bewegt (Lüfter an, Kamerafahrt, Nachlauf der Maussteuerung);
+  // jede Bedienung stößt über requestRender wieder einen Frame an.
+  var last = performance.now(), rafId = 0;
+  function requestRender() { if (!rafId) rafId = requestAnimationFrame(frame); }
+  ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'click', 'keydown'].forEach(function (ev) { document.addEventListener(ev, requestRender, { passive: true }); });
+  themeListeners.push(requestRender);
+  function frame(now) {
+    rafId = 0;
+    if (!renderer || !gpage.hidden) return;
+    var dt = Math.min(0.05, (now - last) / 1000); last = now;
+    var moving = !!tween;
+    if (tween) {
+      var k = Math.min(1, (now - tween.start) / tween.dur);
+      var e = k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+      camera.position.lerpVectors(tween.p0, tween.p1, e);
+      controls.target.lerpVectors(tween.t0, tween.t1, e);
+      if (k >= 1) tween = null;
+    }
+    if (animateFans) spinning.forEach(function (s) { s.obj.rotation.z += s.speed * dt * 6; });
+    if (controls.update()) moving = true;
+    renderer.render(scene, camera);
+    if (animateFans || moving) requestRender();
+  }
+  requestRender();
+})();
+</script>
+</body>
+</html>
