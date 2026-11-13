@@ -207,7 +207,9 @@ Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
 
 - [x] Klickbarer Browser-Prototyp `prototypes/werkbank-3d/` (three.js 0.147
       mitgeliefert, offline, feste Messwerte), Start mit `just werkbank-vorschau`
-- [ ] Prototyp auf dem Desktop testen (Darstellung, Flüssigkeit, CPU-Last)
+- [x] Prototyp auf dem Desktop testen (Darstellung, Flüssigkeit, CPU-Last);
+      läuft als eigenes Programm (`just werkbank`, GTK + WebKitGTK), Leerlauf
+      mit Live-Daten ≈ 2,3 % eines Kerns
 - [ ] Protokoll erweitern (optionale Felder, rückwärtskompatibel): GPU über
       `amdgpu`-hwmon (edge/junction/mem, Lüfter, Leistung, VRAM),
       Lüfterdrehzahlen (`fan*_input`), CPU-Takt, Top-N-Prozesse mit fester
@@ -216,7 +218,10 @@ Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
       `egui_wgpu`-Callback mit echtem 3D – Abhängigkeit begründen (Abschnitt 3);
       Neuzeichnen nur bei Interaktion/Änderung (Regel 20, Idle < 2 %)
 - [ ] Graphen-Tab mit gemeinsamer Zeitachse
-- [ ] Inhalte der drei Monitore überarbeiten (Vorgaben folgen vom Nutzer)
+- [x] Inhalte der drei Monitore überarbeiten: 34" Wissensgraph + Home-Übersicht,
+      27" Weltkugel (Daten per `logsentry-gui --netzkarte-json`), hochkant
+      Entropie + Anzahl je Stufe; Klick öffnet jeweils eine Detailseite statt
+      eigener Tabs; Entropie, Anomalien und Systemwerte live vom Daemon
 
 ## 6a. Hardware des Desktop-Rechners
 

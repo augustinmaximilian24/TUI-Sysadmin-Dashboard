@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=logsentry Werkbank
+Comment=3D-Arbeitsplatz mit PC-Werten (Prototyp)
+Exec=python3 @WERKBANK_DIR@/werkbank.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=true
+StartupWMClass=logsentry-werkbank
