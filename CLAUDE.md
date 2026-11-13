@@ -216,11 +216,12 @@ Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
       `egui_wgpu`-Callback mit echtem 3D – Abhängigkeit begründen (Abschnitt 3);
       Neuzeichnen nur bei Interaktion/Änderung (Regel 20, Idle < 2 %)
 - [ ] Graphen-Tab mit gemeinsamer Zeitachse
+- [ ] Inhalte der drei Monitore überarbeiten (Vorgaben folgen vom Nutzer)
 
 ## 6a. Hardware des Desktop-Rechners
 
 Ryzen 5 7600X · Arctic Freezer 34 eSports DUO · MSI B650 GAMING PLUS WIFI ·
-32 GB DDR5-6000 Kingston FURY Beast · **ASUS Radeon RX 9070 XT OC** (nicht mehr
+32 GB DDR5-6000 Kingston FURY Beast · **ASUS Prime Radeon RX 9070 XT OC** (nicht mehr
 die RTX 4060 Ti) · Lexar NM790 2 TB · Gigabyte UD750GM · Gehäuse Systemtreff
 Plexus-ST-801 (Zweikammer, Glasfront, 3 Lüfter Boden + 3 Deckel, golden).
 Monitore: 34" Curved unten mittig, 27" darüber, 27" hochkant rechts.

@@ -124,7 +124,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
   <section class="kpis" aria-label="Wichtigste Werte">
     <div class="kpi"><div class="l">CPU-Last</div><div class="v">1 %</div><div class="s">Load 0,49</div></div>
     <div class="kpi"><div class="l">CPU-Temperatur</div><div class="v">50,4 °C</div><div class="s">Ryzen 5 7600X · Tctl</div></div>
-    <div class="kpi pending"><div class="l">Grafikkarte</div><div class="v">– °C</div><div class="s">ASUS RX 9070 XT · noch nicht erfasst</div></div>
+    <div class="kpi pending"><div class="l">Grafikkarte</div><div class="v">– °C</div><div class="s">ASUS Prime RX 9070 XT · noch nicht erfasst</div></div>
     <div class="kpi"><div class="l">Arbeitsspeicher</div><div class="v">21 %</div><div class="s">≈ 6,7 von 32 GB · 34,2 °C</div></div>
     <div class="kpi"><div class="l">SSD</div><div class="v">33,8 °C</div><div class="s">Lexar NM790 · / zu 47 % belegt</div></div>
     <div class="kpi"><div class="l">Netzwerk</div><div class="v">40,0 °C</div><div class="s">LAN und WLAN</div></div>
@@ -165,7 +165,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       src: 'k10temp, sysinfo; Lüfter über Mainboard-hwmon',
       procs: [['firefox', '0,9 %'], ['cinnamon', '0,6 %'], ['logsentry', '0,4 %']],
       anom: ['WARN', '<*> Consumed <*> CPU time, <*> memory peak, 0B memory swap peak.'] },
-    gpu: { name: 'Grafikkarte', model: 'ASUS Radeon RX 9070 XT OC · 16 GB GDDR6',
+    gpu: { name: 'Grafikkarte', model: 'ASUS Prime Radeon RX 9070 XT OC · 16 GB GDDR6',
       rows: [['Temperatur (Edge)', '– °C', 1], ['Hotspot (Junction)', '– °C', 1], ['Speicher', '– °C', 1], ['Lüfter', '– U/min', 1], ['Leistungsaufnahme', '– W', 1], ['Grafikspeicher belegt', '– GB', 1]],
       src: 'amdgpu-Treiber (hwmon) – unter Linux ohne Zusatzsoftware lesbar, noch nicht im Snapshot',
       procs: [['cinnamon', '–'], ['steam', '–']], anom: null },
@@ -736,13 +736,16 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
   });
   tag(ram, 'ram');
 
-  // ASUS Radeon RX 9070 XT OC: Dreifach-Lüfter nach unten, Backplate oben
+  // ASUS Prime Radeon RX 9070 XT OC: schwarz mit silbernen Akzenten, Dreifach-Lüfter nach unten, Backplate oben
   var gpu = new THREE.Group(); pc.add(gpu);
   var GX = BX - 7.0;
-  gpu.add(at(rbox(13, 4.8, 30.4, 0.6, M('#1A1C20', 0.42, 0.35)), GX, 20.0, -4.4));
-  gpu.add(at(rbox(12.8, 0.5, 30.2, 0.2, M('#24272C', 0.35, 0.6)), GX, 22.7, -4.4));
+  gpu.add(at(rbox(13, 4.8, 30.4, 0.6, M('#111214', 0.45, 0.3)), GX, 20.0, -4.4));
+  gpu.add(at(rbox(12.8, 0.5, 30.2, 0.2, M('#1C1E22', 0.3, 0.7)), GX, 22.7, -4.4));
   gpu.add(at(box(0.12, 0.16, 30, M('#B9BFC7', 0.25, 0.9)), GX - 6.55, 21.3, -4.4));
-  gpu.add(at(box(0.12, 0.5, 9, M('#E9EDF3', 0.4, 0, { emissive: new THREE.Color('#FFFFFF'), emissiveIntensity: 0.7 })), GX - 6.55, 19.8, 2.5));
+  var primeSilver = M('#C3C8CF', 0.22, 0.95);
+  gpu.add(at(box(0.12, 0.28, 13, primeSilver), GX - 6.55, 19.2, 4.0));
+  gpu.add(at(box(0.12, 0.28, 7, primeSilver), GX - 6.55, 18.5, -13.5));
+  gpu.add(at(box(12.6, 0.08, 0.3, primeSilver), GX, 23.0, -16.0));
   gpu.add(at(box(12.4, 6, 0.25, M('#B9BFC7', 0.3, 0.9)), GX + 0.2, 20.4, -19.8));
   gpu.add(at(box(1.0, 1.6, 4.6, M('#121316', 0.6)), GX - 5.6, 23.2, 2.0));
   [-14.6, -4.4, 5.8].forEach(function (z) {
