@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Öffnet den Werkbank-Prototyp als eigenes Programmfenster (GTK 3 + WebKitGTK 4.1) statt im Browser."""
+import hashlib
 import json
 import re
 import socket
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -182,21 +184,27 @@ def daemon_bridge():
         time.sleep(5)
 
 
-# Router an der Wand: Ereignisprotokoll, Verbindungsstatus und Geräteliste der Fritz!Box über TR-064 (nur lesende
-# Aktionen, Digest-Login mit eigenem Benutzer). Zugangsdaten liegen außerhalb des Repos in FRITZ_CRED.
+# Router an der Wand: Verbindungsstatus und Geräteliste der Fritz!Box über TR-064 (nur lesende Aktionen, Digest-Login
+# mit eigenem Benutzer). Das Ereignisprotokoll kommt aus der Weboberfläche (data.lua, Filter „Alle"), weil TR-064
+# (GetDeviceLog) nur einen Teil liefert: ohne System-Meldungen wie die der Powerline-Adapter. Zugangsdaten liegen
+# außerhalb des Repos in FRITZ_CRED.
 FRITZ = "http://fritz.box:49000"
+FRITZ_WEB = "http://fritz.box"
 FRITZ_CRED = Path("~/.config/fritzbox-cred").expanduser()
 FRITZ_INTERVAL = 30
 # Meldungen, die auf eine Störung hindeuten. Die nächtliche Zwangstrennung („getrennt") gilt bewusst nicht als Problem.
 PROBLEM = re.compile(r"antwortet nicht|Zeitüberschreitung|unzulässige Verkabelung|fehlgeschlagen|Fehler|Störung|gestört"
                      r"|nicht erreichbar|ungültig|abgelehnt|Überlast", re.IGNORECASE)
-LOG_LINE = re.compile(r"(\d\d)\.(\d\d)\.(\d\d) (\d\d):(\d\d):(\d\d) (.*)")
+
+
+def fritz_cred():
+    cred = dict(l.split("=", 1) for l in FRITZ_CRED.read_text(encoding="utf-8").splitlines() if "=" in l)
+    return cred["FRITZ_USERNAME"].strip(), cred["FRITZ_PASSWORD"].strip()
 
 
 def fritz_opener():
-    cred = dict(l.split("=", 1) for l in FRITZ_CRED.read_text(encoding="utf-8").splitlines() if "=" in l)
     pm = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-    pm.add_password(None, FRITZ, cred["FRITZ_USERNAME"].strip(), cred["FRITZ_PASSWORD"].strip())
+    pm.add_password(None, FRITZ, *fritz_cred())
     return urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(pm))
 
 
@@ -211,21 +219,55 @@ def tr064(op, control, service, action):
         return {e.tag: e.text for e in ET.fromstring(r.read()).iter() if e.tag.startswith("New")}
 
 
-def parse_log(text):
-    """Protokollzeilen „TT.MM.JJ hh:mm:ss Text" -> [Zeit ms, Text, Problem?], neueste zuerst wie in der Box."""
+def web_login():
+    """Anmeldung an der Weboberfläche (login_sid.lua, PBKDF2-Verfahren ab FRITZ!OS 7.24); liefert die Sitzungs-ID."""
+    user, pw = fritz_cred()
+    url = FRITZ_WEB + "/login_sid.lua?version=2"
+    with urllib.request.urlopen(url, timeout=10) as r:
+        challenge = ET.fromstring(r.read()).findtext("Challenge") or ""
+    if not challenge.startswith("2$"):
+        raise ValueError("Fritz!Box bietet kein PBKDF2-Login an")
+    _, it1, salt1, it2, salt2 = challenge.split("$")
+    h1 = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt1), int(it1))
+    response = salt2 + "$" + hashlib.pbkdf2_hmac("sha256", h1, bytes.fromhex(salt2), int(it2)).hex()
+    with urllib.request.urlopen(url, urllib.parse.urlencode({"username": user, "response": response}).encode(),
+                                timeout=10) as r:
+        sid = ET.fromstring(r.read()).findtext("SID")
+    if not sid or sid == "0" * 16:
+        raise ValueError("Anmeldung an der Fritz!Box abgelehnt")
+    return sid
+
+
+web_sid = None  # Sitzung wird weiterverwendet, sonst stünde alle 30 s eine neue Anmeldung im Protokoll der Box
+
+
+def fritz_log():
+    """Ereignisprotokoll (Filter „Alle") -> [Zeit ms, Text, Problem?, Gruppe], neueste zuerst wie in der Box."""
+    global web_sid
+    for _ in range(2):
+        web_sid = web_sid or web_login()
+        form = urllib.parse.urlencode({"sid": web_sid, "page": "log", "lang": "de", "filter": "all", "xhr": 1})
+        with urllib.request.urlopen(FRITZ_WEB + "/data.lua", form.encode(), timeout=15) as r:
+            body = r.read()
+        try:
+            entries = json.loads(body)["data"]["log"]
+            break
+        except (ValueError, KeyError, TypeError):
+            web_sid = None  # Sitzung abgelaufen: einmal neu anmelden
+    else:
+        raise ValueError("Ereignisprotokoll der Fritz!Box nicht lesbar")
     out = []
-    for line in (text or "").splitlines():
-        m = LOG_LINE.match(line)
-        if m:
-            d, mo, y, h, mi, s, msg = m.groups()
-            ts = time.mktime((2000 + int(y), int(mo), int(d), int(h), int(mi), int(s), 0, 0, -1))
-            out.append([int(ts * 1000), msg.strip(), bool(PROBLEM.search(msg))])
+    for e in entries:
+        d, mo, y = (int(v) for v in e["date"].split("."))
+        h, mi, s = (int(v) for v in e["time"].split(":"))
+        ts = time.mktime((2000 + y, mo, d, h, mi, s, 0, 0, -1))
+        msg = str(e.get("msg", "")).strip()
+        out.append([int(ts * 1000), msg, bool(PROBLEM.search(msg)), e.get("group") or ""])
     return out
 
 
 def fritz_snapshot(op):
-    log = parse_log(tr064(op, "/upnp/control/deviceinfo", "urn:dslforum-org:service:DeviceInfo:1",
-                          "GetDeviceLog")["NewDeviceLog"])
+    log = fritz_log()
     st = tr064(op, "/upnp/control/wanpppconn1", "urn:dslforum-org:service:WANPPPConnection:1", "GetStatusInfo")
     path = tr064(op, "/upnp/control/hosts", "urn:dslforum-org:service:Hosts:1",
                  "X_AVM-DE_GetHostListPath")["NewX_AVM-DE_HostListPath"]
@@ -238,6 +280,7 @@ def fritz_snapshot(op):
 
 
 def fritz_bridge():
+    global web_sid
     while True:
         try:
             push({"t": "fritz", "d": fritz_snapshot(fritz_opener())})
@@ -245,6 +288,9 @@ def fritz_bridge():
             push({"t": "fritz", "d": {"err": f"Keine Zugangsdaten ({FRITZ_CRED})"}})
             return  # ohne Zugangsdaten bleibt der Router aus; kein Dauer-Neuversuch
         except (OSError, ValueError, KeyError, ET.ParseError) as e:  # urllib-Fehler sind OSError
+            # Sitzung verwerfen: nach einem Neustart der Box wäre sie ungültig, und eine ungültige Sitzungs-ID wertet
+            # die Box als gescheiterte Anmeldung und beendet alle Sitzungen dieser IP (auch die im Browser).
+            web_sid = None
             print(f"Fritz!Box nicht erreichbar: {e}", file=sys.stderr)
             push({"t": "fritz", "d": {"err": "Fritz!Box nicht erreichbar"}})
         time.sleep(FRITZ_INTERVAL)

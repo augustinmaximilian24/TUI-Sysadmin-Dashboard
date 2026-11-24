@@ -84,8 +84,13 @@ Detailseite in der Werkbank (statt eigener Tabs), Esc führt zurück:
   Verkabelung …) in den letzten 15 min; die nächtliche Zwangstrennung zählt
   nicht. Klick öffnet das Protokoll mit Filter „Probleme". Der Tab **Geräte** listet alle
   Geräte, die die Box kennt (aktiv/aus, IP, MAC, LAN/WLAN, Gastnetz).
-  `werkbank.py` fragt dafür alle 30 s per TR-064 nur lesend ab
-  (`GetDeviceLog`, `GetStatusInfo`, Geräteliste), mit Digest-Login aus
+  Das Protokoll ist vollständig wie in der Fritz!Box unter „Alle" (System,
+  Internet, WLAN, Telefonie, USB) und lässt sich nach Gruppe filtern; es
+  kommt aus der Weboberfläche (`data.lua`), weil TR-064 (`GetDeviceLog`) die
+  System-Meldungen, etwa die der Powerline-Adapter, weglässt. Die Sitzung
+  wird weiterverwendet, damit nicht alle 30 s eine Anmeldung im Protokoll
+  steht. Status und Geräteliste fragt `werkbank.py` alle 30 s per TR-064 nur
+  lesend ab (`GetStatusInfo`, Geräteliste), mit Digest-Login aus
   `~/.config/fritzbox-cred` (`FRITZ_USERNAME=…`, `FRITZ_PASSWORD=…`, Modus
   600, nie im Repo). Ohne die Datei bleibt das Display rot mit Hinweis.
 
