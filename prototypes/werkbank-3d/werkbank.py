@@ -7,6 +7,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import gi
@@ -180,11 +182,80 @@ def daemon_bridge():
         time.sleep(5)
 
 
+# Router an der Wand: Ereignisprotokoll, Verbindungsstatus und Geräteliste der Fritz!Box über TR-064 (nur lesende
+# Aktionen, Digest-Login mit eigenem Benutzer). Zugangsdaten liegen außerhalb des Repos in FRITZ_CRED.
+FRITZ = "http://fritz.box:49000"
+FRITZ_CRED = Path("~/.config/fritzbox-cred").expanduser()
+FRITZ_INTERVAL = 30
+# Meldungen, die auf eine Störung hindeuten. Die nächtliche Zwangstrennung („getrennt") gilt bewusst nicht als Problem.
+PROBLEM = re.compile(r"antwortet nicht|Zeitüberschreitung|unzulässige Verkabelung|fehlgeschlagen|Fehler|Störung|gestört"
+                     r"|nicht erreichbar|ungültig|abgelehnt|Überlast", re.IGNORECASE)
+LOG_LINE = re.compile(r"(\d\d)\.(\d\d)\.(\d\d) (\d\d):(\d\d):(\d\d) (.*)")
+
+
+def fritz_opener():
+    cred = dict(l.split("=", 1) for l in FRITZ_CRED.read_text(encoding="utf-8").splitlines() if "=" in l)
+    pm = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+    pm.add_password(None, FRITZ, cred["FRITZ_USERNAME"].strip(), cred["FRITZ_PASSWORD"].strip())
+    return urllib.request.build_opener(urllib.request.HTTPDigestAuthHandler(pm))
+
+
+def tr064(op, control, service, action):
+    """Eine TR-064-Aktion ohne Argumente; liefert die New*-Ausgabewerte."""
+    body = ('<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+            's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body>'
+            f'<u:{action} xmlns:u="{service}"/></s:Body></s:Envelope>')
+    req = urllib.request.Request(FRITZ + control, body.encode(), {
+        "Content-Type": 'text/xml; charset="utf-8"', "SOAPAction": f"{service}#{action}"})
+    with op.open(req, timeout=10) as r:
+        return {e.tag: e.text for e in ET.fromstring(r.read()).iter() if e.tag.startswith("New")}
+
+
+def parse_log(text):
+    """Protokollzeilen „TT.MM.JJ hh:mm:ss Text" -> [Zeit ms, Text, Problem?], neueste zuerst wie in der Box."""
+    out = []
+    for line in (text or "").splitlines():
+        m = LOG_LINE.match(line)
+        if m:
+            d, mo, y, h, mi, s, msg = m.groups()
+            ts = time.mktime((2000 + int(y), int(mo), int(d), int(h), int(mi), int(s), 0, 0, -1))
+            out.append([int(ts * 1000), msg.strip(), bool(PROBLEM.search(msg))])
+    return out
+
+
+def fritz_snapshot(op):
+    log = parse_log(tr064(op, "/upnp/control/deviceinfo", "urn:dslforum-org:service:DeviceInfo:1",
+                          "GetDeviceLog")["NewDeviceLog"])
+    st = tr064(op, "/upnp/control/wanpppconn1", "urn:dslforum-org:service:WANPPPConnection:1", "GetStatusInfo")
+    path = tr064(op, "/upnp/control/hosts", "urn:dslforum-org:service:Hosts:1",
+                 "X_AVM-DE_GetHostListPath")["NewX_AVM-DE_HostListPath"]
+    with op.open(FRITZ + path, timeout=10) as r:
+        items = ET.fromstring(r.read()).findall("Item")
+    hosts = [[i.findtext("HostName") or "–", i.findtext("IPAddress") or "", i.findtext("MACAddress") or "",
+              i.findtext("Active") == "1", i.findtext("InterfaceType") or "", i.findtext("X_AVM-DE_Guest") == "1",
+              int(i.findtext("X_AVM-DE_Speed") or 0)] for i in items]
+    return {"log": log, "conn": st.get("NewConnectionStatus"), "uptime": int(st.get("NewUptime") or 0), "hosts": hosts}
+
+
+def fritz_bridge():
+    while True:
+        try:
+            push({"t": "fritz", "d": fritz_snapshot(fritz_opener())})
+        except FileNotFoundError:
+            push({"t": "fritz", "d": {"err": f"Keine Zugangsdaten ({FRITZ_CRED})"}})
+            return  # ohne Zugangsdaten bleibt der Router aus; kein Dauer-Neuversuch
+        except (OSError, ValueError, KeyError, ET.ParseError) as e:  # urllib-Fehler sind OSError
+            print(f"Fritz!Box nicht erreichbar: {e}", file=sys.stderr)
+            push({"t": "fritz", "d": {"err": "Fritz!Box nicht erreichbar"}})
+        time.sleep(FRITZ_INTERVAL)
+
+
 def on_load(_view, event):
     if event == WebKit2.LoadEvent.FINISHED and not getattr(on_load, "started", False):
         on_load.started = True
         threading.Thread(target=daemon_bridge, daemon=True).start()
         threading.Thread(target=netmap_bridge, daemon=True).start()
+        threading.Thread(target=fritz_bridge, daemon=True).start()
 
 
 settings = WebKit2.Settings(

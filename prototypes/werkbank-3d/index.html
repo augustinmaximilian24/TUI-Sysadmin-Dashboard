@@ -141,6 +141,9 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
 .arow .s { font-family: var(--mono); font-weight: 700; }
 .arow .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .arow .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); color: #949AA3; }
+.lrow { grid-template-columns: 82px 132px 1fr; }
+.lrow.dev { grid-template-columns: 62px minmax(120px, 1fr) 120px 150px 50px; }
+.lrow .p { white-space: normal; }
 @media (max-width: 700px) { .arow { grid-template-columns: 54px 1fr 40px; } .arow .t, .arow .p { display: none; } }
 @media (max-width: 700px) { .hint { display: none; } .ginfo { top: auto; bottom: 12px; max-height: 40%; } }
 </style>
@@ -156,6 +159,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       <a href="#graphen">Graphen</a>
       <a href="#anomalien">Anomalien</a>
       <a href="#netzwerk">Netzwerk</a>
+      <a href="#geraete">Geräte</a>
     </nav>
     <button class="btn theme-btn" id="fanBtn" type="button" aria-pressed="true" title="Aus: die Szene zeichnet nur noch bei Bedienung neu (spart CPU)">Lüfter: an</button>
     <button class="btn theme-btn" id="themeBtn" type="button" aria-label="Darstellung wechseln">Darstellung: System</button>
@@ -198,6 +202,10 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
           <canvas id="echart"></canvas>
           <div class="afilter" id="afilter" role="group" aria-label="Nach Stufe filtern"></div>
           <div class="alist" id="alist"></div>
+        </div>
+        <div class="apage" id="lpage" hidden>
+          <div class="afilter" id="lfilter" role="group" aria-label="Filtern"></div>
+          <div class="alist" id="llist"></div>
         </div>
         <div class="ginfo" id="ginfo" aria-live="polite"></div>
       </div>
@@ -307,7 +315,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       var c = el('section', 'card');
       c.appendChild(el('h2', null, 'Dein Arbeitsplatz'));
       var l = el('div', 'list');
-      [['PC (rechts auf dem Tisch)', 'läuft · ' + (typeof pcTemp === 'string' ? pcTemp : '50,4 °C')], ['34" Curved, unten mittig', 'Wissensgraph & Home'], ['27" darüber', 'Weltkugel'], ['27" hochkant rechts', 'Entropie & Anomalien'], ['Tastatur & Maus', 'Razer (openrazer)'], ['Tastenfeld', 'über OpenDeck']].forEach(function (r) {
+      [['PC (rechts auf dem Tisch)', 'läuft · ' + (typeof pcTemp === 'string' ? pcTemp : '50,4 °C')], ['34" Curved, unten mittig', 'Wissensgraph & Home'], ['27" darüber', 'Weltkugel'], ['27" hochkant rechts', 'Entropie & Anomalien'], ['Tastatur & Maus', 'Razer (openrazer)'], ['Tastenfeld', 'über OpenDeck'], ['Router an der Wand', 'Ereignisse & Geräte']].forEach(function (r) {
         var d = el('div'); d.appendChild(el('span', null, r[0])); d.appendChild(el('span', null, r[1])); l.appendChild(d);
       });
       c.appendChild(l);
@@ -596,6 +604,21 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
   // laufen Beispielwerte. Ein Update pro Sekunde zeichnet nur die Hochkant-Textur und einen Frame neu (Regel 20).
   var ENTROPY_MAX = 300, ANOM_MAX = 500;  // 5 min bei 1 Hz, feste Obergrenzen (Regel 18)
   var LIVE = { on: false, entropy: [], z: 0, events: 0 };
+  // Router an der Wand (Fritz!Box per TR-064 aus werkbank.py): log = [[Zeit ms, Text, Problem?]] neueste zuerst,
+  // hosts = [[Name, IP, MAC, aktiv, Schnittstelle, Gast, Mbit/s]]. Im Browser Beispielwerte.
+  var FRITZ = { live: false, err: null, conn: 'Connected', uptime: 51294, log: [], hosts: [] };
+  (function () {
+    var now = Date.now(), m = 60e3;
+    FRITZ.log = [[now - 20 * m, 'WLAN-Übertragungsqualität durch reduzierte Kanalbandbreite erhöht (2,4 GHz).', false],
+      [now - 95 * m, 'An der DSL-Leitung wurde eine Beeinträchtigung des Signals durch eine unzulässige Verkabelung erkannt. (Beispiel)', true],
+      [now - 97 * m, 'Internetverbindung wurde erfolgreich hergestellt. (Beispiel)', false],
+      [now - 99 * m, 'DSL antwortet nicht (Keine DSL-Synchronisierung). (Beispiel)', true],
+      [now - 600 * m, 'IPv6-Präfix wurde erfolgreich aktualisiert. (Beispiel)', false]];
+    FRITZ.hosts = [['HauptPc', '192.168.178.20', '00:00:5E:00:53:01', true, 'Ethernet', false, 1000],
+      ['Handy', '192.168.178.31', '00:00:5E:00:53:02', true, '802.11', false, 144],
+      ['Fernseher', '192.168.178.40', '00:00:5E:00:53:03', false, '', false, 0],
+      ['Gast-Laptop', '192.168.179.12', '00:00:5E:00:53:04', true, '802.11', true, 72]];
+  })();
   var anoms = [];  // neueste zuerst: { id, ts (ms), level 'CRIT' | 'WARN' | 'INFO', unit, score, tpl, msg }
   var SAMPLE_TPL = [
     ['CRIT', 'sudo', '(max) LIST (max)', 'sudo: (max) LIST (max)'],
@@ -640,6 +663,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       anomsChanged();
     } else if (m.t === 'sys') { applySys(m.s);
     } else if (m.t === 'net') { applyNet(m.d);
+    } else if (m.t === 'fritz') { applyFritz(m.d);
     } else if (m.t === 'offline') { LIVE.on = false; setPill('Daemon getrennt', false); }
   };
   // Browser ohne Daemon: Entropie als langsamer Zufallslauf um 1,85 bit
@@ -1130,6 +1154,84 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
   portrait.add(at(rbox(5, 14, 3, 1, steel), 0, 7, -4));
   portrait.add(at(rbox(24, 1.2, 18, 0.5, steel), 0, 0.6, -4));
 
+  // Router an der Holzwand über dem PC: graues Gehäuse mit dünner weißer Welle als Akzent. Display: Zahl der
+  // Ereignisse im Protokoll der Box. Blinken nur bei einem aktuellen Problem: Box nicht erreichbar, Internet getrennt
+  // oder eine Problem-Meldung in den letzten 15 min. Ältere Probleme (24 h) stehen nur als Zahl im Display.
+  var FRITZ_AKTUELL_MS = 15 * 60e3;
+  function fritzProblems() { var t = Date.now() - 86400e3; return FRITZ.log.filter(function (e) { return e[2] && e[0] >= t; }); }
+  function fritzDown() { return !!FRITZ.err || FRITZ.conn !== 'Connected'; }
+  function fritzAlarm() {
+    var t = Date.now() - FRITZ_AKTUELL_MS;
+    return fritzDown() || FRITZ.log.some(function (e) { return e[2] && e[0] >= t; });
+  }
+  function fritzState() { return FRITZ.err || (FRITZ.conn === 'Connected' ? 'Internet verbunden' : 'Internet getrennt'); }
+  var routerBlink = false;
+  // Hohe Auflösung und wenige, große Inhalte, damit das kleine Display auch aus der Schreibtisch-Ansicht scharf bleibt
+  var texRouter = canvasTex(1024, 576, function (x, w, h) {
+    var alarm = fritzAlarm(), np = fritzProblems().length, bad = fritzDown();
+    x.fillStyle = routerBlink ? '#8A1028' : '#050607'; x.fillRect(0, 0, w, h);
+    txt(x, 'EREIGNISSE', w / 2, 92, 72, routerBlink ? '#FFD6DD' : HUD.muted, 700, 'center');
+    txt(x, String(FRITZ.log.length), w / 2, 390, 300, routerBlink ? '#FFFFFF' : alarm ? HUD.crit : HUD.accent, 800, 'center');
+    x.font = '700 70px ' + FONT;
+    txt(x, fit(x, bad ? fritzState() : np ? np + ' Problem' + (np === 1 ? '' : 'e') + ' (24 h)' : 'alles in Ordnung', w - 60),
+      w / 2, 520, 70, routerBlink ? '#FFFFFF' : bad || alarm ? HUD.crit : np ? HUD.warn : HUD.ok, 700, 'center');
+  });
+  texRouter.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  var ledLabels = canvasTex(1024, 96, function (x, w, h) {
+    x.fillStyle = '#2C2E32'; x.fillRect(0, 0, w, h);
+    ['Power', 'DSL', 'Internet', 'WLAN', 'Info'].forEach(function (l, i) { txt(x, l, 112 + i * 200, 66, 46, '#F4F5F7', 600, 'center'); });
+  });
+  ledLabels.anisotropy = texRouter.anisotropy;
+  var RW = 40, RH = 34, RD = 4;
+  var router = new THREE.Group(); router.position.set(80, 141, -48); router.scale.setScalar(0.65); scene.add(router);
+  // Schwaches Eigenleuchten nur im Dunkelmodus, sonst verschwindet das Dunkelgrau dort in der Wand. Farben gelten hier
+  // als linear (three.js 0.147): schon #060607 ergibt nach der sRGB-Ausgabe ein sichtbares Grau.
+  var routerMat = M('#1C1D20', 0.6, 0, { emissive: new THREE.Color('#060607'), emissiveIntensity: 0 });
+  function routerTheme(d) { routerMat.emissiveIntensity = d ? 1 : 0; routerMat.color.set(d ? '#1C1D20' : '#0A0B0C'); }
+  themeListeners.push(routerTheme); routerTheme(isDark());
+  router.add(at(rbox(RW, RH, RD, 1.6, routerMat), 0, 0, RD / 2));
+  // Leichter weißer Akzent: eine dünne Welle quer über den oberen Teil
+  var wave = new THREE.Shape(), WX = RW / 2 - 1.2, WN = 48;
+  function waveY(x0) { return 11 + 2 * Math.sin((x0 / WX) * Math.PI * 0.9 + 0.6); }
+  for (var wi = 0; wi <= WN; wi++) { var wx = -WX + wi * 2 * WX / WN; if (wi) wave.lineTo(wx, waveY(wx) + 0.28); else wave.moveTo(wx, waveY(wx) + 0.28); }
+  for (wi = WN; wi >= 0; wi--) { wx = -WX + wi * 2 * WX / WN; wave.lineTo(wx, waveY(wx) - 0.28); }
+  wave.closePath();
+  router.add(at(new THREE.Mesh(new THREE.ExtrudeGeometry(wave, { depth: 0.15, bevelEnabled: false }),
+    M('#F7F7F5', 0.4, 0, { emissive: new THREE.Color('#FFFFFF'), emissiveIntensity: 0.25 })), 0, 0, RD));
+  // Display mit Glanzrahmen
+  router.add(at(rbox(28, 16.2, 0.4, 0.5, M('#020203', 0.15, 0.4)), 0, -1.6, RD + 0.1));
+  var rscr = new THREE.Mesh(new THREE.PlaneGeometry(26, 14.625), new THREE.MeshBasicMaterial({ map: texRouter, toneMapped: false }));
+  rscr.position.set(0, -1.6, RD + 0.32); router.add(rscr);
+  // LED-Leiste: grün = in Ordnung, rot = Störung. Power/WLAN rot nur, wenn die Box nicht erreichbar ist;
+  // DSL/Internet rot bei getrennter Verbindung; Info rot (blinkend) bei einem aktuellen Problem.
+  var lab = new THREE.Mesh(new THREE.PlaneGeometry(30, 2.8), new THREE.MeshBasicMaterial({ map: ledLabels, toneMapped: false }));
+  lab.position.set(0, -14.6, RD + 0.02); router.add(lab);
+  var LED_OK = '#22D45A', LED_BAD = '#FF2A2A', LED_DIM = '#4A0A0A';
+  var ledMats = [0, 1, 2, 3, 4].map(function () { return M(LED_OK, 0.4, 0, { emissive: new THREE.Color(LED_OK), emissiveIntensity: 1.3, toneMapped: false }); });
+  ledMats.forEach(function (m, i) { var led = cyl(0.75, 0.4, m, 16); led.rotation.x = Math.PI / 2; led.position.set(-11.7 + i * 5.86, -11.9, RD + 0.1); router.add(led); });
+  function setLeds() {
+    var alarm = fritzAlarm();
+    [!!FRITZ.err, fritzDown(), fritzDown(), !!FRITZ.err, alarm].forEach(function (bad, i) {
+      var c = !bad ? LED_OK : i === 4 && !routerBlink ? LED_DIM : LED_BAD;
+      ledMats[i].color.set(c); ledMats[i].emissive.set(c);
+    });
+  }
+  setLeds();
+  router.traverse(function (o) { o.userData.router = true; });
+  // Blinken: 600-ms-Takt nur bei aktuellem Problem; sonst kein Neuzeichnen (Regel 20)
+  setInterval(function () {
+    var a = fritzAlarm();
+    if (!a && !routerBlink) return;
+    routerBlink = a && !routerBlink;
+    setLeds(); texRouter.repaint(); requestRender();
+  }, 600);
+  function applyFritz(d) {
+    if (d.err) FRITZ.err = d.err;
+    else { FRITZ.err = null; FRITZ.live = true; FRITZ.log = d.log; FRITZ.conn = d.conn; FRITZ.uptime = d.uptime; FRITZ.hosts = d.hosts; }
+    setLeds(); texRouter.repaint(); requestRender();
+    if (pg.kind === 'router' || pg.kind === 'devices') { renderList(); showInfo(); }
+  }
+
   // Lautsprecher (Marshall) vor dem Fuß des Hauptmonitors: schwarzes Gehäuse, Stoffgitter mit Messingrahmen,
   // weißer Schriftzug vorne (Schreibschrift Z003 als Annäherung, nicht das Original-Logo)
   var marshallTex = canvasTex(720, 320, function (x, w, h) {
@@ -1434,6 +1536,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
         if (hits[i].object === scr) { var g = mainRegionAt(hits[i].uv); if (g) return 'graph:' + g; }
         if (ud.screen && ud.mon === 'top') return 'page:globe';
         if (ud.screen && ud.mon === 'portrait') return 'page:anom';
+        if (ud.router) return 'page:router';
         if (ud.mon) return 'mon:' + ud.mon;
         return p ? 'pc' : null;
       }
@@ -1485,7 +1588,8 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     for (var id in MAIN_REGIONS) { var r = MAIN_REGIONS[id]; if (px >= r[0] && px <= r[0] + r[2] && py >= r[1] && py <= r[1] + r[3]) return id; }
     return null;
   }
-  var PAGE_TIP = { globe: 'Weltkugel & Verbindungen – öffnen', anom: 'Entropie & alle Anomalien – öffnen' };
+  router.traverse(function (o) { if (o.isMesh) pickables.push(o); });
+  var PAGE_TIP = { router: 'Router – Ereignisse öffnen', devices: 'Geräte im Netzwerk', globe: 'Weltkugel & Verbindungen – öffnen', anom: 'Entropie & alle Anomalien – öffnen' };
   var gpage = document.getElementById('gpage'), gcv = document.getElementById('gcanvas'), ginfo = document.getElementById('ginfo');
   var apage = document.getElementById('apage'), echart = document.getElementById('echart'), alist = document.getElementById('alist');
   var pg = { kind: null };
@@ -1496,16 +1600,19 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       cam: { yaw: NET.home.lon * DEG, pitch: Math.max(-1.3, Math.min(1.3, -NET.home.lat * DEG)), zoom: 1, vy: 0, vp: 0, idle: performance.now() } };
     pg.cam.y0 = pg.cam.yaw; pg.cam.p0 = pg.cam.pitch;
     gpage.hidden = false; tip.hidden = true;
-    gcv.hidden = kind === 'anom'; apage.hidden = kind !== 'anom';
+    var isList = kind === 'router' || kind === 'devices';
+    if (isList) pg.sel = null;
+    gcv.hidden = kind === 'anom' || isList; apage.hidden = kind !== 'anom'; lpage.hidden = !isList;
     setNav(kind);
-    document.getElementById('gcrumb').textContent = 'Schreibtisch › ' + (kind === 'graph' ? '34" › ' + GRAPH_DEF[arg].title : kind === 'globe' ? '27" oben › Verbindungen' : '27" hochkant › Anomalien');
+    document.getElementById('gcrumb').textContent = 'Schreibtisch › ' + (kind === 'router' ? 'Wand › Router › Ereignisse' : kind === 'devices' ? 'Router › Geräte im Netzwerk' : kind === 'graph' ? '34" › ' + GRAPH_DEF[arg].title : kind === 'globe' ? '27" oben › Verbindungen' : '27" hochkant › Anomalien');
     if (kind === 'anom') renderAnomList();
+    if (isList) renderList();
     showInfo(); drawPage();
     document.getElementById('gback').focus();
   }
   function closePage() { gpage.hidden = true; pg = { kind: null }; setNav(null); requestRender(); }
   // Tabs oben rechts als Schnellzugriff auf dieselben Seiten wie die Bildschirme
-  var NAV = { werkbank: null, graphen: 'graph', anomalien: 'anom', netzwerk: 'globe' };
+  var NAV = { werkbank: null, graphen: 'graph', anomalien: 'anom', netzwerk: 'globe', geraete: 'devices' };
   function setNav(kind) {
     document.querySelectorAll('nav a').forEach(function (a) {
       var on = NAV[a.getAttribute('href').slice(1)] === kind;
@@ -1540,6 +1647,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       document.getElementById('emeta').textContent = (LIVE.on ? 'live vom Daemon · z = ' + fmtNum(LIVE.z, 2) + ' · ' + LIVE.events + ' Ereignisse im 60-s-Fenster' : 'Beispielwerte') + ' · letzte 5 min';
       return;
     }
+    if (pg.kind === 'router' || pg.kind === 'devices') return;  // reine Listen, kein Canvas
     var c = sizeCanvas(gcv), x = c.x, cx = (c.w - c.side) / 2, cy = c.h / 2, size = Math.min(c.w - c.side, c.h);
     x.fillStyle = '#03060A'; x.fillRect(0, 0, c.w, c.h);
     if (pg.kind === 'globe') { drawGuiGlobe(x, { w: c.w - c.side - (c.side ? 12 : 0), h: c.h }); return; }
@@ -1679,6 +1787,36 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
         (p.route || []).forEach(function (h, i) { ginfo.appendChild(el('div', 'hop', (i + 1) + '. ' + h.text)); });
       });
       help.textContent = 'Ziehen dreht die Kugel, Mausrad zoomt (ab 1,6-fach mit Länderkürzeln), Klick auf einen Zielpunkt stellt seine Verbindung nach oben. Esc führt zurück.';
+    } else if (pg.kind === 'router') {
+      var ev = pg.sel && FRITZ.log.filter(function (e) { return e[0] + '|' + e[1] === pg.sel; })[0];
+      if (ev) {
+        ginfo.append(backLink('Übersicht', function () { pg.sel = null; renderList(); showInfo(); }),
+          el('h3', null, ev[2] ? 'Problem' : 'Ereignis'), el('div', 'm', new Date(ev[0]).toLocaleString('de-DE')), el('pre', 'msg', ev[1]));
+        ul = null; help.textContent = 'Text wie im Ereignisprotokoll der Fritz!Box.';
+      } else {
+        var act = FRITZ.hosts.filter(function (hh) { return hh[3]; }).length;
+        if (FRITZ.err) ginfo.appendChild(el('div', 'warn', FRITZ.err));
+        ginfo.append(el('h3', null, 'Router'), el('div', 'm', FRITZ.live ? 'live von der Fritz!Box, alle 30 s' : 'Beispielwerte – echte Daten zeigt das Programm (just werkbank)'),
+          infoRows([['Internet', fritzState()], ['Verbunden seit', Math.floor(FRITZ.uptime / 3600) + ' h ' + Math.floor(FRITZ.uptime % 3600 / 60) + ' min'],
+            ['Ereignisse', String(FRITZ.log.length)], ['Probleme (24 h)', String(fritzProblems().length)], ['Geräte aktiv', act + ' von ' + FRITZ.hosts.length]]));
+        var gl = el('button', 'glink', 'Geräte anzeigen ›'); gl.type = 'button'; gl.addEventListener('click', function () { openPage('devices'); });
+        ginfo.appendChild(gl); ul = null;
+        help.textContent = 'Als Problem zählen Meldungen wie „DSL antwortet nicht", Zeitüberschreitungen oder unzulässige Verkabelung, außerdem eine getrennte oder nicht erreichbare Box (die nächtliche Zwangstrennung nicht). Display und Info-LED blinken rot nur bei einem aktuellen Problem (Box getrennt oder nicht erreichbar, Problem-Meldung in den letzten 15 min); ältere Probleme der letzten 24 h zeigt das Display nur als Zahl.';
+      }
+    } else if (pg.kind === 'devices') {
+      var dv = pg.sel && FRITZ.hosts.filter(function (hh) { return hh[2] + hh[1] === pg.sel; })[0];
+      if (dv) {
+        ginfo.append(backLink('Alle Geräte', function () { pg.sel = null; renderList(); showInfo(); }), el('h3', null, dv[0]),
+          infoRows([['Status', dv[3] ? 'aktiv' : 'nicht verbunden'], ['IP-Adresse', dv[1] || '–'], ['MAC-Adresse', dv[2] || '–'],
+            ['Verbindung', IFACE[dv[4]] || '–'], ['Geschwindigkeit', dv[6] ? dv[6] + ' Mbit/s' : '–'], ['Gastnetz', dv[5] ? 'ja' : 'nein']]));
+        ul = null; help.textContent = 'Nur lesend aus der Geräteliste der Fritz!Box; Sperren oder Umbenennen bleibt in der Box.';
+      } else {
+        var cn = function (f) { return FRITZ.hosts.filter(f).length; };
+        ginfo.append(el('h3', null, FRITZ.hosts.length + ' Geräte'), el('div', 'm', (FRITZ.live ? 'live von der Fritz!Box' : 'Beispielwerte') + ' · alle, die die Box kennt'),
+          infoRows([['aktiv', String(cn(function (hh) { return hh[3]; }))], ['LAN', String(cn(function (hh) { return hh[4] === 'Ethernet'; }))],
+            ['WLAN', String(cn(function (hh) { return hh[4] === '802.11'; }))], ['Gastnetz', String(cn(function (hh) { return hh[5]; }))]]));
+        ul = null; help.textContent = 'Klick auf ein Gerät zeigt IP, MAC und Verbindung. Esc führt zurück.';
+      }
     } else if (pg.kind === 'anom') {
       if (pg.sel < 0) {
         var hour = anomsLastHour(), cnt = { CRIT: 0, WARN: 0, INFO: 0 };
@@ -1700,6 +1838,34 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     ginfo.appendChild(help);
   }
   function setFilter(l) { pg.filter = l; renderAnomList(); }
+  var IFACE = { Ethernet: 'LAN', '802.11': 'WLAN' };
+  var FLABEL = { ALLE: 'Alle', PROBLEME: 'Probleme', AKTIV: 'Aktiv', LAN: 'LAN', WLAN: 'WLAN', GAST: 'Gastnetz' };
+  var lpage = document.getElementById('lpage');
+  // Router-Ereignisse bzw. Geräteliste mit Filter
+  function renderList() {
+    var isR = pg.kind === 'router', rows = isR ? FRITZ.log : FRITZ.hosts.slice().sort(function (a, b) { return b[3] - a[3] || a[0].localeCompare(b[0]); });
+    var F = isR ? { ALLE: null, PROBLEME: function (e) { return e[2]; } }
+      : { ALLE: null, AKTIV: function (hh) { return hh[3]; }, LAN: function (hh) { return hh[4] === 'Ethernet'; }, WLAN: function (hh) { return hh[4] === '802.11'; }, GAST: function (hh) { return hh[5]; } };
+    if (!(pg.filter in F)) pg.filter = 'ALLE';
+    var bar = document.getElementById('lfilter'), list = document.getElementById('llist'); bar.textContent = ''; list.textContent = '';
+    Object.keys(F).forEach(function (k) {
+      var b = el('button', 'btn', FLABEL[k] + ' (' + (F[k] ? rows.filter(F[k]).length : rows.length) + ')'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(pg.filter === k)); b.addEventListener('click', function () { pg.filter = k; renderList(); });
+      bar.appendChild(b);
+    });
+    if (F[pg.filter]) rows = rows.filter(F[pg.filter]);
+    if (FRITZ.err && !FRITZ.live) list.appendChild(el('div', 'm', FRITZ.err));
+    if (!rows.length) list.appendChild(el('div', 'm', 'Keine Einträge.'));
+    rows.forEach(function (r) {
+      var key = isR ? r[0] + '|' + r[1] : r[2] + r[1], b = el('button', 'arow lrow' + (isR ? '' : ' dev') + (key === pg.sel ? ' on' : '')); b.type = 'button';
+      var on = isR ? r[2] : r[3], c = isR ? (on ? HUD.crit : HUD.accent) : (on ? HUD.ok : HUD.muted);
+      var lv = el('b', 'lv', isR ? (on ? 'PROBLEM' : 'INFO') : (on ? 'AKTIV' : 'AUS')); lv.style.color = c; lv.style.borderColor = c;
+      if (isR) b.append(lv, el('span', 't', new Date(r[0]).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })), el('span', 'p', r[1]));
+      else b.append(lv, el('span', 'u', r[0]), el('span', 't', r[1]), el('span', 'p', r[2]), el('span', 't', IFACE[r[4]] || '–'));
+      b.addEventListener('click', function () { pg.sel = key; renderList(); showInfo(); });
+      list.appendChild(b);
+    });
+  }
   // Vollständige Anomalie-Liste mit Filter nach Stufe
   function renderAnomList() {
     var bar = document.getElementById('afilter'); bar.textContent = '';
