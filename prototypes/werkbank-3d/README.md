@@ -75,6 +75,20 @@ Detailseite in der Werkbank (statt eigener Tabs), Esc führt zurück:
   INFO der letzten 60 min; die Seite zeigt den Verlauf der letzten 5 min und
   alle Anomalien mit Filter und Details.
 
+- **Router an der Holzwand** (über dem PC, dunkelgrau mit dünner weißer Welle): sein
+  Display zeigt die Zahl der Einträge im Ereignisprotokoll der Fritz!Box und
+  die Probleme der letzten 24 h. Die LEDs (Power, DSL, Internet, WLAN, Info)
+  leuchten grün oder rot. Display und Info-LED blinken rot nur bei einem
+  aktuellen Problem: Box nicht erreichbar, Internet getrennt oder eine
+  Problem-Meldung („DSL antwortet nicht", Zeitüberschreitung, unzulässige
+  Verkabelung …) in den letzten 15 min; die nächtliche Zwangstrennung zählt
+  nicht. Klick öffnet das Protokoll mit Filter „Probleme". Der Tab **Geräte** listet alle
+  Geräte, die die Box kennt (aktiv/aus, IP, MAC, LAN/WLAN, Gastnetz).
+  `werkbank.py` fragt dafür alle 30 s per TR-064 nur lesend ab
+  (`GetDeviceLog`, `GetStatusInfo`, Geräteliste), mit Digest-Login aus
+  `~/.config/fritzbox-cred` (`FRITZ_USERNAME=…`, `FRITZ_PASSWORD=…`, Modus
+  600, nie im Repo). Ohne die Datei bleibt das Display rot mit Hinweis.
+
 Entropie und Anomalien kommen im Programm live vom Daemon
 (`/run/logsentry/collector.sock`, Protokoll 2, nur lesend: Hello mit Abo,
 keine Aktionen; Mitgliedschaft in der Gruppe `logsentry` nötig). Ohne Daemon
