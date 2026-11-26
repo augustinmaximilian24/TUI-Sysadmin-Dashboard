@@ -13,7 +13,7 @@ Quelle: Bestellübersicht des Komplett-PCs (Systemtreff, Artikelnummer
 | Arbeitsspeicher | 32 GB DDR5-6000 CL30 Kingston FURY Beast (2 × 16 GB) | `spd5118` |
 | Grafikkarte | **ASUS Prime Radeon RX 9070 XT OC** (ersetzt die ursprünglich verbaute Nvidia GeForce RTX 4060 Ti 16 GB) | `amdgpu`-hwmon (edge/junction/mem, Lüfter, Leistung), noch nicht erfasst |
 | Netzteil | Gigabyte UD750GM, 750 W, 80+ Gold, modular | keine Sensoren |
-| SSD | Lexar NM790, 2 TB, M.2 NVMe PCIe 4.0 | `nvme` (Composite, Sensor 1/2) |
+| SSD | Lexar NM790, 2 TB, M.2 NVMe PCIe 4.0; seit 2026-11-24 Dual-Boot: Linux Mint ext4 `/` 1,51 TB, Windows 11 NTFS 536 GB (in Windows 499 GB), EFI 0,5 GB gemeinsam, Windows-Wiederherstellung 1 GB | `nvme` (Composite, Sensor 1/2); Partitionen liest die Werkbank per `lsblk` |
 | Monitore | 34 Zoll Curved-Ultrawide als Hauptmonitor unten mittig; 27 Zoll mittig darüber; 27 Zoll hochkant rechts neben beiden (einer davon mit 180 Hz) | – |
 | Peripherie | Razer-Tastatur und -Maus (über `openrazer`), Tastenfeld über OpenDeck, Standmikrofon links; der PC steht rechts auf dem Schreibtisch, Glasseite zur Tischmitte | – |
 

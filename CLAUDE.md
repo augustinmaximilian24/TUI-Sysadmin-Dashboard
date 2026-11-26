@@ -227,7 +227,7 @@ Licht der Monitorlampe, Lüfter golden). Graphen bekommen einen eigenen Tab.
 
 Ryzen 5 7600X · Arctic Freezer 34 eSports DUO · MSI B650 GAMING PLUS WIFI ·
 32 GB DDR5-6000 Kingston FURY Beast · **ASUS Prime Radeon RX 9070 XT OC** (nicht mehr
-die RTX 4060 Ti) · Lexar NM790 2 TB · Gigabyte UD750GM · Gehäuse Systemtreff
+die RTX 4060 Ti) · Lexar NM790 2 TB (Dual-Boot: Linux 1,5 TB, Windows 11 536 GB) · Gigabyte UD750GM · Gehäuse Systemtreff
 Plexus-ST-801 (Zweikammer, Glasfront, 3 Lüfter Boden + 3 Deckel, golden).
 Monitore: 34" Curved unten mittig, 27" darüber, 27" hochkant rechts.
 Details und Sensorzuordnung: `docs/hardware-desktop.md`.

@@ -89,10 +89,24 @@ def system_values(sy):
         "cpu": sy["cpu"]["global_usage_percent"],
         "mem": [sy["memory"]["used_bytes"], sy["memory"]["total_bytes"], sy["memory"]["used_percent"]],
         "load": [sy["load"]["one"], sy["load"]["five"], sy["load"]["fifteen"]],
-        "disks": {d["mount_point"]: d["used_percent"] for d in sy.get("disks", [])},
+        "disks": {d["mount_point"]: [d["used_percent"], d["available_bytes"]] for d in sy.get("disks", [])},
+        "parts": PARTITIONS,
         "temps": {t["label"]: t["celsius"] for t in sy.get("temperatures", [])},
         "gpu": gpu_values(),
     }
+
+
+def partitions(disk="/dev/nvme0n1"):
+    """Partitionen der System-SSD als [Dateisystem, Bytes, Einhängepunkt] aus lsblk (ohne Root); leer bei Fehler."""
+    try:
+        out = subprocess.run(["lsblk", "-b", "-J", "-o", "NAME,SIZE,FSTYPE,MOUNTPOINT", disk],
+                             capture_output=True, text=True, timeout=5, check=True).stdout
+        return [[p["fstype"], p["size"], p["mountpoint"]] for p in json.loads(out)["blockdevices"][0].get("children", [])]
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+        return []
+
+
+PARTITIONS = partitions()
 
 
 def find_gpu():

@@ -239,9 +239,10 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
       rows: [['Temperatur', '34,2 °C'], ['Belegt', '21 % (≈ 6,7 GB)']],
       src: 'spd5118, sysinfo',
       procs: [['firefox', '1,2 GB'], ['steam', '640 MB'], ['cinnamon', '310 MB']], anom: null },
-    nvme: { name: 'SSD', model: 'Lexar NM790 · 2 TB · PCIe 4.0 (unter dem M.2-Kühlblech)',
-      rows: [['Composite', '33,8 °C'], ['Sensor 1', '33,8 °C'], ['Sensor 2', '31,9 °C'], ['/', '47 % belegt'], ['/var/lib/logsentry', '47 % belegt'], ['/boot/efi', '1 % belegt']],
-      src: 'nvme-Sensoren, sysinfo', procs: [], anom: null },
+    nvme: { name: 'SSD', model: 'Lexar NM790 · 2 TB · PCIe 4.0 · Dual-Boot Linux Mint + Windows 11 (unter dem M.2-Kühlblech)',
+      rows: [['Composite', '33,8 °C'], ['Sensor 1', '33,8 °C'], ['Sensor 2', '31,9 °C'], ['Linux Mint (/)', '1,51 TB · 53 % belegt · 674 GB frei'],
+        ['EFI-Start (beide Systeme)', '0,5 GB · 8 % belegt · 0,5 GB frei'], ['Windows 11', '536 GB (in Windows: 499 GB)'], ['Windows-Wiederherstellung', '1,0 GB']],
+      src: 'nvme-Sensoren, sysinfo; Partitionen per lsblk', procs: [], anom: null },
     board: { name: 'Mainboard', model: 'MSI B650 GAMING PLUS WIFI · AM5',
       rows: [['LAN-Chip (Realtek)', '40,0 °C'], ['WLAN-Chip (MediaTek)', '40,0 °C']],
       src: 'r8169, mt7921', procs: [],
@@ -708,6 +709,17 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
   function temp(s, prefix) { for (var k in s.temps) if (k.indexOf(prefix) === 0) return s.temps[k]; return null; }
   function degC(v) { return v == null ? '–' : fmtNum(v, 1) + ' °C'; }
   function gb(b) { return fmtNum(b / 1e9, 1); }
+  // Größen dezimal wie auf der Packung (2 TB); Windows rechnet binär und zeigt deshalb kleinere Zahlen
+  function size(b) { return b >= 1e12 ? fmtNum(b / 1e12, 2) + ' TB' : fmtNum(b / 1e9, b < 1e10 ? 1 : 0) + ' GB'; }
+  // Partition [Dateisystem, Bytes, Einhängepunkt] -> Seitenleisten-Zeile; d = [belegt %, frei Bytes] falls eingehängt
+  function partRow(p, d) {
+    var name = p[0] === 'ext4' ? 'Linux Mint (' + p[2] + ')' : p[0] === 'vfat' ? 'EFI-Start (beide Systeme)'
+      : p[0] === 'ntfs' && p[1] > 1e10 ? 'Windows 11' : p[0] === 'ntfs' ? 'Windows-Wiederherstellung' : p[0];
+    var v = size(p[1]);
+    if (d) v += ' · ' + fmtNum(d[0], 0) + ' % belegt · ' + size(d[1]) + ' frei';
+    else if (p[0] === 'ntfs' && p[1] > 1e10) v += ' (in Windows: ' + fmtNum(p[1] / 1073741824, 0) + ' GB)';
+    return [name, v];
+  }
   function setKpi(i, v, sub) { var k = document.querySelectorAll('.kpi')[i]; k.querySelector('.v').textContent = v; k.querySelector('.s').textContent = sub; }
   function applySys(s) {
     var tctl = temp(s, 'k10temp Tctl'), g = s.gpu || {}, vram = g.vram || [], disk = s.disks['/'], gpuEdge = temp(s, 'amdgpu edge');
@@ -717,7 +729,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     setKpi(1, pcTemp, 'Ryzen 5 7600X · Tctl');
     setKpi(2, degC(gpuEdge), 'RX 9070 XT' + (g.busy != null ? ' · ' + fmtNum(g.busy, 0) + ' % Last' : ''));
     setKpi(3, fmtNum(s.mem[2], 0) + ' %', gb(s.mem[0]) + ' von ' + gb(s.mem[1]) + ' GB · ' + degC(temp(s, 'spd5118')));
-    setKpi(4, degC(temp(s, 'nvme Composite')), 'Lexar NM790' + (disk != null ? ' · / zu ' + fmtNum(disk, 0) + ' % belegt' : ''));
+    setKpi(4, degC(temp(s, 'nvme Composite')), 'Lexar NM790' + (disk ? ' · Linux zu ' + fmtNum(disk[0], 0) + ' % belegt' : ''));
     setKpi(5, degC(temp(s, 'r8169')), 'LAN · WLAN ' + degC(temp(s, 'mt7921')));
     PARTS.cpu.rows = [['Temperatur Tctl', degC(tctl)], ['Temperatur Tccd1', degC(temp(s, 'k10temp Tccd1'))], ['Auslastung', fmtNum(s.cpu, 1) + ' %'],
       ['Load 1 / 5 / 15 min', load], ['Takt', '– GHz', 1], ['Kühler-Lüfter (2 ×)', '– U/min', 1]];
@@ -727,7 +739,7 @@ aside { flex: 1 1 320px; max-width: 400px; min-width: 0; display: flex; flex-dir
     PARTS.gpu.src = 'Temperaturen vom Daemon (amdgpu-hwmon); Auslastung, Lüfter, Leistung und VRAM liest die Werkbank selbst aus amdgpu-sysfs';
     PARTS.ram.rows = [['Temperatur', degC(temp(s, 'spd5118'))], ['Belegt', fmtNum(s.mem[2], 0) + ' % (' + gb(s.mem[0]) + ' von ' + gb(s.mem[1]) + ' GB)']];
     PARTS.nvme.rows = [['Composite', degC(temp(s, 'nvme Composite'))], ['Sensor 1', degC(temp(s, 'nvme Sensor 1'))], ['Sensor 2', degC(temp(s, 'nvme Sensor 2'))]]
-      .concat(Object.keys(s.disks).map(function (m) { return [m, fmtNum(s.disks[m], 0) + ' % belegt']; }));
+      .concat((s.parts || []).filter(function (p) { return p[0]; }).map(function (p) { return partRow(p, s.disks[p[2]]); }));
     PARTS.board.rows = [['LAN-Chip (Realtek)', degC(temp(s, 'r8169'))], ['WLAN-Chip (MediaTek)', degC(temp(s, 'mt7921'))]];
     // Seitenleiste nur neu aufbauen, wenn sich ein angezeigter Wert geändert hat (sonst springt jede Sekunde der Fokus)
     var sig = view === 'pc' ? JSON.stringify(PARTS[selected].rows) : view === 'desk' ? pcTemp : '';
